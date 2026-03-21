@@ -185,8 +185,8 @@ export const Activities: React.FC = () => {
 
       const timeSpent = startedAt ? Math.round((Date.now() - startedAt) / 1000) : 0;
 
-      const result = {
-        id: `${activeActivity.id}-${user.id}`,
+      const existingResult = activityResults[activeActivity.id];
+      const result: any = {
         activityId: activeActivity.id,
         studentId: user.id,
         status: correctCount > 0 ? 'passed' : 'failed',
@@ -202,6 +202,10 @@ export const Activities: React.FC = () => {
           isCorrect: r.correct
         }))
       };
+
+      if (existingResult?.id) {
+        result.id = existingResult.id;
+      }
 
       await supabase.from('student_activity_results').upsert(result);
 
@@ -233,8 +237,8 @@ export const Activities: React.FC = () => {
 
     const timeSpent = startedAt ? Math.round((Date.now() - startedAt) / 1000) : 0;
 
-    const result = {
-      id: `${activeActivity.id}-${user.id}`,
+    const existingResult = activityResults[activeActivity.id];
+    const result: any = {
       activityId: activeActivity.id,
       studentId: user.id,
       status: 'given_up', // Will show as "Falhado"
@@ -245,6 +249,10 @@ export const Activities: React.FC = () => {
       completedAt: new Date().toISOString(),
       timeSpent
     };
+
+    if (existingResult?.id) {
+      result.id = existingResult.id;
+    }
 
     await supabase.from('student_activity_results').upsert(result);
 
