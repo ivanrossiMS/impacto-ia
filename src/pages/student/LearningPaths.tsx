@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { db } from '../../lib/dexie';
+import { supabase } from '../../lib/supabase';
 import type { LearningPath, StudentProgress } from '../../types/learning';
 import { useAuthStore } from '../../store/auth.store';
 import { Star, ChevronRight, Lock, CheckCircle2 } from 'lucide-react';
@@ -22,39 +22,42 @@ export const LearningPaths: React.FC = () => {
       }
       try {
         // 1. Get live user data (classId, grade)
-        const liveUser = await db.users.get(user.id);
-        if (!liveUser) return;
+        const { data: liveUserObj } = await supabase.from('users').select('*').eq('id', user.id).single();
+        if (!liveUserObj) return;
 
-        const userClassId = (liveUser as any).classId || '';
-        let userGrade = (liveUser as any).grade || '';
+        const liveUser = liveUserObj;
+        const userClassId = liveUser.classId || '';
+        let userGrade = liveUser.grade || '';
         const currentYear = new Date().getFullYear().toString();
 
         // If grade is missing, try to get it from the class
         if (!userGrade && userClassId) {
-          const cls = await db.classes.get(userClassId);
+          const { data: cls } = await supabase.from('classes').select('*').eq('id', userClassId).single();
           if (cls) userGrade = cls.grade;
         }
 
         // 2. Fetch Trails specifically linked to this class
-        const classPaths = await db.learningPaths
-          .where('classId').equals(userClassId)
-          .filter(p => !p.schoolYear || p.schoolYear === currentYear)
-          .toArray();
+        let classPaths: any[] = [];
+        if (userClassId) {
+           const { data: pObj } = await supabase.from('learning_paths').select('*').eq('classId', userClassId);
+           classPaths = (pObj || []).filter((p: any) => !p.schoolYear || p.schoolYear === currentYear);
+        }
 
         // 3. Fetch General Trails for this grade (not linked to any class)
-        const generalPaths = await db.learningPaths
-          .where('grade').equals(userGrade)
-          .filter(p => !p.classId || p.classId === '')
-          .filter(p => !p.schoolYear || p.schoolYear === currentYear)
-          .toArray();
+        let generalPaths: any[] = [];
+        if (userGrade) {
+           const { data: gObj } = await supabase.from('learning_paths').select('*').eq('grade', userGrade).is('classId', null);
+           generalPaths = (gObj || []).filter((p: any) => !p.schoolYear || p.schoolYear === currentYear);
+        }
 
-        const allPaths = [...classPaths, ...generalPaths];
+        const allPaths = [...classPaths, ...generalPaths] as LearningPath[];
 
         // 4. Fetch Progress
-        const allProgress = await db.studentProgress.where('studentId').equals(user.id).toArray();
+        const { data: allProgressObj } = await supabase.from('student_progress').select('*').eq('studentId', user.id);
+        const allProgress = allProgressObj || [];
         
         const progressMap = allProgress.reduce((acc, curr) => {
-          acc[curr.pathId] = curr;
+          acc[curr.pathId] = curr as unknown as StudentProgress;
           return acc;
         }, {} as Record<string, StudentProgress>);
 

@@ -11,7 +11,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { Button } from '../ui/Button';
 import { toast } from 'sonner';
 import { cn } from '../../lib/utils';
-import { db } from '../../lib/dexie';
+import { supabase } from '../../lib/supabase';
 import { useAuthStore } from '../../store/auth.store';
 import { createBulkNotifications } from '../../lib/notificationUtils';
 
@@ -46,7 +46,7 @@ export const AnnouncementModal: React.FC<AnnouncementModalProps> = ({ isOpen, on
     // Fetch all student IDs from selected classes
     const studentIds: string[] = [];
     for (const classId of selectedClasses) {
-      const cls = await db.classes.get(classId);
+      const { data: cls } = await supabase.from('classes').select('studentIds').eq('id', classId).single();
       if (cls && cls.studentIds) {
         studentIds.push(...cls.studentIds);
       }

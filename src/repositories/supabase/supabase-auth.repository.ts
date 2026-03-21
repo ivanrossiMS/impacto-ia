@@ -84,6 +84,22 @@ export class SupabaseAuthRepository implements IAuthRepository {
     return null;
   }
 
+  async validateFirstAccessUnified(identifier: string): Promise<AppUser | null> {
+    const idClean = identifier.trim();
+    const idLower = idClean.toLowerCase();
+
+    const { data: users, error } = await supabase
+      .from('users')
+      .select('*')
+      .or(`email.ilike.${idLower},studentCode.ilike.${idClean},guardianCode.ilike.${idClean},guardianCode.ilike.${idLower}`)
+      .eq('isRegistered', false)
+      .limit(1);
+
+    if (error || !users || users.length === 0) return null;
+
+    return users[0] as AppUser;
+  }
+
   async registerFirstAccess(userId: string, data: { email?: string; passwordHash: string }): Promise<void> {
     const authEmail = data.email ? data.email.toLowerCase() : `student_${userId}@impacto.ia`;
 

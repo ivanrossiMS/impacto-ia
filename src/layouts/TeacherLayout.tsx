@@ -15,31 +15,42 @@ export const TeacherLayout: React.FC = () => {
   const [schoolLogo, setSchoolLogo] = React.useState<string | null>(null);
   const [unreadCount, setUnreadCount] = React.useState(0);
 
-  const fetchLayoutData = async () => {
+  // ✅ Debounce ref to avoid avalanche of re-fetches from rapid DB events
+  const debounceTimer = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const fetchLayoutData = React.useCallback(async () => {
     if (!user) return;
     
-    if (user.schoolId) {
-      const { data: school } = await supabase.from('schools').select('logo').eq('id', user.schoolId).single();
-      if (school) setSchoolLogo(school.logo);
-    }
+    // ✅ Parallel queries instead of sequential
+    const [schoolResult, supportResult, notifResult] = await Promise.all([
+      user.schoolId
+        ? supabase.from('schools').select('logo').eq('id', user.schoolId).single()
+        : Promise.resolve({ data: null }),
+      supabase.from('support_tickets').select('*', { count: 'exact', head: true }).eq('userId', user.id).eq('isReadByParticipant', false),
+      supabase.from('notifications').select('*', { count: 'exact', head: true }).eq('userId', user.id).eq('read', false),
+    ]);
 
-    const { count: supportCount } = await supabase.from('support_tickets').select('*', { count: 'exact', head: true }).eq('userId', user.id).eq('isReadByParticipant', false);
-    setUnreadSupportCount(supportCount || 0);
+    if (schoolResult.data?.logo) setSchoolLogo(schoolResult.data.logo);
+    setUnreadSupportCount((supportResult as any).count ?? 0);
+    setUnreadCount((notifResult as any).count ?? 0);
+  }, [user]);
 
-    const { count: notifCount } = await supabase.from('notifications').select('*', { count: 'exact', head: true }).eq('userId', user.id).eq('read', false);
-    setUnreadCount(notifCount || 0);
-  };
+  const debouncedFetch = React.useCallback(() => {
+    if (debounceTimer.current) clearTimeout(debounceTimer.current);
+    debounceTimer.current = setTimeout(() => fetchLayoutData(), 300);
+  }, [fetchLayoutData]);
 
   React.useEffect(() => {
     fetchLayoutData();
     const chSupport = supabase.channel('teacher_layout_support')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'support_tickets', filter: `userId=eq.${user?.id}` }, fetchLayoutData)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'support_tickets', filter: `userId=eq.${user?.id}` }, debouncedFetch)
       .subscribe();
     const chNotifs = supabase.channel('teacher_layout_notifs')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'notifications', filter: `userId=eq.${user?.id}` }, fetchLayoutData)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'notifications', filter: `userId=eq.${user?.id}` }, debouncedFetch)
       .subscribe();
 
     return () => { 
+      if (debounceTimer.current) clearTimeout(debounceTimer.current);
       supabase.removeChannel(chSupport);
       supabase.removeChannel(chNotifs);
     };

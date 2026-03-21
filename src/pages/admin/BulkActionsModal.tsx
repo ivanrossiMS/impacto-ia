@@ -1,6 +1,5 @@
 import React, { useState } from 'react';
 import { X, Trash2, RefreshCw, Users, BookOpen, AlertCircle, ShieldAlert } from 'lucide-react';
-import { db } from '../../lib/dexie';
 import { supabase } from '../../lib/supabase';
 import { Button } from '../../components/ui/Button';
 import { toast } from 'sonner';
@@ -54,13 +53,13 @@ export const BulkActionsModal: React.FC<BulkActionsModalProps> = ({ onClose, sch
           await supabase.from('users').delete().in('id', ids);
           await supabase.from('gamification_stats').delete().in('id', ids);
           
-          await db.studentOwnedAvatars.where('studentId').anyOf(ids).delete();
-          await db.studentAvatarProfiles.where('studentId').anyOf(ids).delete();
-          await db.studentAchievements.where('studentId').anyOf(ids).delete();
-          await db.studentMissions.where('studentId').anyOf(ids).delete();
-          await db.studentProgress.where('studentId').anyOf(ids).delete();
-          await db.studentActivityResults.where('studentId').anyOf(ids).delete();
-          await db.diaryEntries.where('studentId').anyOf(ids).delete();
+          await supabase.from('student_owned_avatars').delete().in('studentId', ids);
+          await supabase.from('student_avatar_profiles').delete().in('studentId', ids);
+          await supabase.from('student_achievements').delete().in('studentId', ids);
+          await supabase.from('student_missions').delete().in('studentId', ids);
+          await supabase.from('student_progress').delete().in('studentId', ids);
+          await supabase.from('student_activity_results').delete().in('studentId', ids);
+          await supabase.from('diary_entries').delete().in('studentId', ids);
           break;
         }
 

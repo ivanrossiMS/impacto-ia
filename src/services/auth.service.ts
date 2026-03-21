@@ -17,6 +17,10 @@ class AuthService {
     return await this.repository.validateFirstAccess(role, identifier);
   }
 
+  async validateFirstAccessUnified(identifier: string): Promise<AppUser | null> {
+    return await this.repository.validateFirstAccessUnified(identifier);
+  }
+
   async registerFirstAccess(userId: string, data: { email?: string; passwordHash: string }): Promise<void> {
     return await this.repository.registerFirstAccess(userId, data);
   }

@@ -121,13 +121,25 @@ export const StudentDashboard: React.FC = () => {
         availableActivities = (classActivities || []).map(act => {
           const result = (results || []).find(r => r.activityId === act.id);
           return { ...act, status: result ? 'Concluída' : 'Pendente' };
-        }).sort((a, b) => b.id.localeCompare(a.id));
+        }).sort((a, b) => {
+          // Pending first, then sorted by newest
+          if (a.status === 'Pendente' && b.status !== 'Pendente') return -1;
+          if (a.status !== 'Pendente' && b.status === 'Pendente') return 1;
+          return b.id.localeCompare(a.id);
+        });
       }
 
       // 7. Duels
       const { data: d1 } = await supabase.from('duels').select('*').eq('challengerId', user.id);
       const { data: d2 } = await supabase.from('duels').select('*').eq('challengedId', user.id);
-      let allDuels = [...(d1 || []), ...(d2 || [])].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+      let allDuels = [...(d1 || []), ...(d2 || [])].sort((a, b) => {
+        // Pending/in-progress duels first
+        const aPending = a.status !== 'completed';
+        const bPending = b.status !== 'completed';
+        if (aPending && !bPending) return -1;
+        if (!aPending && bPending) return 1;
+        return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+      });
       
       const recent = await Promise.all(allDuels.slice(0, 3).map(async (d: any) => {
         const opponentId = d.challengerId === user.id ? d.challengedId : d.challengerId;
@@ -424,17 +436,23 @@ export const StudentDashboard: React.FC = () => {
           {/* Right Side: Avatar Showcase - Floating & Sleek */}
           <div className="flex flex-col items-center gap-6">
             <div className="relative group/avatar">
-              <div className="absolute inset-0 bg-primary-400/20 rounded-full blur-3xl animate-pulse opacity-0 group-hover:opacity-100 transition-opacity" />
-              <div className="relative z-10 p-2 bg-gradient-to-tr from-white/10 to-transparent backdrop-blur-xl rounded-[2.5rem] border border-white/20 shadow-2xl">
-                <AvatarComposer
-                  avatarUrl={activeAvatar?.assetUrl || '/avatars/default-capybara.png'}
-                  backgroundUrl={activeBg?.assetUrl}
-                  borderUrl={activeBorder?.assetUrl}
-                  stickerUrls={activeStickers}
-                  size="xl"
-                  className="relative z-10 hover:scale-105 transition-transform duration-500"
-                  isFloating={true}
-                />
+              {/* Outer Glow */}
+              <div className="absolute inset-0 bg-primary-400/30 rounded-[3rem] blur-3xl animate-pulse opacity-0 group-hover:opacity-100 transition-opacity" />
+              
+              {/* Main Container - Thick White Border Style */}
+              <div className="relative z-10 p-1.5 bg-white rounded-[3rem] shadow-[0_20px_50px_rgba(0,0,0,0.3)] border-2 border-white/20">
+                <div className="relative rounded-[2.5rem] bg-[#F8FAFF] overflow-hidden p-2">
+                  <AvatarComposer
+                    avatarUrl={activeAvatar?.assetUrl || '/avatars/default-impacto.png'}
+                    backgroundUrl={activeBg?.assetUrl}
+                    borderUrl={activeBorder?.assetUrl}
+                    stickerUrls={activeStickers}
+                    size="xl"
+                    className="relative z-10"
+                    isFloating={true}
+                  />
+
+                </div>
               </div>
             </div>
             

@@ -7,7 +7,7 @@ import { Card } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
 import { User, Mail, Save, Camera, Lock, Heart } from 'lucide-react';
 import { useAuthStore } from '../../store/auth.store';
-import { db } from '../../lib/dexie';
+import { supabase } from '../../lib/supabase';
 import { cn } from '../../lib/utils';
 
 const profileSchema = z.object({
@@ -76,7 +76,8 @@ export const Profile: React.FC = () => {
         updateData.passwordHash = data.password;
       }
 
-      await db.users.update(user.id, updateData);
+      const { error } = await supabase.from('users').update(updateData).eq('id', user.id);
+      if (error) throw error;
       
       const updatedUser = { ...user, ...updateData };
       login(updatedUser as any);

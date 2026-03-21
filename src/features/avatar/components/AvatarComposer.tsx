@@ -7,7 +7,7 @@ interface AvatarComposerProps {
   backgroundUrl?: string;
   borderUrl?: string;
   stickerUrls?: string[];
-  size?: 'sm' | 'md' | 'lg' | 'xl' | '2xl';
+  size?: 'sm' | 'md' | 'lg' | 'xl' | '2xl' | '3xl';
   className?: string;
   animate?: boolean;
   isFloating?: boolean;
@@ -61,34 +61,51 @@ export const AvatarComposer: React.FC<AvatarComposerProps> = ({
     lg: 'w-48 h-48 border-4 border-white/50 rounded-[2rem]',
     xl: 'w-64 h-64 border-[6px] border-white/50 rounded-[2.5rem]',
     '2xl': 'w-80 h-80 border-[8px] border-white/50 rounded-[3.5rem]',
+    '3xl': 'w-[28rem] h-[28rem] sm:w-[32rem] sm:h-[32rem] border-[10px] border-white/50 rounded-[4rem]',
   };
 
   const containerVariants: any = {
     initial: { scale: 0.9, opacity: 0 },
     animate: { 
-      scale: 1, 
+      scale: isFloating ? [1, 1.03, 1] : 1, 
       opacity: 1,
-      y: isFloating ? [0, -15, 0] : 0,
+      y: isFloating ? [0, -12, 0] : 0,
+      rotateZ: isFloating ? [-2, 2, -2] : 0,
     },
     hover: {
-      scale: 1.05,
+      scale: 1.08,
+      y: -5,
+      rotateZ: 0
     }
   };
 
   const containerTransition: any = {
     y: {
-      duration: 3.5,
+      duration: 3,
       repeat: Infinity,
       ease: "easeInOut"
     },
-    scale: { duration: 0.5, ease: "easeOut" },
+    rotateZ: {
+      duration: 5,
+      repeat: Infinity,
+      ease: "easeInOut"
+    },
+    scale: { 
+      duration: 4, 
+      repeat: Infinity, 
+      ease: "easeInOut" 
+    },
     opacity: { duration: 0.4 },
-    hover: { duration: 0.3, ease: "backOut" }
+    hover: { 
+      type: "spring", 
+      stiffness: 300, 
+      damping: 15 
+    }
   };
 
   return (
     <div 
-      className="relative flex items-center justify-center p-4"
+      className="relative flex items-center justify-center p-0"
       style={{ perspective: "1000px" }}
     >
       {/* 0. Outer Glow Layer */}
@@ -142,8 +159,8 @@ export const AvatarComposer: React.FC<AvatarComposerProps> = ({
 
         {/* 3. Avatar Layer (Parallax Depth: Front) */}
         <motion.img
-          key={avatarUrl || '/avatars/default-capybara.png'}
-          src={avatarUrl || '/avatars/default-capybara.png'}
+          key={avatarUrl || '/avatars/default-impacto.png'}
+          src={avatarUrl || '/avatars/default-impacto.png'}
           style={{ translateZ: "40px" }}
           initial={{ y: 20, opacity: 0, scale: 0.8 }}
           animate={{ y: 0, opacity: 1, scale: 1 }}

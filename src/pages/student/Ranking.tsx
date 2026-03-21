@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { useAuthStore } from '../../store/auth.store';
-import { db } from '../../lib/dexie';
+import { supabase } from '../../lib/supabase';
 import { incrementMissionProgress } from '../../lib/missionUtils';
 import type { AppUser } from '../../types/user';
 import type { GamificationStats } from '../../types/gamification';
@@ -34,9 +34,10 @@ export const Ranking: React.FC = () => {
   const loadRanking = async () => {
     if (!currentUser) return;
 
-    // Get all students from same class(es)
-    const allClasses = await db.classes.toArray();
-    const myClasses = allClasses.filter(c => c.studentIds?.includes(currentUser.id));
+    // Get classes that contain this student
+    const { data: allClassesObj } = await supabase.from('classes').select('*');
+    const allClasses = allClassesObj || [];
+    const myClasses = allClasses.filter((c: any) => c.studentIds?.includes(currentUser.id));
     
     let classStudentIds: string[] = [];
     for (const cls of myClasses) {
@@ -47,19 +48,22 @@ export const Ranking: React.FC = () => {
     const studentIdSet = new Set([...classStudentIds, currentUser.id]);
     const studentIds = Array.from(studentIdSet);
 
-    // If no class mates, load all students
-    let students: AppUser[];
+    // Load students
+    let students: AppUser[] = [];
     if (studentIds.length <= 1) {
-      students = await db.users.where('role').equals('student').toArray();
+      const { data } = await supabase.from('users').select('*').eq('role', 'student');
+      students = data as AppUser[] || [];
     } else {
-      students = await db.users.where('id').anyOf(studentIds).toArray();
+      const { data } = await supabase.from('users').select('*').in('id', studentIds);
+      students = data as AppUser[] || [];
     }
 
-    // Load stats for all students
-    const statsAll = await db.gamificationStats.toArray();
+    // Load stats for these students
+    const targetIds = students.map(s => s.id);
+    const { data: statsAll } = await supabase.from('gamification_stats').select('*').in('id', targetIds);
     const statsMap: Record<string, GamificationStats> = {};
-    for (const s of statsAll) {
-      statsMap[s.id] = s;
+    for (const s of (statsAll || [])) {
+      statsMap[s.id] = s as GamificationStats;
     }
 
     // Build and sort ranking

@@ -377,7 +377,7 @@ export const UserImportModal: React.FC<UserImportModalProps> = ({
             createdAt: now,
             updatedAt: now,
             isRegistered: false,
-            avatar: '/avatars/default-capybara.png',
+            avatar: '/avatars/default-impacto.png',
             classIds: [],
             guardianIds: processedGuardianIds
           };

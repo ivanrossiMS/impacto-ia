@@ -94,44 +94,97 @@ export const AvatarStudio: React.FC = () => {
   return (
     <div className="flex flex-col lg:flex-row h-[calc(100vh-120px)] bg-background gap-8 overflow-hidden">
       
-      {/* ── LEFT: PREVIEW ── */}
+      {/* ── LEFT: MODERN LIGHT PREVIEW SHOWCASE ── */}
       <motion.div 
         initial={{ opacity: 0, x: -50 }}
         animate={{ opacity: 1, x: 0 }}
-        className="lg:w-1/2 flex flex-col h-full"
+        className="lg:w-1/2 flex flex-col h-full bg-slate-50/50 backdrop-blur-3xl rounded-[3rem] p-4 border border-slate-200/60 shadow-inner overflow-hidden relative"
       >
-        <div className="flex-1 flex flex-col items-center justify-center relative overflow-hidden bg-slate-900 rounded-[2rem] shadow-2xl group border-8 border-white">
-          <div className="absolute inset-0 bg-[url('https://www.transparenttextures.com/patterns/cubes.png')] opacity-10" />
-          <div className="absolute top-0 left-0 w-full h-full bg-gradient-to-b from-primary-500/20 to-transparent" />
+        <div className="flex-1 flex flex-col items-center justify-center relative overflow-hidden bg-white rounded-[2.5rem] shadow-[0_30px_60px_-12px_rgba(0,0,0,0.08)] group border border-slate-100">
+          
+          {/* Abstract Modern Background Elements */}
+          <div className="absolute inset-0 bg-gradient-to-br from-primary-50/40 via-white to-special-50/30" />
+          
+          <div className="absolute top-0 left-0 w-full h-full opacity-[0.07] pointer-events-none">
+            <svg className="w-full h-full" viewBox="0 0 100 100" preserveAspectRatio="none">
+              <path d="M0 20 L 100 80" stroke="currentColor" strokeWidth="0.1" fill="none" className="text-primary-500" />
+              <path d="M0 80 L 100 20" stroke="currentColor" strokeWidth="0.1" fill="none" className="text-special-500" />
+              <circle cx="20" cy="20" r="15" stroke="currentColor" strokeWidth="0.05" fill="none" className="text-primary-300" />
+              <circle cx="80" cy="80" r="20" stroke="currentColor" strokeWidth="0.05" fill="none" className="text-special-300" />
+            </svg>
+          </div>
+
+          <div className="absolute top-0 left-0 w-full h-full bg-[radial-gradient(circle_at_50%_50%,rgba(255,255,255,0)_0%,rgba(255,255,255,1)_100%)] opacity-40" />
+
+          {/* User Name Header */}
+          <div className="absolute top-12 left-0 w-full px-10 z-20 text-center">
+            <motion.div
+              initial={{ y: -20, opacity: 0 }}
+              animate={{ y: 0, opacity: 1 }}
+              transition={{ delay: 0.3 }}
+            >
+              <h2 className="text-4xl font-[900] text-slate-800 tracking-tighter uppercase leading-tight animate-in fade-in slide-in-from-top-4 duration-1000">
+                {user?.name}
+              </h2>
+              <div className="w-16 h-1 bg-primary-500 mx-auto rounded-full mt-2 shadow-[0_2px_10px_rgba(99,102,241,0.3)]" />
+            </motion.div>
+          </div>
           
           <motion.div 
             key={profile.selectedAvatarId + profile.selectedBackgroundId}
-            initial={{ scale: 0.8, opacity: 0 }}
-            animate={{ scale: 1.1, opacity: 1 }}
-            transition={{ type: 'spring', damping: 20 }}
-            className="relative z-10"
+            initial={{ scale: 0.9, opacity: 0, y: 20 }}
+            animate={{ scale: 1, opacity: 1, y: 0 }}
+            transition={{ type: 'spring', damping: 15, stiffness: 100 }}
+            className="relative z-10 pt-24 scale-95 sm:scale-100"
           >
-             <div className="absolute -inset-20 bg-primary-500/10 rounded-full blur-[80px] animate-pulse" />
-             <AvatarComposer 
-                avatarUrl={activeAvatar?.assetUrl || '/avatars/default-capybara.png'}
-                backgroundUrl={activeBg?.assetUrl}
-                borderUrl={activeBorder?.assetUrl}
-                stickerUrls={activeStickers}
-                size="2xl"
-             />
+             {/* Subtle Glow Behind Avatar */}
+             <div className="absolute -inset-20 bg-primary-500/5 rounded-full blur-[80px]" />
+             
+             <div className="relative group/avatar">
+                <AvatarComposer 
+                    avatarUrl={activeAvatar?.assetUrl || '/avatars/default-impacto.png'}
+                    backgroundUrl={activeBg?.assetUrl}
+                    borderUrl={activeBorder?.assetUrl}
+                    stickerUrls={activeStickers}
+                    size="3xl"
+                    className="drop-shadow-[0_20px_50px_rgba(0,0,0,0.12)] group-hover/avatar:scale-105 transition-transform duration-700"
+                />
+             </div>
           </motion.div>
 
-          <div className="absolute bottom-12 flex flex-col items-center gap-6 z-20 w-full px-12">
-            <div className="bg-white/10 backdrop-blur-md px-6 py-2 rounded-2xl border border-white/10 shadow-lg mb-2">
-                <h1 className="text-2xl font-black text-white flex items-center gap-2 tracking-tight">
-                <Sparkles className="text-warning-400 group-hover:rotate-12 transition-transform" /> 
-                Seu Visual Premium
-                </h1>
-            </div>
-            <Button variant="ai" size="xl" className="w-full max-w-sm shadow-2xl gap-3 rounded-[1.5rem] py-8 text-xl" onClick={handleSave}>
-              <Save size={24} /> Salvar Avatar
+          {/* Bottom Bar: Modern Light Theme */}
+          <div className="absolute bottom-10 flex flex-col items-center gap-6 z-20 w-full px-10">
+            {/* Dark Badge for High Contrast */}
+            <motion.div 
+              whileHover={{ scale: 1.05, y: -2 }}
+              className="bg-slate-900 px-6 py-2.5 rounded-2xl shadow-2xl flex items-center gap-3 border border-slate-800"
+            >
+                <div className="w-8 h-8 rounded-xl bg-gradient-to-tr from-warning-400 to-orange-500 flex items-center justify-center shadow-lg">
+                  <Sparkles size={16} className="text-white fill-white/20" /> 
+                </div>
+                <div className="flex flex-col items-start leading-none gap-0.5">
+                  <span className="text-[9px] font-black text-warning-400 uppercase tracking-widest">Premium</span>
+                  <span className="text-[13px] font-black text-white tracking-tight uppercase">Estilo Exclusivo</span>
+                </div>
+            </motion.div>
+
+            {/* AI Action Button */}
+            <Button 
+              variant="ai" 
+              size="xl" 
+              className="w-full max-w-sm shadow-[0_15px_35px_-5px_rgba(99,102,241,0.25)] gap-3 rounded-2xl py-8 text-xl font-black group/save transition-all hover:translate-y-[-2px] hover:shadow-[0_20px_45px_-8px_rgba(99,102,241,0.3)] active:scale-[0.98]"
+              onClick={handleSave}
+            >
+              <Save size={24} className="group-hover/save:rotate-12 transition-transform" /> 
+              <span>Salvar Novo Visual</span>
             </Button>
           </div>
+
+          {/* Decorative Corner Accents */}
+          <div className="absolute top-10 left-10 w-4 h-4 border-l-2 border-t-2 border-slate-200 rounded-tl-lg" />
+          <div className="absolute top-10 right-10 w-4 h-4 border-r-2 border-t-2 border-slate-200 rounded-tr-lg" />
+          <div className="absolute bottom-10 left-10 w-4 h-4 border-l-2 border-b-2 border-slate-200 rounded-bl-lg" />
+          <div className="absolute bottom-10 right-10 w-4 h-4 border-r-2 border-b-2 border-slate-200 rounded-br-lg" />
         </div>
       </motion.div>
 
@@ -202,6 +255,13 @@ export const AvatarStudio: React.FC = () => {
                     ? profile.equippedStickerIds.includes(item.id)
                     : (activeTab === 'avatar' ? profile.selectedAvatarId : activeTab === 'background' ? profile.selectedBackgroundId : profile.selectedBorderId) === item.id;
 
+                const rarityColor = {
+                  'comum': 'bg-slate-400',
+                  'raro': 'bg-blue-500',
+                  'épico': 'bg-purple-500',
+                  'lendário': 'bg-amber-500 shadow-[0_0_10px_rgba(245,158,11,0.4)]'
+                }[item.rarity || 'comum'];
+
                 return (
                     <motion.div
                         key={item.id}
@@ -216,6 +276,14 @@ export const AvatarStudio: React.FC = () => {
                             : "border-slate-50 bg-slate-50/30 hover:border-primary-200 hover:bg-white hover:shadow-card"
                         )}
                     >
+                        {/* Rarity Badge */}
+                        <div className={cn(
+                          "absolute top-2 left-2 px-2 py-0.5 rounded-md text-[8px] font-black uppercase tracking-widest text-white shadow-sm z-10",
+                          rarityColor
+                        )}>
+                          {item.rarity || 'comum'}
+                        </div>
+
                         <div className="w-full h-full relative">
                             <img 
                                 src={item.assetUrl} 

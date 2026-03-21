@@ -10,6 +10,8 @@ import { useAuthStore } from '../../store/auth.store';
 import { supabase } from '../../lib/supabase';
 import { cn } from '../../lib/utils';
 import { calculateLevel } from '../../lib/gamificationUtils';
+import { useAvatarStore } from '../../store/avatar.store';
+import { AvatarComposer } from '../../features/avatar/components/AvatarComposer';
 
 
 const profileSchema = z.object({
@@ -32,12 +34,14 @@ type ProfileFormData = z.infer<typeof profileSchema>;
 export const Profile: React.FC = () => {
   const { user, login } = useAuthStore();
   const fileInputRef = React.useRef<HTMLInputElement>(null);
-  const [avatarPreview, setAvatarPreview] = React.useState<string | undefined>(user?.avatar || '/avatars/default-capybara.png');
+  const [avatarPreview, setAvatarPreview] = React.useState<string | undefined>(user?.avatar || '/avatars/default-impacto.png');
 
   // liveUser kept for potential future use or removed if unused.
   const [, setLiveUser] = React.useState<any>(null);
   const [myClass, setMyClass] = React.useState<any>(null);
   const [stats, setStats] = React.useState<any>(null);
+
+  const { profile, catalog, fetchProfile, fetchCatalog } = useAvatarStore();
 
   const fetchProfileData = async () => {
     if (!user) return;
@@ -64,6 +68,13 @@ export const Profile: React.FC = () => {
       .subscribe();
     return () => { supabase.removeChannel(chStats); };
   }, [user]);
+
+  React.useEffect(() => {
+    if (user && user.role === 'student') {
+      fetchProfile(user.id);
+      fetchCatalog();
+    }
+  }, [user, fetchProfile, fetchCatalog]);
 
   const className = myClass?.name || '';
   const currentLevel = stats ? calculateLevel(stats.xp) : 1;
@@ -106,7 +117,7 @@ export const Profile: React.FC = () => {
       if (avatarPreview) {
         updateData.avatar = avatarPreview;
       } else { // Fallback for students if no avatar is set
-        updateData.avatar = '/avatars/default-capybara.png';
+        updateData.avatar = '/avatars/default-impacto.png';
       }
 
       if (data.password) {
@@ -140,52 +151,90 @@ export const Profile: React.FC = () => {
       </header>
 
       <div className="grid md:grid-cols-3 gap-8">
-        <Card className="p-8 border-slate-100 text-center space-y-6 self-start shadow-xl shadow-slate-200/50">
-          <div className="relative inline-block">
-            <input 
-              type="file" 
-              ref={fileInputRef}
-              className="hidden" 
-              accept="image/*"
-              onChange={handleFileChange}
-            />
-            <div className="w-32 h-32 bg-primary-500 rounded-[2.5rem] flex items-center justify-center text-4xl font-black text-white shadow-2xl mx-auto ring-8 ring-primary-50 overflow-hidden">
-              {avatarPreview ? (
-                <img src={avatarPreview} alt={user?.name} className="w-full h-full object-cover" />
-              ) : (
-                user?.name?.[0]
-              )}
-            </div>
-            <button 
-              type="button"
-              onClick={() => fileInputRef.current?.click()}
-              className="absolute bottom-0 right-0 p-2.5 bg-white rounded-xl border border-slate-100 shadow-lg text-slate-600 hover:text-primary-500 transition-all hover:scale-110 active:scale-95"
-            >
-              <Camera size={20} />
-            </button>
-          </div>
-          <div>
-            <h2 className="text-xl font-black text-slate-800 tracking-tight">{user?.name}</h2>
-            {className && (
-              <div className="flex items-center justify-center gap-1.5 mt-2">
-                <GraduationCap size={14} className="text-primary-500" />
-                <span className="text-sm font-bold text-primary-600">{className}</span>
-              </div>
-            )}
-            <div className="flex items-center justify-center gap-2 mt-3">
-              {stats && (
-                <>
-                  <span className="flex items-center gap-1 text-xs font-black text-warning-600 bg-warning-50 px-3 py-1.5 rounded-full border border-warning-100">
-                    <Zap size={12} className="fill-warning-400" /> {stats.xp} XP
-                  </span>
-                  <span className="flex items-center gap-1 text-xs font-black text-special-600 bg-special-50 px-3 py-1.5 rounded-full border border-special-100">
-                    <Star size={12} className="fill-special-400" /> Nível {currentLevel}
-                  </span>
-                </>
-              )}
-            </div>
-          </div>
+        <Card className="p-0 border-none text-center self-start shadow-[0_20px_50px_rgba(0,0,0,0.1)] overflow-hidden bg-white relative group">
+          {/* ✅ PREMIUM LIGHT BACKGROUND LAYERS */}
+          <div className="absolute inset-0 bg-[url('https://www.transparenttextures.com/patterns/cubes.png')] opacity-[0.02] mix-blend-multiply" />
+          <div className="absolute top-0 -left-1/4 w-full h-full bg-primary-100/30 rounded-full blur-[120px] animate-pulse" />
+          <div className="absolute bottom-0 -right-1/4 w-full h-full bg-special-100/20 rounded-full blur-[120px] animate-pulse delay-1000" />
 
+          <div className="relative z-10 p-8 space-y-6">
+            <div className="relative inline-block">
+              <input 
+                type="file" 
+                ref={fileInputRef}
+                className="hidden" 
+                accept="image/*"
+                onChange={handleFileChange}
+              />
+              
+              {(user?.role === 'student' && profile && profile.selectedAvatarId) ? (() => {
+                const activeAvatar = catalog.find(i => i.id === profile.selectedAvatarId);
+                const activeBackground = catalog.find(i => i.id === profile.selectedBackgroundId);
+                const activeBorder = catalog.find(i => i.id === profile.selectedBorderId);
+                
+                return (
+                  <div className="w-40 h-40 rounded-[3rem] mx-auto flex items-center justify-center shadow-xl ring-4 ring-white relative overflow-hidden bg-[#F8FAFF] border-2 border-slate-100 group-hover:scale-105 transition-transform duration-500">
+                    <AvatarComposer
+                      avatarUrl={activeAvatar?.assetUrl || activeAvatar?.imageUrl || ''}
+                      backgroundUrl={activeBackground?.assetUrl || activeBackground?.imageUrl}
+                      borderUrl={activeBorder?.assetUrl || activeBorder?.imageUrl}
+                      size="xl"
+                      className="w-full h-full border-none shadow-none p-0 scale-100"
+                      isFloating={true}
+                    />
+                  </div>
+                );
+              })() : (
+                <div className="w-40 h-40 bg-gradient-to-br from-primary-500 to-primary-600 rounded-[3rem] flex items-center justify-center text-5xl font-black text-white shadow-2xl mx-auto ring-8 ring-white overflow-hidden relative group-hover:scale-105 transition-transform duration-500">
+                  {avatarPreview ? (
+                    <img src={avatarPreview} alt={user?.name} className="w-full h-full object-cover" />
+                  ) : (
+                    user?.name?.[0]
+                  )}
+                  {user?.role !== 'student' && (
+                    <button 
+                      type="button"
+                      onClick={() => fileInputRef.current?.click()}
+                      className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-white"
+                    >
+                      <Camera size={32} />
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
+            
+            <div className="space-y-4 pt-4">
+              <div className="space-y-1">
+                <h2 className="text-2xl font-black text-slate-900 tracking-tight">{user?.name}</h2>
+                {className && (
+                  <div className="flex items-center justify-center gap-1.5 bg-primary-50 w-fit mx-auto px-4 py-1.5 rounded-full border border-primary-100">
+                    <GraduationCap size={16} className="text-primary-600" />
+                    <span className="text-sm font-black text-primary-700 uppercase tracking-wider">{className}</span>
+                  </div>
+                )}
+              </div>
+
+              <div className="flex flex-col gap-2 pt-2">
+                {stats && (
+                  <>
+                    <div className="flex items-center justify-between bg-slate-50 w-full px-5 py-3 rounded-2xl border border-slate-100 group/xp">
+                       <span className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] group-hover/xp:text-warning-600 transition-colors">Experiência</span>
+                       <span className="flex items-center gap-1.5 text-sm font-black text-slate-900">
+                          <Zap size={14} className="fill-warning-400 text-warning-400" /> {stats.xp.toLocaleString()} XP
+                       </span>
+                    </div>
+                    <div className="flex items-center justify-between bg-slate-50 w-full px-5 py-3 rounded-2xl border border-slate-100 group/lvl">
+                       <span className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] group-hover/lvl:text-special-500 transition-colors">Progresso</span>
+                       <span className="flex items-center gap-1.5 text-sm font-black text-slate-900">
+                          <Star size={14} className="fill-special-400 text-special-400" /> Nível {currentLevel}
+                       </span>
+                    </div>
+                  </>
+                )}
+              </div>
+            </div>
+          </div>
         </Card>
 
         <form onSubmit={handleSubmit(onSubmit)} className="md:col-span-2 space-y-6">

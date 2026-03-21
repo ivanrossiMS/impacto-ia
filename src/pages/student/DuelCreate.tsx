@@ -35,7 +35,12 @@ export const DuelCreate: React.FC = () => {
       try {
         const { data: userData } = await supabase.from('users').select('classId').eq('id', user.id).single();
         if (userData?.classId) {
-          const { data: classmates } = await supabase.from('users').select('*').eq('classId', userData.classId).neq('id', user.id);
+          const { data: classmates } = await supabase
+            .from('users')
+            .select('*')
+            .eq('classId', userData.classId)
+            .eq('role', 'student') // Only challenge other students
+            .neq('id', user.id);
           setStudents(classmates || []);
         }
       } catch (e) {

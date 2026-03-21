@@ -1,15 +1,12 @@
 import React, { useState } from 'react';
-import { useNavigate, useSearchParams } from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
 import { CheckCircle2, ArrowRight, Mail, Lock, Sparkles } from 'lucide-react';
 import { authService } from '../services/auth.service';
 import { toast } from 'sonner';
 import { motion, AnimatePresence } from 'framer-motion';
 
 export const FirstAccess: React.FC = () => {
-  const [searchParams] = useSearchParams();
-  const initialRole = (searchParams.get('role') as any) || 'student';
-  
-  const [role, setRole] = useState<'student' | 'guardian' | 'teacher' | 'admin'>(initialRole);
+  const [role, setRole] = useState<'student' | 'guardian' | 'teacher' | 'admin' | null>(null);
   const [step, setStep] = useState<'validate' | 'register'>('validate');
   const [identifier, setIdentifier] = useState('');
   const [tempUser, setTempUser] = useState<any>(null);
@@ -25,26 +22,16 @@ export const FirstAccess: React.FC = () => {
     setIsLoading(true);
     
     try {
-      // First, check if user exists at all (even if registered)
-      const user = await authService.validateFirstAccess(role, identifier);
+      // Use unified validation (auto-detects role)
+      const user = await authService.validateFirstAccessUnified(identifier);
       
       if (user) {
         setTempUser(user);
+        setRole(user.role); // Identifies role automatically!
         setStep('register');
         toast.success(`Olá, ${user.name}! Notamos que este é seu primeiro acesso. Vamos configurar sua senha.`);
       } else {
-        // Try to see if they are already registered
-        const allUsers = await authService.getCurrentUserByRoleAndId(role, identifier);
-        if (allUsers && allUsers.isRegistered) {
-          toast.info('Você já possui cadastro! Use sua senha na tela de login.', {
-             action: {
-               label: 'Ir para Login',
-               onClick: () => navigate('/login')
-             }
-          });
-        } else {
-          toast.error('Dados não encontrados. Verifique as informações ou procure a secretaria da escola.');
-        }
+        toast.error('Dados não encontrados ou você já possui cadastro. Verifique as informações ou procure a secretaria.');
       }
     } catch (error) {
       toast.error('Erro ao validar dados.');
@@ -85,14 +72,6 @@ export const FirstAccess: React.FC = () => {
     }
   };
 
-  const getIdentifierLabel = () => {
-    switch (role) {
-      case 'student': return 'Código do Aluno';
-      case 'guardian': return 'E-mail do Responsável';
-      case 'teacher': return 'E-mail do Professor';
-      case 'admin': return 'E-mail do Administrador';
-    }
-  };
 
   return (
     <div className="min-h-screen bg-background flex flex-col justify-center py-12 px-6 lg:px-8 relative overflow-hidden">
@@ -122,45 +101,43 @@ export const FirstAccess: React.FC = () => {
                 animate={{ opacity: 1, x: 0 }}
                 exit={{ opacity: 0, x: 20 }}
               >
-                <div className="mb-6 grid grid-cols-2 gap-2">
-                  {(['student', 'guardian', 'teacher', 'admin'] as const).map((r) => (
-                    <button
-                      key={r}
-                      type="button"
-                      onClick={() => setRole(r)}
-                      className={`p-2 rounded-xl border text-xs font-bold transition-all ${
-                        role === r 
-                          ? 'border-primary-500 bg-primary-50 text-primary-700' 
-                          : 'border-slate-200 text-slate-400 hover:bg-slate-50'
-                      }`}
-                    >
-                      {r === 'student' ? 'Aluno' : r === 'teacher' ? 'Professor' : r === 'guardian' ? 'Familiar' : 'Gestor'}
-                    </button>
-                  ))}
-                </div>
 
                 <form className="space-y-6" onSubmit={handleValidate}>
                   <div>
-                    <label className="block text-sm font-bold text-slate-700 mb-2">
-                      {getIdentifierLabel()}
+                    <label className="block text-sm font-bold text-slate-700 mb-2 ml-1">
+                      Código/E-mail
                     </label>
-                    <input
-                      type="text"
-                      required
-                      value={identifier}
-                      onChange={e => setIdentifier(e.target.value)}
-                      className="appearance-none block w-full px-5 py-4 border-2 border-slate-200 rounded-2xl shadow-sm placeholder-slate-400 focus:outline-none focus:ring-0 focus:border-primary-500 sm:text-base bg-slate-50 transition-colors font-medium"
-                      placeholder={role === 'student' ? 'Seu código único' : 'Seu e-mail cadastrado'}
-                    />
+                    <div className="relative group">
+                      <div className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 group-focus-within:text-primary-500 transition-colors">
+                        <Mail size={20} />
+                      </div>
+                      <input
+                        type="text"
+                        required
+                        value={identifier}
+                        onChange={e => setIdentifier(e.target.value)}
+                        className="appearance-none block w-full pl-12 pr-5 py-4 border-2 border-slate-100 rounded-2xl shadow-sm placeholder-slate-400 focus:outline-none focus:ring-0 focus:border-primary-500 sm:text-base bg-slate-50/50 hover:bg-white focus:bg-white transition-all font-medium"
+                        placeholder="Seu código ou e-mail"
+                      />
+                    </div>
                   </div>
 
                   <button
                     type="submit"
                     disabled={isLoading}
-                    className="w-full flex justify-center items-center gap-2 py-4 px-4 border border-transparent rounded-2xl shadow-card text-lg font-bold text-white bg-primary-600 hover:bg-primary-700 transition-all transform hover:-translate-y-0.5 disabled:opacity-50"
+                    className="w-full flex justify-center items-center gap-2 py-4 px-4 border border-transparent rounded-2xl shadow-xl text-lg font-bold text-white bg-gradient-to-r from-primary-600 to-primary-500 hover:from-primary-700 hover:to-primary-600 transition-all transform hover:-translate-y-0.5 active:translate-y-0 disabled:opacity-50"
                   >
-                    {isLoading ? 'Validando...' : 'Validar Meus Dados'}
-                    {!isLoading && <ArrowRight size={20} />}
+                    {isLoading ? (
+                      <div className="flex items-center gap-2">
+                        <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                        Validando...
+                      </div>
+                    ) : (
+                      <>
+                        Validar Meus Dados
+                        <ArrowRight size={20} />
+                      </>
+                    )}
                   </button>
                 </form>
               </motion.div>
@@ -182,17 +159,19 @@ export const FirstAccess: React.FC = () => {
                 <form className="space-y-4" onSubmit={handleRegister}>
                   {(role === 'student' || (tempUser && !tempUser.email)) && (
                     <div>
-                      <label className="block text-sm font-bold text-slate-700 mb-2">
+                      <label className="block text-sm font-bold text-slate-700 mb-2 ml-1">
                         {role === 'student' ? 'Escolha um E-mail para Login' : 'Cadastre seu E-mail para Login'}
                       </label>
-                      <div className="relative">
-                        <Mail className="absolute left-4 top-4 text-slate-400" size={20} />
+                      <div className="relative group">
+                        <div className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 group-focus-within:text-primary-500 transition-colors">
+                          <Mail size={20} />
+                        </div>
                         <input
                           type="email"
                           required
                           value={email}
                           onChange={e => setEmail(e.target.value)}
-                          className="appearance-none block w-full pl-12 pr-5 py-4 border-2 border-slate-200 rounded-2xl shadow-sm placeholder-slate-400 focus:outline-none focus:ring-0 focus:border-primary-500 sm:text-base bg-slate-50 font-medium"
+                          className="appearance-none block w-full pl-12 pr-5 py-4 border-2 border-slate-100 rounded-2xl shadow-sm placeholder-slate-400 focus:outline-none focus:ring-0 focus:border-primary-500 sm:text-base bg-slate-50/50 hover:bg-white focus:bg-white transition-all font-medium"
                           placeholder="seu.nome@exemplo.com"
                         />
                       </div>
@@ -200,34 +179,38 @@ export const FirstAccess: React.FC = () => {
                   )}
 
                   <div>
-                    <label className="block text-sm font-bold text-slate-700 mb-2">
+                    <label className="block text-sm font-bold text-slate-700 mb-2 ml-1">
                       Criar Nova Senha
                     </label>
-                    <div className="relative">
-                      <Lock className="absolute left-4 top-4 text-slate-400" size={20} />
+                    <div className="relative group">
+                      <div className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 group-focus-within:text-primary-500 transition-colors">
+                        <Lock size={20} />
+                      </div>
                       <input
                         type="password"
                         required
                         value={password}
                         onChange={e => setPassword(e.target.value)}
-                        className="appearance-none block w-full pl-12 pr-5 py-4 border-2 border-slate-200 rounded-2xl shadow-sm placeholder-slate-400 focus:outline-none focus:ring-0 focus:border-primary-500 sm:text-base bg-slate-50 font-medium"
+                        className="appearance-none block w-full pl-12 pr-5 py-4 border-2 border-slate-100 rounded-2xl shadow-sm placeholder-slate-400 focus:outline-none focus:ring-0 focus:border-primary-500 sm:text-base bg-slate-50/50 hover:bg-white focus:bg-white transition-all font-medium"
                         placeholder="Mínimo 4 caracteres"
                       />
                     </div>
                   </div>
 
                   <div>
-                    <label className="block text-sm font-bold text-slate-700 mb-2">
+                    <label className="block text-sm font-bold text-slate-700 mb-2 ml-1">
                       Confirmar Senha
                     </label>
-                    <div className="relative">
-                      <Lock className="absolute left-4 top-4 text-slate-400" size={20} />
+                    <div className="relative group">
+                      <div className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 group-focus-within:text-primary-500 transition-colors">
+                        <Lock size={20} />
+                      </div>
                       <input
                         type="password"
                         required
                         value={confirmPassword}
                         onChange={e => setConfirmPassword(e.target.value)}
-                        className="appearance-none block w-full pl-12 pr-5 py-4 border-2 border-slate-200 rounded-2xl shadow-sm placeholder-slate-400 focus:outline-none focus:ring-0 focus:border-primary-500 sm:text-base bg-slate-50 font-medium"
+                        className="appearance-none block w-full pl-12 pr-5 py-4 border-2 border-slate-100 rounded-2xl shadow-sm placeholder-slate-400 focus:outline-none focus:ring-0 focus:border-primary-500 sm:text-base bg-slate-50/50 hover:bg-white focus:bg-white transition-all font-medium"
                         placeholder="Repita a senha"
                       />
                     </div>
@@ -236,9 +219,14 @@ export const FirstAccess: React.FC = () => {
                   <button
                     type="submit"
                     disabled={isLoading}
-                    className="w-full flex justify-center items-center gap-2 py-4 px-4 border border-transparent rounded-2xl shadow-card text-lg font-bold text-white bg-primary-600 hover:bg-primary-700 transition-all transform hover:-translate-y-0.5 disabled:opacity-50 mt-6"
-                  >
-                    {isLoading ? 'Registrando...' : 'Finalizar e Acessar'}
+                    className="w-full flex justify-center items-center gap-2 py-4 px-4 border border-transparent rounded-2xl shadow-xl text-lg font-bold text-white bg-gradient-to-r from-primary-600 to-primary-500 hover:from-primary-700 hover:to-primary-600 transition-all transform hover:-translate-y-0.5 active:translate-y-0 disabled:opacity-50 mt-6"
+                   >
+                    {isLoading ? (
+                      <div className="flex items-center gap-2">
+                        <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                        Registrando...
+                      </div>
+                    ) : 'Finalizar e Acessar'}
                   </button>
                 </form>
               </motion.div>

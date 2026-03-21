@@ -142,22 +142,10 @@ export class DuelService {
         const totalCoins = winCoins + answerCoins;
 
         try {
-          const result = await updateGamificationStats(userId, {
+          await updateGamificationStats(userId, {
             xpToAdd: totalXP,
             coinsToAdd: totalCoins
           });
-
-          // Notify Level Up
-          if (result && result.newLevel > result.oldLevel) {
-            await createNotification({
-              userId,
-              role: 'student',
-              title: 'Subiu de Nível! 🚀',
-              message: `Parabéns! Você alcançou o Nível ${result.newLevel}!`,
-              type: 'reward',
-              priority: 'high'
-            });
-          }
         } catch (error) {
           console.error('Error updating duel rewards:', error);
         }

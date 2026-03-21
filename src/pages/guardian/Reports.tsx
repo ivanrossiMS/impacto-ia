@@ -426,7 +426,7 @@ export const Reports: React.FC = () => {
         <div className="bg-gradient-to-br from-slate-900 to-slate-800 p-8 flex flex-col md:flex-row items-center gap-8">
           <div className="flex-shrink-0">
             <AvatarComposer
-              avatarUrl={activeAvatar?.assetUrl || '/avatars/default-capybara.png'}
+              avatarUrl={activeAvatar?.assetUrl || '/avatars/default-impacto.png'}
               backgroundUrl={activeBg?.assetUrl}
               borderUrl={activeBorder?.assetUrl}
               stickerUrls={activeStickers}

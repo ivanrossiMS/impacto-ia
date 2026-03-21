@@ -12,7 +12,6 @@ import { supabase } from '../../lib/supabase';
 import { useSupabaseQuery } from '../../hooks/useSupabase';
 import { useAuthStore } from '../../store/auth.store';
 import { saveActivityToStorage } from '../../lib/activityStorage';
-import { createBulkNotifications } from '../../lib/notificationUtils';
 
 interface Question {
   id: string;
@@ -400,40 +399,95 @@ export const CreateActivity: React.FC = () => {
     });
 
     // Send notifications to students
-    const studentIds: string[] = [];
+    let studentIds: string[] = [];
     
-    // Fetch fresh class data to ensure we have all student IDs
-    const { data: freshClasses, error } = await supabase.from('classes').select('*');
-    if (!error && freshClasses) {
+    try {
+      console.log('[Notifications] Starting notification flow. classId:', classId, 'myClasses:', myClasses.map(c => c.id));
+      
       if (classId) {
-        const freshClass = freshClasses.find(c => c.id === classId);
-        if (freshClass?.studentIds) {
-          studentIds.push(...freshClass.studentIds);
+        // Try camelCase first (how Supabase stores it if created with quoted identifiers)
+        const { data: students, error: studentError } = await supabase
+          .from('users')
+          .select('id, classId, role')
+          .eq('classId', classId)
+          .eq('role', 'student');
+        
+        console.log('[Notifications] Student query (classId):', { students, studentError, classId });
+        
+        if (studentError) {
+          console.error('[Notifications] Error fetching students by classId:', studentError);
+          toast.error(`Aviso: Não foi possível enviar notificações (${studentError.message})`);
+        } else if (students && students.length > 0) {
+          studentIds = students.map(s => s.id);
+        } else {
+          console.warn('[Notifications] No students found for classId:', classId, '– query returned:', students);
         }
-      } else {
-        // Send to all my classes
-        for (const c of myClasses) {
-          const freshClass = freshClasses.find(fc => fc.id === c.id);
-          if (freshClass?.studentIds) {
-            studentIds.push(...freshClass.studentIds);
-          }
+      } else if (myClasses.length > 0) {
+        const classIdList = myClasses.map(c => c.id);
+        const { data: students, error: studentError } = await supabase
+          .from('users')
+          .select('id, classId, role')
+          .in('classId', classIdList)
+          .eq('role', 'student');
+        
+        console.log('[Notifications] Student query (all classes):', { students, studentError, classIdList });
+        
+        if (studentError) {
+          console.error('[Notifications] Error fetching students by classIds:', studentError);
+        } else if (students) {
+          studentIds = students.map(s => s.id);
         }
       }
+    } catch (err) {
+      console.error('[Notifications] CRITICAL error fetching students for notification:', err);
     }
+
+    console.log('[Notifications] Student IDs found:', studentIds);
 
     if (studentIds.length > 0) {
       const uniqueStudentIds = Array.from(new Set(studentIds));
       
-      // Notify Students (and Guardians automatically via mirroring)
-      await createBulkNotifications(
-        uniqueStudentIds,
-        'student',
-        'Nova Atividade! 📝',
-        `O professor ${user?.name} salvou uma nova atividade de ${subjectLabel}: "${topic}".`,
-        'info',
-        'normal',
-        '/student/activities'
-      );
+      try {
+        // First, directly insert notifications to avoid any middleware issues
+        const now = new Date().toISOString();
+        const directNotifications = uniqueStudentIds.map(id => ({
+          id: crypto.randomUUID(),
+          userId: id,
+          role: 'student',
+          title: 'Nova Atividade Disponível! 📝',
+          message: `O professor ${user?.name} liberou uma nova atividade de ${subjectLabel}: "${topic}". Prepare-se para aprender!`,
+          type: 'info',
+          priority: 'normal',
+          read: false,
+          actionUrl: '/student/activities',
+          createdAt: now
+        }));
+        
+        const { error: notifError } = await supabase.from('notifications').insert(directNotifications);
+        if (notifError) {
+          console.error('[Notifications] Direct insert failed:', notifError);
+          toast.error(`Notificações não enviadas: ${notifError.message}`);
+        } else {
+          console.log('[Notifications] Sent to', uniqueStudentIds.length, 'students successfully!');
+          
+          // Now mirror to guardians via the utility
+          const { createBulkNotificationsForGuardians } = await import('../../lib/notificationUtils');
+          await createBulkNotificationsForGuardians(
+            uniqueStudentIds,
+            'Nova Atividade Disponível! 📝',
+            (studentName: string) => `[Responsável] ${studentName} tem uma nova atividade de ${subjectLabel}: "${topic}".`,
+            'info',
+            'normal',
+            '/guardian/activities'
+          );
+          console.log('[Notifications] Guardian mirroring completed.');
+        }
+      } catch (notifErr) {
+        console.error('[Notifications] CRITICAL error inserting notifications:', notifErr);
+      }
+    } else {
+      console.warn('[Notifications] No students found. Notifications were NOT sent. Check if students have classId set in users table.');
+      toast.error(`Aviso: Nenhum aluno encontrado na turma selecionada. Verifique se os alunos estão vinculados à turma.`);
     }
 
     setSavedActivity(true);

@@ -79,7 +79,7 @@ export const Support: React.FC = () => {
 
     setIsLoading(true);
     try {
-      const ticketId = `TKT-${Math.floor(1000 + Math.random() * 9000)}`;
+      const ticketId = crypto.randomUUID();
       const now = new Date().toISOString();
 
       const newTicket = {
@@ -98,8 +98,10 @@ export const Support: React.FC = () => {
         isReadByAdmin: false
       };
 
-      await supabase.from('support_tickets').insert(newTicket);
-      await supabase.from('ticket_messages').insert({
+      const { error: ticketError } = await supabase.from('support_tickets').insert(newTicket);
+      if (ticketError) throw ticketError;
+
+      const { error: msgError } = await supabase.from('ticket_messages').insert({
         id: crypto.randomUUID(),
         ticketId,
         senderId: user.id,
@@ -108,12 +110,27 @@ export const Support: React.FC = () => {
         createdAt: now,
         senderRole: user.role
       });
+      if (msgError) throw msgError;
 
       toast.success('Chamado aberto com sucesso!');
       setSubject('');
       setMessage('');
       setIsCreating(false);
       setSelectedTicketId(ticketId);
+
+      // Create notification for Admin/Support Team
+      // Note: We notify based on role 'admin'
+      await supabase.from('notifications').insert({
+        id: crypto.randomUUID(),
+        role: 'admin',
+        title: 'Novo Chamado de Suporte 🎫',
+        message: `O aluno ${user.name} abriu um novo chamado: "${subject}"`,
+        type: 'alert',
+        priority: 'medium',
+        read: false,
+        createdAt: now,
+        actionUrl: `/admin/support` // Assuming admin has this route
+      });
     } catch (error) {
       toast.error('Erro ao abrir chamado.');
     } finally {

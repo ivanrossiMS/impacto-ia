@@ -7,70 +7,57 @@ import { supabase } from '../lib/supabase';
 import { calculateLevel } from '../lib/gamificationUtils';
 import { AITutorWidget } from '../components/AITutorWidget';
 import { cn } from '../lib/utils';
+import { useAvatarStore } from '../store/avatar.store';
+import { AvatarComposer } from '../features/avatar/components/AvatarComposer';
+import { useStudentData } from '../hooks/useStudentData';
 
 export const StudentLayout: React.FC = () => {
   const { user, logout } = useAuthStore();
   const { isSidebarOpen, setSidebarOpen } = useUIStore();
   const navigate = useNavigate();
 
-  const [stats, setStats] = React.useState<any>(null);
+  // ✅ OPTIMIZED: useStudentData replaces the old fetchLayoutData + 3 separate channels.
+  // It uses parallel queries (Promise.all) and a 300ms debounce for real-time events.
+  const { stats, unreadCount, unreadSupportCount } = useStudentData(user?.id);
+
   const [className, setClassName] = React.useState('');
   const [schoolLogo, setSchoolLogo] = React.useState<string | null>(null);
-  const [unreadSupportCount, setUnreadSupportCount] = React.useState(0);
-  const [unreadCount, setUnreadCount] = React.useState(0);
 
-  const fetchLayoutData = async () => {
-    if (!user) return;
-    
-    // Stats
-    const { data: st } = await supabase.from('gamification_stats').select('*').eq('id', user.id).single();
-    if (st) setStats(st);
-
-    // Class Name
-    if (user.role === 'student') {
-      const { data: userData } = await supabase.from('users').select('classId').eq('id', user.id).single();
-      const cId = (userData as any)?.classId || (user as any)?.classId;
-      if (cId) {
-        const { data: cls } = await supabase.from('classes').select('name').eq('id', cId).single();
-        if (cls) setClassName(cls.name);
-      }
-    }
-
-    // School Logo
-    if (user.schoolId) {
-      const { data: school } = await supabase.from('schools').select('logo').eq('id', user.schoolId).single();
-      if (school) setSchoolLogo(school.logo);
-    }
-
-    // Unread Support
-    const { count: supportCount } = await supabase.from('support_tickets').select('*', { count: 'exact', head: true }).eq('userId', user.id).eq('isReadByParticipant', false);
-    setUnreadSupportCount(supportCount || 0);
-
-    // Unread Notifications
-    const { count: notifCount } = await supabase.from('notifications').select('*', { count: 'exact', head: true }).eq('userId', user.id).eq('read', false);
-    setUnreadCount(notifCount || 0);
-  };
+  const { profile, catalog, fetchProfile, fetchCatalog } = useAvatarStore();
 
   React.useEffect(() => {
-    fetchLayoutData();
-    const chStats = supabase.channel('layout_stats')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'gamification_stats', filter: `id=eq.${user?.id}` }, fetchLayoutData)
-      .subscribe();
-    const chSupport = supabase.channel('layout_support')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'support_tickets', filter: `userId=eq.${user?.id}` }, fetchLayoutData)
-      .subscribe();
-    const chNotifs = supabase.channel('layout_notifs')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'notifications', filter: `userId=eq.${user?.id}` }, fetchLayoutData)
-      .subscribe();
+    if (!user) return;
+    
+    // Fetch static layout data (class name + school logo) once on mount
+    const fetchStaticData = async () => {
+      const [userResult, schoolResult] = await Promise.all([
+        user.role === 'student'
+          ? supabase.from('users').select('classId').eq('id', user.id).single()
+          : Promise.resolve({ data: null }),
+        user.schoolId
+          ? supabase.from('schools').select('logo').eq('id', user.schoolId).single()
+          : Promise.resolve({ data: null }),
+      ]);
 
-    return () => { 
-      supabase.removeChannel(chStats);
-      supabase.removeChannel(chSupport);
-      supabase.removeChannel(chNotifs);
+      if (userResult.data?.classId) {
+        const { data: cls } = await supabase.from('classes').select('name').eq('id', userResult.data.classId).single();
+        if (cls) setClassName(cls.name);
+      }
+
+      if (schoolResult.data?.logo) setSchoolLogo(schoolResult.data.logo);
     };
+
+    fetchStaticData();
   }, [user]);
 
-  // Derived level from XP (ensures consistency)
+  React.useEffect(() => {
+    if (user && user.role === 'student') {
+      fetchProfile(user.id);
+      fetchCatalog();
+    }
+  }, [user, fetchProfile, fetchCatalog]);
+
+  // Derived level from XP
   const currentLevel = stats ? calculateLevel(stats.xp) : 1;
 
   const handleLogout = () => {
@@ -147,11 +134,30 @@ export const StudentLayout: React.FC = () => {
              onClick={() => navigate('/student/profile')}
              className="bg-white border border-slate-100 p-4 rounded-2xl mb-4 text-center shadow-sm cursor-pointer hover:border-primary-300 hover:shadow-md transition-all group"
           >
-            <div className="w-14 h-14 bg-gradient-to-tr from-primary-400 to-special-400 rounded-full mx-auto mb-3 flex items-center justify-center text-white font-bold text-xl shadow-md border-2 border-white group-hover:scale-105 transition-transform overflow-hidden">
-              {user?.avatar ? (
-                <img src={user.avatar} alt={user.name} className="w-full h-full object-cover" />
+            <div className="w-24 h-24 rounded-[1.75rem] mx-auto mb-3 flex items-center justify-center text-white font-bold text-xl drop-shadow-md group-hover:scale-105 transition-transform">
+              {(profile && profile.selectedAvatarId) ? (() => {
+                const activeAvatar = catalog.find(i => i.id === profile.selectedAvatarId);
+                const activeBackground = catalog.find(i => i.id === profile.selectedBackgroundId);
+                const activeBorder = catalog.find(i => i.id === profile.selectedBorderId);
+                return (
+                  <AvatarComposer
+                    avatarUrl={activeAvatar?.assetUrl || activeAvatar?.imageUrl || ''}
+                    backgroundUrl={activeBackground?.assetUrl || activeBackground?.imageUrl}
+                    borderUrl={activeBorder?.assetUrl || activeBorder?.imageUrl}
+                    size="md"
+                    animate={false}
+                    isFloating={false}
+                    className="w-full h-full shadow-none"
+                  />
+                );
+              })() : user?.avatar ? (
+                <div className="w-14 h-14 bg-gradient-to-tr from-primary-400 to-special-400 rounded-full border-2 border-white overflow-hidden shadow-md">
+                   <img src={user.avatar} alt={user.name} className="w-full h-full object-cover" />
+                </div>
               ) : (
-                user?.name?.[0]
+                <div className="w-14 h-14 bg-gradient-to-tr from-primary-400 to-special-400 rounded-full border-2 border-white overflow-hidden shadow-md flex items-center justify-center text-white">
+                   {user?.name?.[0]}
+                </div>
               )}
             </div>
             <div className="font-bold text-slate-800 text-sm truncate">{user?.name}</div>

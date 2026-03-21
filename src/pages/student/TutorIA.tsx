@@ -42,9 +42,10 @@ export const TutorIA: React.FC = () => {
   useEffect(() => {
     const fetchActivePath = async () => {
       if (!user) return;
-      const { data: progress } = await supabase.from('student_progress').select('*').eq('studentId', user.id).eq('status', 'in_progress').single();
+      const { data: progressArray } = await supabase.from('student_progress').select('*').eq('studentId', user.id).eq('status', 'in_progress').limit(1);
+      const progress = progressArray && progressArray.length > 0 ? progressArray[0] : null;
       if (progress) {
-        const { data: path } = await supabase.from('learning_paths').select('*').eq('id', progress.pathId).single();
+        const { data: path } = await supabase.from('learning_paths').select('*').eq('id', progress.pathId).maybeSingle();
         if (path) {
           setActivePath(path);
         }

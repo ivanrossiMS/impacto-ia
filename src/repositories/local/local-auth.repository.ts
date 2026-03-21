@@ -53,6 +53,27 @@ export class LocalAuthRepository implements IAuthRepository {
     return null;
   }
 
+  async validateFirstAccessUnified(identifier: string): Promise<AppUser | null> {
+    const idClean = identifier.trim();
+    const idLower = idClean.toLowerCase();
+    
+    // Search across email, studentCode, and guardianCode
+    let user = await db.users.where('email').equals(idLower).first();
+    if (!user) {
+      user = await db.users.where('studentCode').equals(idClean).first();
+    }
+    if (!user) {
+      user = await db.users.where('guardianCode').equals(idClean).first() ||
+             await db.users.where('guardianCode').equals(idLower).first();
+    }
+
+    // Must be NOT registered yet
+    if (user && user.isRegistered !== true) {
+      return user;
+    }
+    return null;
+  }
+
   async registerFirstAccess(userId: string, data: { email?: string; passwordHash: string }): Promise<void> {
     await db.users.update(userId, {
       ...data,

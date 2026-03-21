@@ -453,7 +453,7 @@ const SchoolDashboard: React.FC<{ school: SchoolRecord; onClose: () => void }> =
                         <div className="pt-6 border-t border-slate-800 flex items-center justify-between">
                            <div className="flex -space-x-3">
                               {stats.topStudents.slice(0, 4).map(({ user, stat }) => (
-                                <img key={stat.id} src={user?.avatar || '/avatars/default-capybara.png'} className="w-8 h-8 rounded-full border-2 border-slate-900 bg-slate-800" />
+                                <img key={stat.id} src={user?.avatar || '/avatars/default-impacto.png'} className="w-8 h-8 rounded-full border-2 border-slate-900 bg-slate-800" />
                               ))}
                            </div>
                            <p className="text-[9px] font-bold text-slate-500 uppercase">Top Talentos</p>
@@ -618,7 +618,7 @@ const SchoolStatsCard: React.FC<{
          <div className="flex -space-x-3">
             {stats.topStudents.slice(0, 3).map(({ user, stat }) => (
               <div key={stat.id} className="w-9 h-9 rounded-full border-2 border-white bg-slate-100 overflow-hidden shadow-sm" title={user?.name}>
-                 <img src={user?.avatar || '/avatars/default-capybara.png'} className="w-full h-full object-cover" />
+                 <img src={user?.avatar || '/avatars/default-impacto.png'} className="w-full h-full object-cover" />
               </div>
             ))}
             {stats.studentCount > 3 && (

@@ -15,7 +15,7 @@ import { Button } from '../../components/ui/Button';
 import { Badge } from '../../components/ui/Badge';
 import { cn } from '../../lib/utils';
 import { toast } from 'sonner';
-import { db } from '../../lib/dexie';
+import { supabase } from '../../lib/supabase';
 import { incrementMissionProgress } from '../../lib/missionUtils';
 import type { GamificationStats } from '../../types/gamification';
 import type { AvatarCatalogItem } from '../../types/avatar';
@@ -37,8 +37,8 @@ export const AvatarStore: React.FC = () => {
 
   const loadStats = async () => {
     if (user) {
-      const s = await db.gamificationStats.get(user.id);
-      if (s) setStats(s);
+      const { data: s } = await supabase.from('gamification_stats').select('*').eq('id', user.id).single();
+      if (s) setStats(s as GamificationStats);
     }
   };
 

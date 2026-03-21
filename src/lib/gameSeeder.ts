@@ -1,214 +1,1200 @@
-// Achievement definitions, mission seeds, and auto-mission generation logic
-import { db } from './dexie';
+import { supabase } from './supabase';
 
 // ============================================================
 // 100 ACHIEVEMENT DEFINITIONS
 // ============================================================
 export const ALL_ACHIEVEMENTS = [
-  // === PRIMEIROS PASSOS (1-10) ===
-  { id: 'ach-001', title: 'Bem-vindo!', description: 'Fez seu primeiro login na plataforma.', icon: '🎉', rewardXp: 20, rewardCoins: 10, category: 'geral', requiredCount: 1, criteria: 'login' },
-  { id: 'ach-002', title: 'Completou 1ª Atividade', description: 'Respondeu sua primeira questão corretamente!', icon: '✅', rewardXp: 50, rewardCoins: 20, category: 'atividades', requiredCount: 1, criteria: 'activities_correct' },
-  { id: 'ach-003', title: 'Primeiros 100 XP', description: 'Chegou a 100 pontos de experiência.', icon: '⭐', rewardXp: 30, rewardCoins: 15, category: 'xp', requiredCount: 100, criteria: 'xp' },
-  { id: 'ach-004', title: 'Primeiras Moedas', description: 'Acumulou suas primeiras 50 moedas.', icon: '🪙', rewardXp: 25, rewardCoins: 0, category: 'moedas', requiredCount: 50, criteria: 'coins' },
-  { id: 'ach-005', title: 'Avatar Criado', description: 'Personalizou seu avatar pela primeira vez.', icon: '🎭', rewardXp: 40, rewardCoins: 25, category: 'avatar', requiredCount: 1, criteria: 'avatar_customized' },
-  { id: 'ach-006', title: 'Primeiro Streak', description: 'Estudou 2 dias seguidos!', icon: '🔥', rewardXp: 30, rewardCoins: 15, category: 'streak', requiredCount: 2, criteria: 'streak' },
-  { id: 'ach-007', title: 'Nota no Diário', description: 'Escreveu sua primeira nota no Meu Diário.', icon: '📓', rewardXp: 35, rewardCoins: 15, category: 'diario', requiredCount: 1, criteria: 'diary_entries' },
-  { id: 'ach-008', title: 'Explorador', description: 'Visitou todas as seções da plataforma.', icon: '🗺️', rewardXp: 60, rewardCoins: 30, category: 'geral', requiredCount: 1, criteria: 'explorer' },
-  { id: 'ach-009', title: 'Missão Cumprida', description: 'Completou sua primeira missão.', icon: '🎯', rewardXp: 50, rewardCoins: 25, category: 'missoes', requiredCount: 1, criteria: 'missions_completed' },
-  { id: 'ach-010', title: 'Estudante de Verdade', description: 'Acessou a plataforma por 3 dias diferentes.', icon: '📚', rewardXp: 45, rewardCoins: 20, category: 'geral', requiredCount: 3, criteria: 'login_days' },
-
-  // === ATIVIDADES (11-25) ===
-  { id: 'ach-011', title: '5 Respostas Certas', description: 'Acertou 5 questões no total.', icon: '🎓', rewardXp: 60, rewardCoins: 30, category: 'atividades', requiredCount: 5, criteria: 'activities_correct' },
-  { id: 'ach-012', title: '10 Questões Resolvidas', description: 'Respondeu 10 questões.', icon: '📝', rewardXp: 80, rewardCoins: 40, category: 'atividades', requiredCount: 10, criteria: 'activities_correct' },
-  { id: 'ach-013', title: '25 Questões Resolvidas', description: 'Respondeu 25 questões com sucesso!', icon: '💪', rewardXp: 120, rewardCoins: 60, category: 'atividades', requiredCount: 25, criteria: 'activities_correct' },
-  { id: 'ach-014', title: '50 Questões Resolvidas', description: 'Metade do caminho para 100!', icon: '🌟', rewardXp: 200, rewardCoins: 100, category: 'atividades', requiredCount: 50, criteria: 'activities_correct' },
-  { id: 'ach-015', title: 'Centurião', description: 'Respondeu 100 questões ao total!', icon: '🏆', rewardXp: 400, rewardCoins: 200, category: 'atividades', requiredCount: 100, criteria: 'activities_correct' },
-  { id: 'ach-016', title: 'Mestre das Atividades', description: 'Completou 200 questões.', icon: '👑', rewardXp: 700, rewardCoins: 350, category: 'atividades', requiredCount: 200, criteria: 'activities_correct' },
-  { id: 'ach-017', title: 'Lendário', description: 'Completou 500 questões ao longo da vida!', icon: '🌈', rewardXp: 1500, rewardCoins: 750, category: 'atividades', requiredCount: 500, criteria: 'activities_correct' },
-  { id: 'ach-018', title: 'Perfeição Diária', description: 'Acertou todas as questões em um único dia.', icon: '💯', rewardXp: 100, rewardCoins: 50, category: 'atividades', requiredCount: 1, criteria: 'perfect_day' },
-  { id: 'ach-019', title: 'Velocidade Relâmpago', description: 'Respondeu 5 questões em menos de 5 minutos.', icon: '⚡', rewardXp: 80, rewardCoins: 40, category: 'atividades', requiredCount: 1, criteria: 'speed_run' },
-  { id: 'ach-020', title: 'Mestre Matemático', description: 'Acertou 10 questões de Matemática.', icon: '🔢', rewardXp: 100, rewardCoins: 50, category: 'materias', requiredCount: 10, criteria: 'math_correct' },
-  { id: 'ach-021', title: 'Escritor Talentoso', description: 'Acertou 10 questões de Português.', icon: '📖', rewardXp: 100, rewardCoins: 50, category: 'materias', requiredCount: 10, criteria: 'portuguese_correct' },
-  { id: 'ach-022', title: 'Cientista Curioso', description: 'Acertou 10 questões de Ciências.', icon: '🔬', rewardXp: 100, rewardCoins: 50, category: 'materias', requiredCount: 10, criteria: 'science_correct' },
-  { id: 'ach-023', title: 'Historiador', description: 'Acertou 10 questões de História.', icon: '🏛️', rewardXp: 100, rewardCoins: 50, category: 'materias', requiredCount: 10, criteria: 'history_correct' },
-  { id: 'ach-024', title: 'Geógrafo', description: 'Acertou 10 questões de Geografia.', icon: '🌍', rewardXp: 100, rewardCoins: 50, category: 'materias', requiredCount: 10, criteria: 'geography_correct' },
-  { id: 'ach-025', title: 'Polímata', description: 'Acertou questões de 5 matérias diferentes.', icon: '🧠', rewardXp: 200, rewardCoins: 100, category: 'materias', requiredCount: 5, criteria: 'subjects_mastered' },
-
-  // === XP & NÍVEL (26-35) ===
-  { id: 'ach-026', title: 'Nível 2', description: 'Chegou ao nível 2!', icon: '🔼', rewardXp: 50, rewardCoins: 30, category: 'nivel', requiredCount: 2, criteria: 'level' },
-  { id: 'ach-027', title: 'Nível 5', description: 'Chegou ao nível 5!', icon: '⬆️', rewardXp: 100, rewardCoins: 60, category: 'nivel', requiredCount: 5, criteria: 'level' },
-  { id: 'ach-028', title: 'Nível 10', description: 'Chegou ao nível 10! Um verdadeiro veterano.', icon: '🌠', rewardXp: 200, rewardCoins: 100, category: 'nivel', requiredCount: 10, criteria: 'level' },
-  { id: 'ach-029', title: 'Nível 20', description: 'Chegou ao nível 20! Você é incrível.', icon: '🚀', rewardXp: 400, rewardCoins: 200, category: 'nivel', requiredCount: 20, criteria: 'level' },
-  { id: 'ach-030', title: '500 XP', description: 'Acumulou 500 pontos de experiência.', icon: '✨', rewardXp: 60, rewardCoins: 30, category: 'xp', requiredCount: 500, criteria: 'xp' },
-  { id: 'ach-031', title: '1.000 XP', description: 'Acumulou 1.000 pontos de experiência!', icon: '⭐', rewardXp: 100, rewardCoins: 50, category: 'xp', requiredCount: 1000, criteria: 'xp' },
-  { id: 'ach-032', title: '5.000 XP', description: 'Acumulou 5.000 pontos de experiência!', icon: '🌟', rewardXp: 250, rewardCoins: 125, category: 'xp', requiredCount: 5000, criteria: 'xp' },
-  { id: 'ach-033', title: '10.000 XP', description: 'Mestre supremo com 10.000 XP!', icon: '💫', rewardXp: 500, rewardCoins: 250, category: 'xp', requiredCount: 10000, criteria: 'xp' },
-  { id: 'ach-034', title: '50.000 XP', description: 'Lenda viva! 50.000 XP acumulados!', icon: '👑', rewardXp: 1500, rewardCoins: 750, category: 'xp', requiredCount: 50000, criteria: 'xp' },
-  { id: 'ach-035', title: '100.000 XP', description: 'O maior de todos: 100.000 XP!', icon: '🏆', rewardXp: 3000, rewardCoins: 1500, category: 'xp', requiredCount: 100000, criteria: 'xp' },
-
-  // === STREAK (36-45) ===
-  { id: 'ach-036', title: 'Chama Acesa', description: 'Manteve um streak de 3 dias.', icon: '🔥', rewardXp: 60, rewardCoins: 30, category: 'streak', requiredCount: 3, criteria: 'streak' },
-  { id: 'ach-037', title: 'Semana Completa', description: 'Estudou 7 dias seguidos!', icon: '📅', rewardXp: 150, rewardCoins: 75, category: 'streak', requiredCount: 7, criteria: 'streak' },
-  { id: 'ach-038', title: 'Quinzena de Ouro', description: 'Estudou 15 dias sem parar!', icon: '🥇', rewardXp: 300, rewardCoins: 150, category: 'streak', requiredCount: 15, criteria: 'streak' },
-  { id: 'ach-039', title: 'Mês de Dedicação', description: 'Um mês inteiro de estudos consecutivos!', icon: '🗓️', rewardXp: 600, rewardCoins: 300, category: 'streak', requiredCount: 30, criteria: 'streak' },
-  { id: 'ach-040', title: '60 Dias Lendário', description: '60 dias consecutivos de estudo!', icon: '🌋', rewardXp: 1200, rewardCoins: 600, category: 'streak', requiredCount: 60, criteria: 'streak' },
-  { id: 'ach-041', title: 'Invencível', description: '100 dias de streak! Você é uma lenda!', icon: '⚔️', rewardXp: 2000, rewardCoins: 1000, category: 'streak', requiredCount: 100, criteria: 'streak' },
-  { id: 'ach-042', title: 'Madrugador', description: 'Estudou antes das 8h da manhã.', icon: '🌅', rewardXp: 50, rewardCoins: 25, category: 'streak', requiredCount: 1, criteria: 'early_bird' },
-  { id: 'ach-043', title: 'Coruja Noturna', description: 'Estudou depois das 22h.', icon: '🦉', rewardXp: 50, rewardCoins: 25, category: 'streak', requiredCount: 1, criteria: 'night_owl' },
-  { id: 'ach-044', title: 'Final de Semana', description: 'Estudou em um sábado ou domingo.', icon: '🎮', rewardXp: 60, rewardCoins: 30, category: 'streak', requiredCount: 1, criteria: 'weekend_study' },
-  { id: 'ach-045', title: 'Constância Total', description: 'Acessou a plataforma por 10 semanas seguidas.', icon: '📊', rewardXp: 500, rewardCoins: 250, category: 'streak', requiredCount: 10, criteria: 'weekly_streak' },
-
-  // === MISSÕES (46-55) ===
-  { id: 'ach-046', title: '5 Missões Completas', description: 'Completou 5 missões ao total.', icon: '🎯', rewardXp: 100, rewardCoins: 50, category: 'missoes', requiredCount: 5, criteria: 'missions_completed' },
-  { id: 'ach-047', title: '10 Missões', description: 'Completou 10 missões!', icon: '🏅', rewardXp: 200, rewardCoins: 100, category: 'missoes', requiredCount: 10, criteria: 'missions_completed' },
-  { id: 'ach-048', title: '25 Missões', description: 'Um caçador de missões!', icon: '🦸', rewardXp: 400, rewardCoins: 200, category: 'missoes', requiredCount: 25, criteria: 'missions_completed' },
-  { id: 'ach-049', title: '50 Missões', description: 'Herói das missões!', icon: '⚡', rewardXp: 700, rewardCoins: 350, category: 'missoes', requiredCount: 50, criteria: 'missions_completed' },
-  { id: 'ach-050', title: 'Diário em Dia', description: 'Completou todas as missões diárias em um dia.', icon: '☀️', rewardXp: 120, rewardCoins: 60, category: 'missoes', requiredCount: 1, criteria: 'all_daily' },
-  { id: 'ach-051', title: 'Semana Épica', description: 'Completou todas as missões semanais.', icon: '📆', rewardXp: 300, rewardCoins: 150, category: 'missoes', requiredCount: 1, criteria: 'all_weekly' },
-  { id: 'ach-052', title: 'Épico Conquistado', description: 'Completou uma missão épica!', icon: '🌌', rewardXp: 500, rewardCoins: 250, category: 'missoes', requiredCount: 1, criteria: 'epic_mission' },
-  { id: 'ach-053', title: 'Missão Relâmpago', description: 'Completou uma missão em menos de 1 hora.', icon: '⚡', rewardXp: 80, rewardCoins: 40, category: 'missoes', requiredCount: 1, criteria: 'speed_mission' },
-  { id: 'ach-054', title: 'Bônus Streak', description: 'Coletou o bônus de streak pela primeira vez.', icon: '🎁', rewardXp: 60, rewardCoins: 30, category: 'missoes', requiredCount: 1, criteria: 'streak_bonus' },
-  { id: 'ach-055', title: 'Mestre das Missões', description: 'Completou 100 missões no total!', icon: '👑', rewardXp: 1500, rewardCoins: 750, category: 'missoes', requiredCount: 100, criteria: 'missions_completed' },
-
-  // === LOJA & AVATAR (56-65) ===
-  { id: 'ach-056', title: 'Primeira Compra', description: 'Comprou seu primeiro item na loja!', icon: '🛒', rewardXp: 60, rewardCoins: 0, category: 'loja', requiredCount: 1, criteria: 'items_purchased' },
-  { id: 'ach-057', title: 'Colecionador', description: 'Tem 5 itens no seu acervo.', icon: '📦', rewardXp: 100, rewardCoins: 50, category: 'loja', requiredCount: 5, criteria: 'items_owned' },
-  { id: 'ach-058', title: 'Colecionador Épico', description: 'Tem 20 itens no seu acervo.', icon: '🗃️', rewardXp: 300, rewardCoins: 150, category: 'loja', requiredCount: 20, criteria: 'items_owned' },
-  { id: 'ach-059', title: 'Fashionista', description: 'Equipou um avatar completo (corpo + fundo + borda).', icon: '👗', rewardXp: 100, rewardCoins: 50, category: 'avatar', requiredCount: 1, criteria: 'full_avatar' },
-  { id: 'ach-060', title: 'Rei dos Stickers', description: 'Equipou 4 stickers ao mesmo tempo.', icon: '✨', rewardXp: 80, rewardCoins: 40, category: 'avatar', requiredCount: 4, criteria: 'stickers_equipped' },
-  { id: 'ach-061', title: 'Gastador Generoso', description: 'Gastou 500 moedas na loja.', icon: '💸', rewardXp: 150, rewardCoins: 0, category: 'loja', requiredCount: 500, criteria: 'coins_spent' },
-  { id: 'ach-062', title: 'Milionário', description: 'Acumulou 1000 moedas de uma vez.', icon: '💰', rewardXp: 200, rewardCoins: 0, category: 'moedas', requiredCount: 1000, criteria: 'coins' },
-  { id: 'ach-063', title: 'Raridade em Mãos', description: 'Comprou um item raro na loja.', icon: '💎', rewardXp: 200, rewardCoins: 0, category: 'loja', requiredCount: 1, criteria: 'rare_item' },
-  { id: 'ach-064', title: 'Lendário Equipado', description: 'Tem um item lendário no avatar.', icon: '🌟', rewardXp: 500, rewardCoins: 0, category: 'avatar', requiredCount: 1, criteria: 'legendary_item' },
-  { id: 'ach-065', title: '3.000 Moedas', description: 'Acumulou 3.000 moedas!', icon: '🏦', rewardXp: 400, rewardCoins: 0, category: 'moedas', requiredCount: 3000, criteria: 'coins' },
-
-  // === RANKING & SOCIAL (66-75) ===
-  { id: 'ach-066', title: 'Top 10 da Turma', description: 'Entrou no TOP 10 do ranking da turma.', icon: '📊', rewardXp: 150, rewardCoins: 75, category: 'ranking', requiredCount: 10, criteria: 'ranking_position' },
-  { id: 'ach-067', title: 'TOP 5', description: 'Está entre os 5 melhores da turma!', icon: '🥈', rewardXp: 250, rewardCoins: 125, category: 'ranking', requiredCount: 5, criteria: 'ranking_position' },
-  { id: 'ach-068', title: 'Primeiro Lugar!', description: 'Chegou ao 1º lugar do ranking da turma!', icon: '🥇', rewardXp: 500, rewardCoins: 250, category: 'ranking', requiredCount: 1, criteria: 'ranking_first' },
-  { id: 'ach-069', title: 'Membro da Trilha', description: 'Começou uma trilha de aprendizagem.', icon: '🛤️', rewardXp: 60, rewardCoins: 30, category: 'trilhas', requiredCount: 1, criteria: 'paths_started' },
-  { id: 'ach-070', title: 'Trilha Concluída', description: 'Completou sua primeira trilha!', icon: '🎉', rewardXp: 250, rewardCoins: 125, category: 'trilhas', requiredCount: 1, criteria: 'paths_completed' },
-  { id: 'ach-071', title: '3 Trilhas', description: 'Completou 3 trilhas de aprendizagem!', icon: '🗾', rewardXp: 600, rewardCoins: 300, category: 'trilhas', requiredCount: 3, criteria: 'paths_completed' },
-  { id: 'ach-072', title: 'Viajante de Trilhas', description: 'Completou 5 trilhas!', icon: '🌐', rewardXp: 1000, rewardCoins: 500, category: 'trilhas', requiredCount: 5, criteria: 'paths_completed' },
-  { id: 'ach-073', title: 'Biblioteca Explorada', description: 'Acessou um item da biblioteca.', icon: '📚', rewardXp: 40, rewardCoins: 20, category: 'biblioteca', requiredCount: 1, criteria: 'library_accessed' },
-  { id: 'ach-074', title: 'Leitor Ávido', description: 'Acessou 10 itens da biblioteca.', icon: '📖', rewardXp: 100, rewardCoins: 50, category: 'biblioteca', requiredCount: 10, criteria: 'library_accessed' },
-  { id: 'ach-075', title: 'Tutor na Mão', description: 'Fez sua primeira pergunta ao Tutor IA.', icon: '🤖', rewardXp: 50, rewardCoins: 25, category: 'tutor', requiredCount: 1, criteria: 'tutor_questions' },
-
-  // === DIÁRIO (76-80) ===
-  { id: 'ach-076', title: 'Diário Regular', description: 'Escreveu 5 notas no Meu Diário.', icon: '📔', rewardXp: 80, rewardCoins: 40, category: 'diario', requiredCount: 5, criteria: 'diary_entries' },
-  { id: 'ach-077', title: 'Escritor Prolífico', description: 'Escreveu 20 notas no Meu Diário.', icon: '✍️', rewardXp: 200, rewardCoins: 100, category: 'diario', requiredCount: 20, criteria: 'diary_entries' },
-  { id: 'ach-078', title: 'Cronista do Saber', description: 'Escreveu 50 notas no Meu Diário!', icon: '📰', rewardXp: 500, rewardCoins: 250, category: 'diario', requiredCount: 50, criteria: 'diary_entries' },
-  { id: 'ach-079', title: 'Com IA no Diário', description: 'Teve uma entrada gerada pelo Tutor IA no Diário.', icon: '🤖', rewardXp: 100, rewardCoins: 50, category: 'diario', requiredCount: 1, criteria: 'diary_ai_entry' },
-  { id: 'ach-080', title: 'Organizador', description: 'Usou 5 tags diferentes no Diário.', icon: '🏷️', rewardXp: 60, rewardCoins: 30, category: 'diario', requiredCount: 5, criteria: 'diary_tags' },
-
-  // === ESPECIAIS & SEGREDOS (81-100) ===
-  { id: 'ach-081', title: 'Perfeccionista', description: 'Completou um dia com 100% de acertos.', icon: '💯', rewardXp: 200, rewardCoins: 100, category: 'especial', requiredCount: 1, criteria: 'perfect_day' },
-  { id: 'ach-082', title: 'Incansável', description: 'Estudou mais de 2 horas em um único dia.', icon: '⏱️', rewardXp: 150, rewardCoins: 75, category: 'especial', requiredCount: 1, criteria: 'long_session' },
-  { id: 'ach-083', title: 'Social', description: 'Entrou no TOP 3 do ranking semanal.', icon: '👥', rewardXp: 300, rewardCoins: 150, category: 'ranking', requiredCount: 1, criteria: 'weekly_top3' },
-  { id: 'ach-084', title: 'Tudo ao Mesmo Tempo', description: 'Tem missões diária, semanal e épica completas na mesma semana.', icon: '🎪', rewardXp: 400, rewardCoins: 200, category: 'missoes', requiredCount: 1, criteria: 'all_mission_types' },
-  { id: 'ach-085', title: 'Ano Novo, Eu Novo', description: 'Acessou a plataforma em 1 de janeiro.', icon: '🎆', rewardXp: 100, rewardCoins: 50, category: 'especial', requiredCount: 1, criteria: 'new_year' },
-  { id: 'ach-086', title: 'Aniversário na Plataforma', description: 'Acessou a plataforma no aniversário do Impacto IA.', icon: '🎂', rewardXp: 200, rewardCoins: 100, category: 'especial', requiredCount: 1, criteria: 'platform_birthday' },
-  { id: 'ach-087', title: 'Curioso de Plantão', description: 'Fez 50 perguntas ao Tutor IA.', icon: '❓', rewardXp: 300, rewardCoins: 150, category: 'tutor', requiredCount: 50, criteria: 'tutor_questions' },
-  { id: 'ach-088', title: 'Guru do Tutor', description: 'Fez 200 perguntas ao Tutor IA.', icon: '🔮', rewardXp: 600, rewardCoins: 300, category: 'tutor', requiredCount: 200, criteria: 'tutor_questions' },
-  { id: 'ach-089', title: 'Dedicação Total - 1 Ano', description: 'Está na plataforma há 1 ano.', icon: '🗓️', rewardXp: 1000, rewardCoins: 500, category: 'especial', requiredCount: 365, criteria: 'days_registered' },
-  { id: 'ach-090', title: 'Mestra da Matemática', description: 'Acertou 50 questões de Matemática.', icon: '📐', rewardXp: 400, rewardCoins: 200, category: 'materias', requiredCount: 50, criteria: 'math_correct' },
-  { id: 'ach-091', title: 'Gramática Perfeita', description: 'Acertou 50 questões de Português.', icon: '📝', rewardXp: 400, rewardCoins: 200, category: 'materias', requiredCount: 50, criteria: 'portuguese_correct' },
-  { id: 'ach-092', title: 'Fenômeno das Ciências', description: 'Acertou 50 questões de Ciências.', icon: '🧪', rewardXp: 400, rewardCoins: 200, category: 'materias', requiredCount: 50, criteria: 'science_correct' },
-  { id: 'ach-093', title: 'Guardião da História', description: 'Acertou 50 questões de História.', icon: '⚔️', rewardXp: 400, rewardCoins: 200, category: 'materias', requiredCount: 50, criteria: 'history_correct' },
-  { id: 'ach-094', title: 'Cartógrafo', description: 'Acertou 50 questões de Geografia.', icon: '🗺️', rewardXp: 400, rewardCoins: 200, category: 'materias', requiredCount: 50, criteria: 'geography_correct' },
-  { id: 'ach-095', title: 'Nível 50', description: 'Chegou ao incrível nível 50!', icon: '💥', rewardXp: 1000, rewardCoins: 500, category: 'nivel', requiredCount: 50, criteria: 'level' },
-  { id: 'ach-096', title: 'Nível 100', description: 'O MÁXIMO NÍVEL! Lenda absoluta!', icon: '🌌', rewardXp: 5000, rewardCoins: 2500, category: 'nivel', requiredCount: 100, criteria: 'level' },
-  { id: 'ach-097', title: 'Fã do Impacto', description: 'Usou a plataforma por 180 dias no total.', icon: '❤️', rewardXp: 800, rewardCoins: 400, category: 'especial', requiredCount: 180, criteria: 'days_registered' },
-  { id: 'ach-098', title: 'Item Secreto', description: 'Descobriu o botão secreto escondido na loja!', icon: '🔑', rewardXp: 300, rewardCoins: 150, category: 'especial', requiredCount: 1, criteria: 'secret_button' },
-  { id: 'ach-099', title: 'Trilheiro Épico', description: 'Completou 10 trilhas de aprendizagem!', icon: '🧗', rewardXp: 2000, rewardCoins: 1000, category: 'trilhas', requiredCount: 10, criteria: 'paths_completed' },
-  { id: 'ach-100', title: 'IMPACTO TOTAL', description: 'Desbloqueou todas as outras 99 conquistas!', icon: '🏆', rewardXp: 9999, rewardCoins: 5000, category: 'supremo', requiredCount: 99, criteria: 'all_achievements' },
+  {
+    id: '45730991-4169-4db7-80a0-2243339d103f',
+    title: "O Despertar",
+    description: "Deu o primeiro passo na sua jornada do conhecimento.",
+    icon: "🚀",
+    rewardXp: 50,
+    rewardCoins: 25,
+    category: "geral",
+    requiredCount: 1,
+    criteria: "login"
+  },
+  {
+    id: '10be7817-f9c7-43f5-8987-27e8833ff79d',
+    title: "Código Quebrado",
+    description: "Resolveu sua primeira atividade com maestria. O cérebro está aquecendo!",
+    icon: "🧠",
+    rewardXp: 100,
+    rewardCoins: 50,
+    category: "atividades",
+    requiredCount: 1,
+    criteria: "activities_correct"
+  },
+  {
+    id: 'fe6dadec-04af-441b-b528-4a6194267c2e',
+    title: "Caçador de Recompensas",
+    description: "Acumulou suas primeiras 50 moedas. O cofre está abrindo.",
+    icon: "🪙",
+    rewardXp: 50,
+    rewardCoins: 0,
+    category: "moedas",
+    requiredCount: 50,
+    criteria: "coins"
+  },
+  {
+    id: 'ad4b9143-c732-4b87-a751-e946e5e6bc87',
+    title: "Identidade Visual",
+    description: "Mostrou quem você é personalizando seu avatar pela primeira vez.",
+    icon: "🎭",
+    rewardXp: 75,
+    rewardCoins: 50,
+    category: "avatar",
+    requiredCount: 1,
+    criteria: "avatar_customized"
+  },
+  {
+    id: '0a1774c6-8732-4ce2-bd8c-99ba0f2a85b1',
+    title: "A Chama se Acende",
+    description: "Manteve o foco por 2 dias consecutivos. Não deixe a chama apagar!",
+    icon: "🔥",
+    rewardXp: 80,
+    rewardCoins: 40,
+    category: "streak",
+    requiredCount: 2,
+    criteria: "streak"
+  },
+  {
+    id: '5cd69b45-04d8-4c68-b6a6-2d5403332020',
+    title: "Para a Posteridade",
+    description: "Registrou seu primeiro pensamento no Diário de Estudos.",
+    icon: "✍️",
+    rewardXp: 60,
+    rewardCoins: 30,
+    category: "diario",
+    requiredCount: 1,
+    criteria: "diary_entries"
+  },
+  {
+    id: '09e5e324-e32c-427c-94be-79887da9e44d',
+    title: "Desbravador Cósmico",
+    description: "Navegou por todos os cantos da plataforma. Mapa liberado!",
+    icon: "🗺️",
+    rewardXp: 100,
+    rewardCoins: 50,
+    category: "geral",
+    requiredCount: 1,
+    criteria: "explorer"
+  },
+  {
+    id: '22635acc-8a09-42ed-8388-26a6b2907119',
+    title: "Missão Dada...",
+    description: "...é missão cumprida! Seu primeiro objetivo foi alcançado.",
+    icon: "🎯",
+    rewardXp: 100,
+    rewardCoins: 50,
+    category: "missoes",
+    requiredCount: 1,
+    criteria: "missions_completed"
+  },
+  {
+    id: 'be8b2d64-4c62-4f2e-b8a3-c2b122730a73',
+    title: "Hábito em Construção",
+    description: "Acessou o sistema em 3 dias diferentes. A constância é a chave.",
+    icon: "📅",
+    rewardXp: 90,
+    rewardCoins: 45,
+    category: "geral",
+    requiredCount: 3,
+    criteria: "login_days"
+  },
+  {
+    id: '372874cb-1d31-4cac-8016-12a79a321d75',
+    title: "Princípio da Grandeza",
+    description: "Ultrapassou a barreira dos 100 XP. Que venham as milhares!",
+    icon: "✨",
+    rewardXp: 50,
+    rewardCoins: 25,
+    category: "xp",
+    requiredCount: 100,
+    criteria: "xp"
+  },
+  {
+    id: 'ba65c066-31e1-4ea4-8926-e325dd4131d4',
+    title: "Mente Focada",
+    description: "Provou seu valor acertando 5 questões no total.",
+    icon: "🎯",
+    rewardXp: 100,
+    rewardCoins: 50,
+    category: "atividades",
+    requiredCount: 5,
+    criteria: "activities_correct"
+  },
+  {
+    id: 'e4af3003-1010-4cea-ba1b-926c78893cc6',
+    title: "Analista de Dados",
+    description: "Analisou e resolveu 10 questões com sucesso.",
+    icon: "📊",
+    rewardXp: 150,
+    rewardCoins: 75,
+    category: "atividades",
+    requiredCount: 10,
+    criteria: "activities_correct"
+  },
+  {
+    id: 'ac0e4feb-263d-4f80-96fd-085dc70976d9',
+    title: "Lógica Afiada",
+    description: "Atingiu a marca de 25 questões resolvidas.",
+    icon: "🧩",
+    rewardXp: 250,
+    rewardCoins: 125,
+    category: "atividades",
+    requiredCount: 25,
+    criteria: "activities_correct"
+  },
+  {
+    id: 'ed1d7df9-f5ad-41f0-a2c3-ecb0d4ea8869',
+    title: "Meio Caminho Andado",
+    description: "Cinquenta acertos! O conhecimento está se solidificando.",
+    icon: "🌟",
+    rewardXp: 400,
+    rewardCoins: 200,
+    category: "atividades",
+    requiredCount: 50,
+    criteria: "activities_correct"
+  },
+  {
+    id: 'dc77571d-b851-4849-b0ae-f6740b52b079',
+    title: "Gênio Centenário",
+    description: "Uma centena de acertos. Você domina a arte de resolver problemas.",
+    icon: "💯",
+    rewardXp: 800,
+    rewardCoins: 400,
+    category: "atividades",
+    requiredCount: 100,
+    criteria: "activities_correct"
+  },
+  {
+    id: 'c08c19f3-5266-4353-8448-0bf2fec76e7d',
+    title: "Mestre da Lógica",
+    description: "Alcançou impressionantes 200 resoluções corretas.",
+    icon: "🧙‍♂️",
+    rewardXp: 1500,
+    rewardCoins: 750,
+    category: "atividades",
+    requiredCount: 200,
+    criteria: "activities_correct"
+  },
+  {
+    id: '0934f3da-da22-4911-b6e7-b663e1193617',
+    title: "Entidade Cósmica",
+    description: "500 acertos! Sua mente transcendeu os limites do comum.",
+    icon: "🌌",
+    rewardXp: 3000,
+    rewardCoins: 1500,
+    category: "atividades",
+    requiredCount: 500,
+    criteria: "activities_correct"
+  },
+  {
+    id: '369fe993-bf55-498f-8d3c-ff452cdc9f1c',
+    title: "Sincronia Perfeita",
+    description: "Terminou o dia sem errar absolutamente nada.",
+    icon: "⚖️",
+    rewardXp: 200,
+    rewardCoins: 100,
+    category: "atividades",
+    requiredCount: 1,
+    criteria: "perfect_day"
+  },
+  {
+    id: 'a58fae64-169e-4260-9d95-0a24b7940dc1',
+    title: "Pensamento Rápido",
+    description: "O tempo voa, mas você é mais rápido: 5 questões em 5 minutos.",
+    icon: "⚡",
+    rewardXp: 150,
+    rewardCoins: 75,
+    category: "atividades",
+    requiredCount: 1,
+    criteria: "speed_run"
+  },
+  {
+    id: '5ae887f2-6bad-4542-bce2-e1f24c58c022',
+    title: "O Pitágoras Moderno",
+    description: "Resolveu os numerais: 10 acertos magistrais em Matemática.",
+    icon: "🧮",
+    rewardXp: 200,
+    rewardCoins: 100,
+    category: "materias",
+    requiredCount: 10,
+    criteria: "math_correct"
+  },
+  {
+    id: 'd6fada22-23c6-4a0f-b115-f7544d63e2fb',
+    title: "Domínio das Palavras",
+    description: "Conquistou as letras: 10 acertos impecáveis em Português.",
+    icon: "📚",
+    rewardXp: 200,
+    rewardCoins: 100,
+    category: "materias",
+    requiredCount: 10,
+    criteria: "portuguese_correct"
+  },
+  {
+    id: 'b0e17646-50f3-4be5-b15d-e3217d4a58a4',
+    title: "A Química Natural",
+    description: "Desvendou o universo: 10 acertos incríveis em Ciências.",
+    icon: "🔬",
+    rewardXp: 200,
+    rewardCoins: 100,
+    category: "materias",
+    requiredCount: 10,
+    criteria: "science_correct"
+  },
+  {
+    id: '9b9212de-9ea9-49f4-8cd5-9f7118127fff',
+    title: "A Enciclopédia Viva",
+    description: "Dominou o passado: 10 acertos fulminantes em História.",
+    icon: "⏳",
+    rewardXp: 200,
+    rewardCoins: 100,
+    category: "materias",
+    requiredCount: 10,
+    criteria: "history_correct"
+  },
+  {
+    id: '82cb708e-1781-49c4-82a0-4befa0fb1880',
+    title: "Cidadão do Mundo",
+    description: "Explorou o planeta: 10 acertos perfeitos em Geografia.",
+    icon: "🌍",
+    rewardXp: 200,
+    rewardCoins: 100,
+    category: "materias",
+    requiredCount: 10,
+    criteria: "geography_correct"
+  },
+  {
+    id: '7c07259f-fd4a-4e81-ad82-db97c647be72',
+    title: "O Polímata Vencedor",
+    description: "Mostrou versatilidade acertando pelo menos 5 matérias distintas.",
+    icon: "🧠",
+    rewardXp: 400,
+    rewardCoins: 200,
+    category: "materias",
+    requiredCount: 5,
+    criteria: "subjects_mastered"
+  },
+  {
+    id: 'aeced6b1-4969-400d-bc1d-30a16644c9bd',
+    title: "Primeira Evolução",
+    description: "Atingiu o Nível 2. O começo de uma grande transformação.",
+    icon: "🌱",
+    rewardXp: 100,
+    rewardCoins: 50,
+    category: "nivel",
+    requiredCount: 2,
+    criteria: "level"
+  },
+  {
+    id: '57a3ca90-80d5-468c-952e-283ab86ac65d',
+    title: "Avanço de Tier",
+    description: "Nível 5 alcançado! Você deixou de ser iniciante.",
+    icon: "🥉",
+    rewardXp: 200,
+    rewardCoins: 100,
+    category: "nivel",
+    requiredCount: 5,
+    criteria: "level"
+  },
+  {
+    id: '35c212cf-24e1-4c58-8880-c42485303eed',
+    title: "Status de Veterano",
+    description: "Nível 10! Seu nome já é conhecido nos corredores virtuais.",
+    icon: "🥈",
+    rewardXp: 400,
+    rewardCoins: 200,
+    category: "nivel",
+    requiredCount: 10,
+    criteria: "level"
+  },
+  {
+    id: '81a6eee4-158b-47af-98d8-654cea24f7ab',
+    title: "Potencial Desbloqueado",
+    description: "Chegou ao Nível 20! O limite é apenas uma ilusão.",
+    icon: "🥇",
+    rewardXp: 800,
+    rewardCoins: 400,
+    category: "nivel",
+    requiredCount: 20,
+    criteria: "level"
+  },
+  {
+    id: '72672a34-f3f6-4fb0-a393-181965c957cc',
+    title: "Centelha Mágica",
+    description: "Acumulou 500 pontos de experiência no total. Rumo ao topo!",
+    icon: "💫",
+    rewardXp: 150,
+    rewardCoins: 75,
+    category: "xp",
+    requiredCount: 500,
+    criteria: "xp"
+  },
+  {
+    id: '7fd17104-c303-4d46-a839-2c52291a4fb8',
+    title: "O Primeiro Milênio",
+    description: "Cruzar a marca de 1.000 XP exige disciplina forte!",
+    icon: "☄️",
+    rewardXp: 300,
+    rewardCoins: 150,
+    category: "xp",
+    requiredCount: 1000,
+    criteria: "xp"
+  },
+  {
+    id: '56c21fe8-6dd9-4f23-bd9b-7485e749f460',
+    title: "Alta Voltagem",
+    description: "Alcançou impressionantes 5.000 XP de jornada.",
+    icon: "🔥",
+    rewardXp: 600,
+    rewardCoins: 300,
+    category: "xp",
+    requiredCount: 5000,
+    criteria: "xp"
+  },
+  {
+    id: '25e79cf4-440f-4370-9473-376d548aa568',
+    title: "Titã do Conhecimento",
+    description: "10.000 XP! Você já é considerado um mestre veterano aqui.",
+    icon: "🔮",
+    rewardXp: 1200,
+    rewardCoins: 600,
+    category: "xp",
+    requiredCount: 10000,
+    criteria: "xp"
+  },
+  {
+    id: '3afb508b-4ee8-4acb-820c-61cc09915633',
+    title: "O Supremo",
+    description: "50.000 XP! Uma marca épica para pouquíssimos escolhidos.",
+    icon: "👑",
+    rewardXp: 3000,
+    rewardCoins: 1500,
+    category: "xp",
+    requiredCount: 50000,
+    criteria: "xp"
+  },
+  {
+    id: '1301ad7f-54e5-4358-adaf-6d5802efe0c0',
+    title: "Ascensão Divina",
+    description: "100.000 XP! Seu poder cognitivo é inigualável.",
+    icon: "🌌",
+    rewardXp: 6000,
+    rewardCoins: 3000,
+    category: "xp",
+    requiredCount: 100000,
+    criteria: "xp"
+  },
+  {
+    id: '93f585ea-1b9b-46bf-8a1a-6e74465b15e0',
+    title: "Constância Inicial",
+    description: "Manteve os estudos em dia durante 3 dias ininterruptos.",
+    icon: "⏱️",
+    rewardXp: 120,
+    rewardCoins: 60,
+    category: "streak",
+    requiredCount: 3,
+    criteria: "streak"
+  },
+  {
+    id: 'e6850d51-5714-489a-a2d4-6784d7cfc484',
+    title: "Controle Semanal",
+    description: "Uma semana inteira sem falhas. O streak está radiante!",
+    icon: "📆",
+    rewardXp: 300,
+    rewardCoins: 150,
+    category: "streak",
+    requiredCount: 7,
+    criteria: "streak"
+  },
+  {
+    id: 'ea67ac06-e04e-446e-9209-b307a00ab0d7',
+    title: "Ritmo Implacável",
+    description: "15 dias seguidos. Metade de um mês com foco de titan.",
+    icon: "⚡",
+    rewardXp: 600,
+    rewardCoins: 300,
+    category: "streak",
+    requiredCount: 15,
+    criteria: "streak"
+  },
+  {
+    id: 'ceee665a-223b-4cb0-9af1-ae396d474f33',
+    title: "Hábito Cristalizado",
+    description: "30 dias de estudos diários! A neuroplasticidade agradece demais.",
+    icon: "💎",
+    rewardXp: 1200,
+    rewardCoins: 600,
+    category: "streak",
+    requiredCount: 30,
+    criteria: "streak"
+  },
+  {
+    id: 'e406d35d-15ab-4b52-909e-b07a03ebd8d4',
+    title: "O Inabalável",
+    description: "Dois meses construindo uma barreira impenetrável de conhecimento.",
+    icon: "🛡️",
+    rewardXp: 2500,
+    rewardCoins: 1250,
+    category: "streak",
+    requiredCount: 60,
+    criteria: "streak"
+  },
+  {
+    id: '7290fb5d-ba3d-47f7-9f55-fcb25a814fbd',
+    title: "Cem Dias Sem Fim",
+    description: "Você completou 100 dias seguidos de estudo. Uma lenda viva.",
+    icon: "⚔️",
+    rewardXp: 5000,
+    rewardCoins: 2500,
+    category: "streak",
+    requiredCount: 100,
+    criteria: "streak"
+  },
+  {
+    id: '389d576c-0182-49e8-bb02-5337e5f58e92',
+    title: "Alvorada de Ouro",
+    description: "O mundo dormia, mas você estava estudando cedo, antes das 8h.",
+    icon: "🌅",
+    rewardXp: 150,
+    rewardCoins: 75,
+    category: "streak",
+    requiredCount: 1,
+    criteria: "early_bird"
+  },
+  {
+    id: '4d1d8bb6-64ad-4bcd-b4ad-901eadaefacf',
+    title: "Voo da Coruja",
+    description: "O foco reluziu intenso após o pôr do sol. Estudou após as 22h.",
+    icon: "🦉",
+    rewardXp: 150,
+    rewardCoins: 75,
+    category: "streak",
+    requiredCount: 1,
+    criteria: "night_owl"
+  },
+  {
+    id: '681c2dbd-e5bc-4f71-83a6-6dd2cdbefa32',
+    title: "Saber Não Tem Folga",
+    description: "O fim de semana não freou você. Estudou sábado ou domingo.",
+    icon: "🛋️",
+    rewardXp: 150,
+    rewardCoins: 75,
+    category: "streak",
+    requiredCount: 1,
+    criteria: "weekend_study"
+  },
+  {
+    id: '3e24e086-f350-48a3-ad1c-ba12af66b5ab',
+    title: "Maratona Semanal",
+    description: "Acessou o app nas últimas 10 semanas seguidas. Que show!",
+    icon: "🏃",
+    rewardXp: 1000,
+    rewardCoins: 500,
+    category: "streak",
+    requiredCount: 10,
+    criteria: "weekly_streak"
+  },
+  {
+    id: '0aaf1cab-e281-40d4-b9a3-fb154f2fa27b',
+    title: "Primeiras Caçadas",
+    description: "Finalizou 5 missões de letra. Esse é só o aquecimento.",
+    icon: "🏹",
+    rewardXp: 200,
+    rewardCoins: 100,
+    category: "missoes",
+    requiredCount: 5,
+    criteria: "missions_completed"
+  },
+  {
+    id: '45bd6a77-8b41-4213-b739-2c9959eac315',
+    title: "O Caçador Experiente",
+    description: "Cravou 10 missões completas com destreza inabalável.",
+    icon: "🎯",
+    rewardXp: 400,
+    rewardCoins: 200,
+    category: "missoes",
+    requiredCount: 10,
+    criteria: "missions_completed"
+  },
+  {
+    id: 'ac836c7e-c841-4a4d-ba03-0842608bed81',
+    title: "Xeque-Mate",
+    description: "Cumpriu 25 missões. Você sabe escolher suas vitórias direitinho.",
+    icon: "♟️",
+    rewardXp: 800,
+    rewardCoins: 400,
+    category: "missoes",
+    requiredCount: 25,
+    criteria: "missions_completed"
+  },
+  {
+    id: '61d30593-64a9-4f91-a5b4-32e8c8681914',
+    title: "Mercenário de Ouro",
+    description: "Concluiu incríveis 50 missões, com uma taxa de 100% de precisão.",
+    icon: "⚔️",
+    rewardXp: 1500,
+    rewardCoins: 750,
+    category: "missoes",
+    requiredCount: 50,
+    criteria: "missions_completed"
+  },
+  {
+    id: '0172f0e8-f774-4356-b16a-f8e2e91adc2b',
+    title: "A Limpa Diária",
+    description: "Limpou todas as missões rotineiras em um único dia. Rápido e letal.",
+    icon: "☀️",
+    rewardXp: 300,
+    rewardCoins: 150,
+    category: "missoes",
+    requiredCount: 1,
+    criteria: "all_daily"
+  },
+  {
+    id: '59bdafe2-811c-466d-b2d9-0fd9cc5b8da1',
+    title: "Checkmate Semanal",
+    description: "Dominou com frieza todos os objetivos semanais oferecidos.",
+    icon: "🏅",
+    rewardXp: 600,
+    rewardCoins: 300,
+    category: "missoes",
+    requiredCount: 1,
+    criteria: "all_weekly"
+  },
+  {
+    id: '91b10dc5-6149-43f5-b871-27d35b0281ae',
+    title: "A Glória Épica",
+    description: "Você ousou fazer o improvável: completou sua primeira missão Épica!",
+    icon: "🌋",
+    rewardXp: 1000,
+    rewardCoins: 500,
+    category: "missoes",
+    requiredCount: 1,
+    criteria: "epic_mission"
+  },
+  {
+    id: 'ac763ff4-2c0c-49dc-bdd5-31949e7cbd03',
+    title: "Veloz como o Vento",
+    description: "Não deu tempo nem de piscar. Completou uma missão em 1 hora ou menos.",
+    icon: "🏎️",
+    rewardXp: 200,
+    rewardCoins: 100,
+    category: "missoes",
+    requiredCount: 1,
+    criteria: "speed_mission"
+  },
+  {
+    id: '0b32f872-a7f0-4d8c-bd1c-9891347ee1b2',
+    title: "Visão Empreendedora",
+    description: "Não perdeu a chance e fez questão de coletar o bônus Extra da rotina.",
+    icon: "🎁",
+    rewardXp: 150,
+    rewardCoins: 75,
+    category: "missoes",
+    requiredCount: 1,
+    criteria: "streak_bonus"
+  },
+  {
+    id: 'de73c2c5-bccf-4950-a106-fcdec86ad084',
+    title: "Lendário de Classe S",
+    description: "Um verdadeiro mestre irrefutável com 100 missões fechadas.",
+    icon: "🦸",
+    rewardXp: 3000,
+    rewardCoins: 1500,
+    category: "missoes",
+    requiredCount: 100,
+    criteria: "missions_completed"
+  },
+  {
+    id: '830ccff0-7194-4510-a98d-e4bf925425d0',
+    title: "O Primeiro Luxo",
+    description: "Gastou moedas com classe pela primeira vez na Loja de Estilos.",
+    icon: "🛍️",
+    rewardXp: 120,
+    rewardCoins: 0,
+    category: "loja",
+    requiredCount: 1,
+    criteria: "items_purchased"
+  },
+  {
+    id: '3a284dc7-e215-4cd1-b0a1-85cb200c2389',
+    title: "Guarda-Roupa Premium",
+    description: "Juntou 5 itens exclusivos e únicos na sua coleção.",
+    icon: "👕",
+    rewardXp: 200,
+    rewardCoins: 100,
+    category: "loja",
+    requiredCount: 5,
+    criteria: "items_owned"
+  },
+  {
+    id: '7614a7c1-295d-4586-adbc-804c1e191280',
+    title: "Museu Pessoal",
+    description: "Guarda com muito cuidado 20 relíquias gloriosas em seu acervo.",
+    icon: "💎",
+    rewardXp: 600,
+    rewardCoins: 300,
+    category: "loja",
+    requiredCount: 20,
+    criteria: "items_owned"
+  },
+  {
+    id: 'a0497a37-8af5-49c5-a52b-61c4fc152d2b',
+    title: "Obra de Arte",
+    description: "Montou o traje inteiro impecavelmente (corpo, fundo e moldura).",
+    icon: "🎨",
+    rewardXp: 200,
+    rewardCoins: 100,
+    category: "avatar",
+    requiredCount: 1,
+    criteria: "full_avatar"
+  },
+  {
+    id: '953a1452-e18c-4019-80f5-673b45dd47c6',
+    title: "Grafite Digital",
+    description: "Sujou ou embelezou o avatar colando 4 stickers malucos de uma vez.",
+    icon: "🤪",
+    rewardXp: 150,
+    rewardCoins: 75,
+    category: "avatar",
+    requiredCount: 4,
+    criteria: "stickers_equipped"
+  },
+  {
+    id: '03a80c1c-c267-40b1-adf2-c74b390afe5a',
+    title: "Dono do Shoppping",
+    description: "Distribuiu felicidade gastando 500 preciosas moedas na economia local.",
+    icon: "💳",
+    rewardXp: 300,
+    rewardCoins: 0,
+    category: "loja",
+    requiredCount: 500,
+    criteria: "coins_spent"
+  },
+  {
+    id: '7ef3e4ba-296a-411c-9ce5-0ea266e1f416',
+    title: "Riqueza Contida",
+    description: "Poupou incrivelmente 1.000 moedas ao mesmo tempo. Forte mental.",
+    icon: "🐷",
+    rewardXp: 400,
+    rewardCoins: 0,
+    category: "moedas",
+    requiredCount: 1000,
+    criteria: "coins"
+  },
+  {
+    id: 'd7bc1185-3493-449b-aa5d-75027822e538',
+    title: "Gosto Elevado",
+    description: "O simples não basta. Adquiriu algo de extrema raridade na Loja.",
+    icon: "🍷",
+    rewardXp: 400,
+    rewardCoins: 0,
+    category: "loja",
+    requiredCount: 1,
+    criteria: "rare_item"
+  },
+  {
+    id: '7211d954-9f03-44d9-97d9-ed8c7577c5b7',
+    title: "Cintilante",
+    description: "Vestiu um item absurdamente Lendário para o mundo escolar interagir.",
+    icon: "🌟",
+    rewardXp: 1000,
+    rewardCoins: 0,
+    category: "avatar",
+    requiredCount: 1,
+    criteria: "legendary_item"
+  },
+  {
+    id: '63c08485-fcf0-4eac-a845-6e784ea52045',
+    title: "Banker",
+    description: "Acumulou nada menos que 3.000 moedas em caixa. Que dinheirama!",
+    icon: "🏦",
+    rewardXp: 1000,
+    rewardCoins: 0,
+    category: "moedas",
+    requiredCount: 3000,
+    criteria: "coins"
+  },
+  {
+    id: '969a2cb8-4bdb-4d89-88e4-cee526a9af85',
+    title: "No Topo da Pirâmide",
+    description: "Desbancou a concorrência e bateu os pés firme no Top 10 da Tabela.",
+    icon: "🏔️",
+    rewardXp: 300,
+    rewardCoins: 150,
+    category: "ranking",
+    requiredCount: 10,
+    criteria: "ranking_position"
+  },
+  {
+    id: '33f70c54-632a-4cd7-88a0-687b14ce2226',
+    title: "A Divindade Ameaçada",
+    description: "Entrou com tudo nos TOP 5. Acima de você só os invictos.",
+    icon: "🎩",
+    rewardXp: 500,
+    rewardCoins: 250,
+    category: "ranking",
+    requiredCount: 5,
+    criteria: "ranking_position"
+  },
+  {
+    id: '1c77b7e5-a625-4758-8031-a8b2c3d0f57b',
+    title: "Trono Incontestado",
+    description: "Sentou majestosamente no 1º LUGAR do Ranking. A lenda vive.",
+    icon: "👑",
+    rewardXp: 1000,
+    rewardCoins: 500,
+    category: "ranking",
+    requiredCount: 1,
+    criteria: "ranking_first"
+  },
+  {
+    id: '32c6ff49-7a6b-4842-b72f-d283472d87d4',
+    title: "A Jornada do Herói",
+    description: "Fez o check-in glorioso na sua PRIMEIRA Trilha de Inteligência.",
+    icon: "🛤️",
+    rewardXp: 150,
+    rewardCoins: 75,
+    category: "trilhas",
+    requiredCount: 1,
+    criteria: "paths_started"
+  },
+  {
+    id: 'af3d3636-0b88-4aa1-bbba-b2b9c48f2e61',
+    title: "Trilha Desbravada",
+    description: "O sangue e o suor valeram a pena: concluiu a primeira Trilha Inteira.",
+    icon: "🏁",
+    rewardXp: 500,
+    rewardCoins: 250,
+    category: "trilhas",
+    requiredCount: 1,
+    criteria: "paths_completed"
+  },
+  {
+    id: 'df849397-956a-4466-bd98-917b0be74ffd',
+    title: "Sediou o Conhecimento",
+    description: "Devastou o conteúdo de 3 trilhas como um tornado intelectual.",
+    icon: "🎓",
+    rewardXp: 1200,
+    rewardCoins: 600,
+    category: "trilhas",
+    requiredCount: 3,
+    criteria: "paths_completed"
+  },
+  {
+    id: '853de86a-f3a8-43f3-a6ec-a7c98f285da7',
+    title: "Viajante Sideral",
+    description: "Navegou até a borda e esmagou 5 Trilhas no seu radar.",
+    icon: "🛸",
+    rewardXp: 2000,
+    rewardCoins: 1000,
+    category: "trilhas",
+    requiredCount: 5,
+    criteria: "paths_completed"
+  },
+  {
+    id: '8e027ce3-64ac-4cb1-9f7b-f81fbc572bf2',
+    title: "Magia dos Livros",
+    description: "Teve coragem e abriu as portas empoeiradas da Biblioteca pelo item local.",
+    icon: "📚",
+    rewardXp: 100,
+    rewardCoins: 50,
+    category: "biblioteca",
+    requiredCount: 1,
+    criteria: "library_accessed"
+  },
+  {
+    id: '12a97712-a5ba-4855-ae35-0b02102656f3',
+    title: "Doutorando Virtual",
+    description: "Caiu de cabeça no acervo absorvendo brilhantemente 10 itens.",
+    icon: "🐀",
+    rewardXp: 200,
+    rewardCoins: 100,
+    category: "biblioteca",
+    requiredCount: 10,
+    criteria: "library_accessed"
+  },
+  {
+    id: '08883eec-b8b3-4aa3-a744-d3ae6d1863a0',
+    title: "Pacto da IA",
+    description: "Fez sua primeiríssima conversa profunda com o Tutor Robótico IA.",
+    icon: "🤖",
+    rewardXp: 150,
+    rewardCoins: 75,
+    category: "tutor",
+    requiredCount: 1,
+    criteria: "tutor_questions"
+  },
+  {
+    id: '7ffeb3c5-eb7c-4988-8056-07086fdf87d6',
+    title: "Diário Pessoal",
+    description: "Escreveu do fundo da alma 5 anotações únicas sobre os estudos.",
+    icon: "📓",
+    rewardXp: 150,
+    rewardCoins: 75,
+    category: "diario",
+    requiredCount: 5,
+    criteria: "diary_entries"
+  },
+  {
+    id: '82a20f7e-0a20-43e6-85b2-9522977cc8c2',
+    title: "O Poeta Noturno",
+    description: "Transcreveu incríveis 20 pensamentos em momentos de extremo foco.",
+    icon: "🖋️",
+    rewardXp: 400,
+    rewardCoins: 200,
+    category: "diario",
+    requiredCount: 20,
+    criteria: "diary_entries"
+  },
+  {
+    id: '58333543-b2d2-461d-9f75-ddf0cfc2b454',
+    title: "Livro do Mestre",
+    description: "Atingiu a grandiosa marca de 50 registros. Uma história de vida.",
+    icon: "📖",
+    rewardXp: 1000,
+    rewardCoins: 500,
+    category: "diario",
+    requiredCount: 50,
+    criteria: "diary_entries"
+  },
+  {
+    id: '26ceeaf0-017d-4efa-bf6d-bd9f88301eae',
+    title: "Intersecção Humano-Máquina",
+    description: "Permitiu que o Tutor de IA registrasse o momento mágico por você.",
+    icon: "🧠",
+    rewardXp: 200,
+    rewardCoins: 100,
+    category: "diario",
+    requiredCount: 1,
+    criteria: "diary_ai_entry"
+  },
+  {
+    id: '1d5dbff4-226d-47e3-9db1-d3f35cf0e6d2',
+    title: "Cérebro Arquivista",
+    description: "Organizou tudo etiquetando e criando tags 5 vezes.",
+    icon: "🗂️",
+    rewardXp: 150,
+    rewardCoins: 75,
+    category: "diario",
+    requiredCount: 5,
+    criteria: "diary_tags"
+  },
+  {
+    id: '5dd68f3d-221b-4f62-b8c1-c5008a4c5884',
+    title: "Sniper de Precisão",
+    description: "Zerou uma prova acertando os alvos sem um único deslize sequer (100%).",
+    icon: "✅",
+    rewardXp: 400,
+    rewardCoins: 200,
+    category: "especial",
+    requiredCount: 1,
+    criteria: "perfect_day"
+  },
+  {
+    id: '95a149d4-3d88-4b37-87bc-90207299b8de',
+    title: "Foco Laser Absoluto",
+    description: "Permaneceu ativo lutando pelas questões por DUAS longas horas diretas.",
+    icon: "🔋",
+    rewardXp: 300,
+    rewardCoins: 150,
+    category: "especial",
+    requiredCount: 1,
+    criteria: "long_session"
+  },
+  {
+    id: 'c4404e67-cc48-408b-8ca5-764cf4046e35',
+    title: "Efeito Borboleta",
+    description: "Dominou de vez o lugar, assumindo as vagas superiores (Top 3) na semana.",
+    icon: "🦋",
+    rewardXp: 600,
+    rewardCoins: 300,
+    category: "ranking",
+    requiredCount: 1,
+    criteria: "weekly_top3"
+  },
+  {
+    id: '6153b79a-50a5-410e-bc50-8584efe78929',
+    title: "Feixe de Partículas",
+    description: "Rebeldia: estourou todas as esferas e bateu missão Diária, Semanal e Épica juntas.",
+    icon: "⚡",
+    rewardXp: 800,
+    rewardCoins: 400,
+    category: "missoes",
+    requiredCount: 1,
+    criteria: "all_mission_types"
+  },
+  {
+    id: '9efcd475-eaed-44b1-8570-d0b363a01791',
+    title: "O Pioneiro",
+    description: "Acordou antes de todo mundo e estudou de cabeça fresca em primeiro de janeiro.",
+    icon: "🎆",
+    rewardXp: 200,
+    rewardCoins: 100,
+    category: "especial",
+    requiredCount: 1,
+    criteria: "new_year"
+  },
+  {
+    id: '0152939f-2473-466f-98e5-32c348eab265',
+    title: "O Festeiro VIP",
+    description: "Compareceu com classe na data festiva que marcou o início da Plataforma.",
+    icon: "🎂",
+    rewardXp: 500,
+    rewardCoins: 250,
+    category: "especial",
+    requiredCount: 1,
+    criteria: "platform_birthday"
+  },
+  {
+    id: '48d69fd9-dd42-412f-af69-6f4341291565',
+    title: "Filósofo Inquisidor",
+    description: "Debateu a existência com nossa máquina formulando 50 requisições insanas.",
+    icon: "🎙️",
+    rewardXp: 600,
+    rewardCoins: 300,
+    category: "tutor",
+    requiredCount: 50,
+    criteria: "tutor_questions"
+  },
+  {
+    id: '901e2aee-b500-43fc-9136-a2b3cbc43ae4',
+    title: "Neuralink Humano",
+    description: "Desestabilizou a bateria do Tutor, superando inacreditáveis 200 questões.",
+    icon: "💾",
+    rewardXp: 1200,
+    rewardCoins: 600,
+    category: "tutor",
+    requiredCount: 200,
+    criteria: "tutor_questions"
+  },
+  {
+    id: 'e6a0cd46-ec30-4dad-9833-352267828705',
+    title: "Translação Solar Completa",
+    description: "Concluiu um ciclo de 1 ano inteiro de plataforma registrada.",
+    icon: "🌞",
+    rewardXp: 2000,
+    rewardCoins: 1000,
+    category: "especial",
+    requiredCount: 365,
+    criteria: "days_registered"
+  },
+  {
+    id: 'c12f20a4-f720-43d1-b0ee-0b28384b1451',
+    title: "Oráculo da Equação",
+    description: "Esmagou com peso bélico os cadernos resolvendo 50 enigmas de matemática.",
+    icon: "📐",
+    rewardXp: 800,
+    rewardCoins: 400,
+    category: "materias",
+    requiredCount: 50,
+    criteria: "math_correct"
+  },
+  {
+    id: 'f65adc8e-41d9-4d92-8e22-3dc6eea303c4',
+    title: "Escriba Ancestral",
+    description: "Brindou o vocabulário arrematando majestosas 50 soluções em Línguas.",
+    icon: "✒️",
+    rewardXp: 800,
+    rewardCoins: 400,
+    category: "materias",
+    requiredCount: 50,
+    criteria: "portuguese_correct"
+  },
+  {
+    id: '705cf49d-9123-492a-860c-9406a5bf588d',
+    title: "O Físico Quântico",
+    description: "Evaporou o que restava do senso comum resolvendo 50 questões biológicas/exatas.",
+    icon: "🧪",
+    rewardXp: 800,
+    rewardCoins: 400,
+    category: "materias",
+    requiredCount: 50,
+    criteria: "science_correct"
+  },
+  {
+    id: '5b3cadd9-923f-419d-8445-615b28d2bca3',
+    title: "Imperador Romano",
+    description: "Tomou para si as linhas do passado com 50 acertos avassaladores em História.",
+    icon: "🏛️",
+    rewardXp: 800,
+    rewardCoins: 400,
+    category: "materias",
+    requiredCount: 50,
+    criteria: "history_correct"
+  },
+  {
+    id: '8552b760-4058-4e62-8e61-10f65be71596',
+    title: "Efeito Bússola",
+    description: "Cruzou as fronteiras desbravadoras de 50 acertos formidáveis em Geografia.",
+    icon: "📍",
+    rewardXp: 800,
+    rewardCoins: 400,
+    category: "materias",
+    requiredCount: 50,
+    criteria: "geography_correct"
+  },
+  {
+    id: 'f7537df8-954f-44da-85b3-8681f2d5269c',
+    title: "Herdeiro do Status",
+    description: "Sua conta alcançou o esplendor inigualável do Nível 50! A lenda foi proclamada.",
+    icon: "💥",
+    rewardXp: 2000,
+    rewardCoins: 1000,
+    category: "nivel",
+    requiredCount: 50,
+    criteria: "level"
+  },
+  {
+    id: '9bfa69e1-529f-4e16-a282-8491f770c88d',
+    title: "O Último Chefão",
+    description: "Rompeu todos os selos alcançando o teto da estratosfera com as honras de NÍVEL 100.",
+    icon: "👑",
+    rewardXp: 10000,
+    rewardCoins: 5000,
+    category: "nivel",
+    requiredCount: 100,
+    criteria: "level"
+  },
+  {
+    id: '941ebc58-4067-4656-95ec-5c42865c4e1c',
+    title: "A Estação",
+    description: "Marcou a rocha com dedicação imortal, ficando 180 dias engajado brutalmente ao app.",
+    icon: "🌊",
+    rewardXp: 1500,
+    rewardCoins: 750,
+    category: "especial",
+    requiredCount: 180,
+    criteria: "days_registered"
+  },
+  {
+    id: 'a54cc63e-fd2e-49d8-a840-9d806d8ca27b',
+    title: "A Última Fantasia",
+    description: "Quebrou a parede entre o mito e a realidade: Encontrou o easter egg secreto da Loja.",
+    icon: "🔑",
+    rewardXp: 500,
+    rewardCoins: 250,
+    category: "especial",
+    requiredCount: 1,
+    criteria: "secret_button"
+  },
+  {
+    id: '662e78c3-b3b3-495c-b401-5189f27c262d',
+    title: "O Fim das Trilhas",
+    description: "Devorou 10 coleções massivas de Trilhas de aprendizado e não deixou pedras.",
+    icon: "🧗",
+    rewardXp: 4000,
+    rewardCoins: 2000,
+    category: "trilhas",
+    requiredCount: 10,
+    criteria: "paths_completed"
+  },
+  {
+    id: '25dfbdfc-2e41-4a2d-a0bc-9c4be484a458',
+    title: "IMPACTO ABSOLUTO",
+    description: "O EVENTO CANÔNICO! DESTRAVOU AS 99 FAIXAS! SEU NOME É IMORTAL NA PLATAFORMA.",
+    icon: "🏆",
+    rewardXp: 25000,
+    rewardCoins: 10000,
+    category: "supremo",
+    requiredCount: 99,
+    criteria: "all_achievements"
+  }
 ];
 
 // ============================================================
 // MISSION TEMPLATES (for auto-generation)
 // ============================================================
 const DAILY_TEMPLATES = [
-  { title: 'Duelo do Dia', description: 'Complete 1 duelo hoje.', targetCount: 1, rewardXp: 60, rewardCoins: 30, criteria: 'duel_completed' },
-  { title: 'Estudante Dedicado', description: 'Complete 1 atividade hoje.', targetCount: 1, rewardXp: 50, rewardCoins: 20, criteria: 'activity_completed' },
-  { title: 'Mestre das Respostas', description: 'Acerte 3 questões hoje.', targetCount: 3, rewardXp: 80, rewardCoins: 30, criteria: 'question_correct' },
-  { title: 'Explorador de Trilhas', description: 'Visite a página de Trilhas.', targetCount: 1, rewardXp: 40, rewardCoins: 15, criteria: 'path_started' },
-  { title: 'Nota no Diário', description: 'Escreva uma anotação no Meu Diário.', targetCount: 1, rewardXp: 45, rewardCoins: 20, criteria: 'diary_entry' },
-  { title: 'Pergunta ao Tutor', description: 'Faça uma pergunta ao Tutor IA.', targetCount: 1, rewardXp: 40, rewardCoins: 15, criteria: 'tutor_question' },
-  { title: '3 por 3', description: 'Acerte 3 questões de matérias diferentes.', targetCount: 3, rewardXp: 90, rewardCoins: 35, criteria: 'question_correct' },
-  { title: 'Check-in Diário', description: 'Acesse a plataforma hoje.', targetCount: 1, rewardXp: 20, rewardCoins: 10, criteria: 'login' },
-  { title: 'Visita à Loja', description: 'Visite a Loja de Avatar.', targetCount: 1, rewardXp: 30, rewardCoins: 15, criteria: 'store_visit' },
-  { title: 'Pesquisador', description: 'Acesse um item da Biblioteca.', targetCount: 1, rewardXp: 35, rewardCoins: 15, criteria: 'library_access' },
-  { title: 'Corretor Rápido', description: 'Responda 2 questões em menos de 2 minutos.', targetCount: 2, rewardXp: 70, rewardCoins: 30, criteria: 'question_correct' },
-  { title: 'Ranking Check', description: 'Visite a página de Ranking.', targetCount: 1, rewardXp: 25, rewardCoins: 10, criteria: 'ranking_visit' },
-  { title: 'Conquistas em Vista', description: 'Visite a página de Conquistas.', targetCount: 1, rewardXp: 25, rewardCoins: 10, criteria: 'ranking_visit' },
-  { title: 'Chama do Estudo', description: 'Mantenha seu streak ativo hoje.', targetCount: 1, rewardXp: 40, rewardCoins: 20, criteria: 'streak' },
-  { title: 'Mestre do Chat', description: 'Converse mais com o Tutor IA.', targetCount: 2, rewardXp: 50, rewardCoins: 25, criteria: 'tutor_question' },
-  { title: 'Amigo da Biblioteca', description: 'Explore novos recursos na biblioteca.', targetCount: 2, rewardXp: 60, rewardCoins: 30, criteria: 'library_access' },
-  { title: 'Curiosidade Ativa', description: 'Faça 3 perguntas ao Tutor IA.', targetCount: 3, rewardXp: 70, rewardCoins: 35, criteria: 'tutor_question' },
-  { title: 'Foco Total', description: 'Complete 2 atividades hoje.', targetCount: 2, rewardXp: 80, rewardCoins: 40, criteria: 'activity_completed' },
-  { title: 'Diário Criativo', description: 'Escreva no seu diário com calma.', targetCount: 1, rewardXp: 40, rewardCoins: 20, criteria: 'diary_entry' },
-  { title: 'Socializador', description: 'Veja o perfil de um colega no ranking.', targetCount: 1, rewardXp: 30, rewardCoins: 15, criteria: 'ranking_visit' },
-  { title: 'Escritor do Diário', description: 'Escreva seus pensamentos no diário.', targetCount: 1, rewardXp: 50, rewardCoins: 25, criteria: 'diary_entry' },
-  { title: 'Revisão Rápida', description: 'Complete uma atividade de revisão.', targetCount: 1, rewardXp: 60, rewardCoins: 30, criteria: 'activity_completed' },
-  { title: 'Avatar Estiloso', description: 'Troque um item do seu avatar.', targetCount: 1, rewardXp: 40, rewardCoins: 25, criteria: 'avatar_customized' },
-  { title: 'Dúvida do Dia', description: 'Tire uma dúvida com o Tutor IA.', targetCount: 1, rewardXp: 45, rewardCoins: 20, criteria: 'tutor_question' },
-  { title: 'Bibliotecário Júnior', description: 'Acesse 2 materiais da biblioteca.', targetCount: 2, rewardXp: 50, rewardCoins: 25, criteria: 'library_access' },
-  { title: 'Mestre da Persistência', description: 'Complete 3 atividades hoje.', targetCount: 3, rewardXp: 100, rewardCoins: 50, criteria: 'activity_completed' },
-];
+  // Ação e Duelos
+  { title: 'Primeiro Sangue', description: 'Complete 1 épico Duelo do Dia.', targetCount: 1, rewardXp: 80, rewardCoins: 40, criteria: 'duel_completed' },
+  { title: 'Arena de Titãs', description: 'Desafie seus colegas e complete 3 Duelos.', targetCount: 3, rewardXp: 150, rewardCoins: 80, criteria: 'duel_completed' },
 
+  // Atividades e Resoluções
+  { title: 'Despertar Neuronal', description: 'Conclua a sua primeira atividade hoje. O cérebro agradece!', targetCount: 1, rewardXp: 50, rewardCoins: 25, criteria: 'activity_completed' },
+  { title: 'Foco de Laser', description: 'Complete 3 atividades hoje e mantenha a concentração.', targetCount: 3, rewardXp: 120, rewardCoins: 60, criteria: 'activity_completed' },
+  { title: 'Mira Certeira', description: 'Acerte 5 questões hoje. Sem margem para erros!', targetCount: 5, rewardXp: 100, rewardCoins: 50, criteria: 'question_correct' },
+  { title: 'Chuva de Acertos', description: 'Acerte 10 questões hoje. Mostre com quem eles estão lidando!', targetCount: 10, rewardXp: 200, rewardCoins: 100, criteria: 'question_correct' },
+  
+  // Trilhas
+  { title: 'Primeiro Passo', description: 'Inicie ou retome uma trilha de aprendizagem.', targetCount: 1, rewardXp: 60, rewardCoins: 30, criteria: 'path_started' },
+  { title: 'Mestre Construtor', description: 'Finalize uma trilha de aprendizagem. Trabalho concluído!', targetCount: 1, rewardXp: 300, rewardCoins: 150, criteria: 'path_completed' },
+
+  // Ferramentas da Plataforma
+  { title: 'Registros do Sábio', description: 'Grave seus pensamentos com uma anotação no Meu Diário.', targetCount: 1, rewardXp: 45, rewardCoins: 20, criteria: 'diary_entry' },
+  { title: 'Curiosidade Artificial', description: 'Faça uma pergunta intrigante ao Tutor IA.', targetCount: 1, rewardXp: 40, rewardCoins: 20, criteria: 'tutor_question' },
+  { title: 'Interrogatório Cibernético', description: 'Troque no mínimo 5 ideias/perguntas com o Tutor IA.', targetCount: 5, rewardXp: 120, rewardCoins: 60, criteria: 'tutor_question' },
+  { title: 'Rato de Biblioteca', description: 'Consulte os arquivos lendários da Biblioteca.', targetCount: 1, rewardXp: 35, rewardCoins: 15, criteria: 'library_access' },
+  { title: 'Sede de Leitura', description: 'Acesse 3 diferentes conteúdos da Biblioteca.', targetCount: 3, rewardXp: 80, rewardCoins: 40, criteria: 'library_access' },
+
+  // Social e Perfil
+  { title: 'O Pioneiro', description: 'Acesse a plataforma hoje e marque sua presença.', targetCount: 1, rewardXp: 30, rewardCoins: 15, criteria: 'login' },
+  { title: 'Em Chamas', description: 'Mantenha sua ofensiva (streak) acesa hoje.', targetCount: 1, rewardXp: 50, rewardCoins: 30, criteria: 'streak' },
+  { title: 'Vitrine de Luxo', description: 'Dê uma olhada na Loja de Avatar para ver as novidades.', targetCount: 1, rewardXp: 25, rewardCoins: 15, criteria: 'store_visit' },
+  { title: 'Investigador de Status', description: 'Marque território visualizando a página de Ranking.', targetCount: 1, rewardXp: 25, rewardCoins: 10, criteria: 'ranking_visit' },
+  { title: 'Estilista Diário', description: 'Mude a aparência do seu avatar. Vista-se para o sucesso!', targetCount: 1, rewardXp: 60, rewardCoins: 40, criteria: 'avatar_customized' },
+];
 
 const WEEKLY_TEMPLATES = [
-  { title: 'Mestre dos Duelos', description: 'Complete 3 duelos esta semana.', targetCount: 3, rewardXp: 300, rewardCoins: 120, criteria: 'duel_completed' },
-  { title: 'Maratonista do Saber', description: 'Complete 5 atividades esta semana.', targetCount: 5, rewardXp: 200, rewardCoins: 80, criteria: 'activity_completed' },
-  { title: 'Diário da Semana', description: 'Escreva 3 anotações no Meu Diário.', targetCount: 3, rewardXp: 150, rewardCoins: 60, criteria: 'diary_entry' },
-  { title: 'Streak Semanal', description: 'Mantenha 5 dias de streak.', targetCount: 5, rewardXp: 300, rewardCoins: 100, criteria: 'streak' },
-  { title: 'Trilheiro', description: 'Avance em uma trilha de aprendizagem.', targetCount: 1, rewardXp: 180, rewardCoins: 70, criteria: 'path_started' },
-  { title: 'Mestre do Tutor', description: 'Faça 5 perguntas ao Tutor IA.', targetCount: 5, rewardXp: 160, rewardCoins: 65, criteria: 'tutor_question' },
-  { title: 'Semana Produtiva', description: 'Acerte 10 questões esta semana.', targetCount: 10, rewardXp: 250, rewardCoins: 100, criteria: 'question_correct' },
-  { title: 'Colecionador Semanal', description: 'Compre ou receba 2 itens na loja.', targetCount: 2, rewardXp: 200, rewardCoins: 80, criteria: 'store_visit' },
-  { title: 'Semana Completa', description: 'Estude em todos os 7 dias da semana.', targetCount: 7, rewardXp: 350, rewardCoins: 140, criteria: 'login' },
-  { title: 'Fera nas Atividades', description: 'Complete 10 atividades nesta semana.', targetCount: 10, rewardXp: 400, rewardCoins: 150, criteria: 'activity_completed' },
-  { title: 'Escritor Assíduo', description: 'Escreva 5 vezes no seu diário.', targetCount: 5, rewardXp: 250, rewardCoins: 100, criteria: 'diary_entry' },
-  { title: 'Mestre da Conversa', description: 'Faça 15 perguntas ao Tutor IA.', targetCount: 15, rewardXp: 350, rewardCoins: 150, criteria: 'tutor_question' },
-  { title: 'Explorador Diversificado', description: 'Inicie 3 trilhas diferentes.', targetCount: 3, rewardXp: 300, rewardCoins: 120, criteria: 'path_started' },
-  { title: 'Fã de Ranking', description: 'Acompanhe o ranking 5 vezes.', targetCount: 5, rewardXp: 100, rewardCoins: 50, criteria: 'ranking_visit' },
-  { title: 'Caçador de Moedas', description: 'Ganhe 200 moedas em questões.', targetCount: 20, rewardXp: 300, rewardCoins: 100, criteria: 'question_correct' },
-  { title: 'Expert em Disciplina', description: 'Acerte 15 questões de uma mesma matéria.', targetCount: 15, rewardXp: 450, rewardCoins: 200, criteria: 'question_correct' },
-  { title: 'Semana de Ouro', description: 'Mantenha o streak por 7 dias seguidos.', targetCount: 7, rewardXp: 600, rewardCoins: 250, criteria: 'streak' },
-  { title: 'Explorador da Loja', description: 'Visite a loja em 4 dias diferentes.', targetCount: 4, rewardXp: 150, rewardCoins: 75, criteria: 'store_visit' },
-  { title: 'Bibliotecário', description: 'Acesse 10 itens diferentes da biblioteca.', targetCount: 10, rewardXp: 300, rewardCoins: 150, criteria: 'library_access' },
-  { title: 'Mentor IA', description: 'Faça 25 perguntas ao Tutor IA esta semana.', targetCount: 25, rewardXp: 500, rewardCoins: 200, criteria: 'tutor_question' },
-  { title: 'Colecionador de Trilhas', description: 'Complete 3 trilhas para se tornar um mestre.', targetCount: 3, rewardXp: 1000, rewardCoins: 400, criteria: 'path_completed' },
-  { title: 'Curioso IA Assíduo', description: 'Faça 50 perguntas ao Tutor IA.', targetCount: 50, rewardXp: 800, rewardCoins: 350, criteria: 'tutor_question' },
-  { title: 'Dono da Loja', description: 'Acesse a loja 10 vezes esta semana.', targetCount: 10, rewardXp: 200, rewardCoins: 100, criteria: 'store_visit' },
-  { title: 'Escritor de Ouro', description: 'Escreva 7 vezes no diário.', targetCount: 7, rewardXp: 400, rewardCoins: 180, criteria: 'diary_entry' },
-  { title: 'Top 3 Semanal', description: 'Visite o ranking 7 vezes esta semana.', targetCount: 7, rewardXp: 150, rewardCoins: 70, criteria: 'ranking_visit' },
+  // Ação e Duelos
+  { title: 'Gladiador Cibernético', description: 'Participe de 7 duelos esta semana.', targetCount: 7, rewardXp: 400, rewardCoins: 200, criteria: 'duel_completed' },
+  { title: 'Torneio dos Campeões', description: 'Mostre seu valor provando a força em 15 combates de Duelo.', targetCount: 15, rewardXp: 800, rewardCoins: 400, criteria: 'duel_completed' },
+
+  // Atividades e Resoluções
+  { title: 'Maratona Intelectual', description: 'Complete 10 atividades nesta semana.', targetCount: 10, rewardXp: 300, rewardCoins: 150, criteria: 'activity_completed' },
+  { title: 'Atleta do Conhecimento', description: 'Um verdadeiro treino mental: 25 atividades completadas.', targetCount: 25, rewardXp: 600, rewardCoins: 300, criteria: 'activity_completed' },
+  { title: 'Caçador de Acertos', description: 'Chegue a marca de 30 questões corretas nesta semana.', targetCount: 30, rewardXp: 350, rewardCoins: 180, criteria: 'question_correct' },
+  { title: 'O Mestre da Precisão', description: 'Seja letal com o conhecimento: 75 questões corretas.', targetCount: 75, rewardXp: 750, rewardCoins: 380, criteria: 'question_correct' },
+
+  // Trilhas
+  { title: 'Engenheiro de Trilhas', description: 'Inicie ou retome 3 trilhas diferentes.', targetCount: 3, rewardXp: 200, rewardCoins: 100, criteria: 'path_started' },
+  { title: 'O Desbravador', description: 'Complete totalmente 2 Trilhas de Aprendizagem.', targetCount: 2, rewardXp: 800, rewardCoins: 400, criteria: 'path_completed' },
+
+  // Ferramentas da Plataforma
+  { title: 'As Crônicas', description: 'Escreva 5 relatos ou resumos no Meu Diário.', targetCount: 5, rewardXp: 250, rewardCoins: 100, criteria: 'diary_entry' },
+  { title: 'Especulador de Tecnologias', description: 'Faça 15 perguntas densas ao Tutor IA durante a semana.', targetCount: 15, rewardXp: 350, rewardCoins: 180, criteria: 'tutor_question' },
+  { title: 'Conselheiro de Inteligência', description: 'O Tutor IA é seu melhor amigo: 30 perguntas feitas.', targetCount: 30, rewardXp: 600, rewardCoins: 300, criteria: 'tutor_question' },
+  { title: 'Bibliotecário Chefe', description: 'Explore a biblioteca com 10 leituras de recursos.', targetCount: 10, rewardXp: 300, rewardCoins: 150, criteria: 'library_access' },
+
+  // Social e Perfil
+  { title: 'O Sobrevivente', description: 'Mantenha sua ofensiva ininterrupta (streak) por 5 dias.', targetCount: 5, rewardXp: 300, rewardCoins: 150, criteria: 'streak' },
+  { title: 'Semana Dourada', description: 'O ápice da disciplina: faça login os 7 dias da semana.', targetCount: 7, rewardXp: 500, rewardCoins: 250, criteria: 'login' },
+  { title: 'Espectador do Topo', description: 'Analise e observe o Ranking 5 vezes na semana.', targetCount: 5, rewardXp: 100, rewardCoins: 50, criteria: 'ranking_visit' },
+  { title: 'Investidor Fashion', description: 'Visite a Loja de Avatares em 4 dias distintos.', targetCount: 4, rewardXp: 120, rewardCoins: 60, criteria: 'store_visit' },
+  { title: 'Camaleão Semanal', description: 'Mude de visual e personalize o avatar 3 vezes na semana.', targetCount: 3, rewardXp: 180, rewardCoins: 90, criteria: 'avatar_customized' },
 ];
 
-
 const EPIC_TEMPLATES = [
-  { title: 'O Lendário', description: 'Complete 20 atividades este mês.', targetCount: 20, rewardXp: 1000, rewardCoins: 400, criteria: 'activity_completed' },
-  { title: 'Trilha do Conhecimento', description: 'Conclua uma trilha completa de aprendizagem.', targetCount: 1, rewardXp: 800, rewardCoins: 350, criteria: 'path_completed' },
-  { title: 'Guardião da Loja', description: 'Compre 3 itens diferentes na Loja.', targetCount: 3, rewardXp: 600, rewardCoins: 250, criteria: 'store_visit' },
-  { title: 'Escritor do Mês', description: 'Escreva 10 anotações no Meu Diário.', targetCount: 10, rewardXp: 700, rewardCoins: 300, criteria: 'diary_entry' },
-  { title: 'Mestre Total', description: 'Acerte 50 questões este mês.', targetCount: 50, rewardXp: 1500, rewardCoins: 600, criteria: 'question_correct' },
-  { title: 'Desafio do Streak', description: 'Mantenha um streak de 14 dias.', targetCount: 14, rewardXp: 900, rewardCoins: 400, criteria: 'streak' },
-  { title: 'Lenda do Impacto', description: 'Complete 50 atividades este mês.', targetCount: 50, rewardXp: 2500, rewardCoins: 1000, criteria: 'activity_completed' },
-  { title: 'Trilheiro Mestre', description: 'Conclua 5 trilhas de aprendizagem.', targetCount: 5, rewardXp: 2000, rewardCoins: 800, criteria: 'path_completed' },
-  { title: 'Acumulador de Fortunas', description: 'Ganhe 1000 moedas em questões.', targetCount: 100, rewardXp: 1500, rewardCoins: 700, criteria: 'question_correct' },
-  { title: 'Cronista Mensal', description: 'Escreva 30 vezes no seu diário.', targetCount: 30, rewardXp: 1800, rewardCoins: 900, criteria: 'diary_entry' },
-  { title: 'Sábio do Saber', description: 'Faça 100 perguntas ao Tutor IA.', targetCount: 100, rewardXp: 2500, rewardCoins: 1200, criteria: 'tutor_question' },
-  { title: 'Inquebrável', description: 'Mantenha um streak de 30 dias.', targetCount: 30, rewardXp: 5000, rewardCoins: 2000, criteria: 'streak' },
-  { title: 'Mestre da Impacto', description: 'Complete 100 atividades no total.', targetCount: 100, rewardXp: 10000, rewardCoins: 5000, criteria: 'activity_completed' },
-  { title: 'Sábio das Trilhas', description: 'Conclua todas as trilhas do seu ano.', targetCount: 5, rewardXp: 4000, rewardCoins: 2000, criteria: 'path_completed' },
-  { title: 'Magnata do Avatar', description: 'Possua 50 itens no seu inventário.', targetCount: 50, rewardXp: 3000, rewardCoins: 1500, criteria: 'store_visit' },
-  { title: 'Onipresente', description: 'Acesse a plataforma por 28 dias este mês.', targetCount: 28, rewardXp: 2500, rewardCoins: 1000, criteria: 'login' },
-  { title: 'Eritudito IA', description: 'Interaja 500 vezes com o Tutor IA.', targetCount: 500, rewardXp: 8000, rewardCoins: 4000, criteria: 'tutor_question' },
-  { title: 'Fera da Biblioteca', description: 'Explore 20 recursos da biblioteca este mês.', targetCount: 20, rewardXp: 1500, rewardCoins: 600, criteria: 'library_access' },
-  { title: 'Mestre da Personalização', description: 'Personalize seu avatar 5 vezes.', targetCount: 5, rewardXp: 1200, rewardCoins: 500, criteria: 'avatar_customized' },
-  { title: 'Desafia-Tudo', description: 'Complete 30 exercícios de matérias variadas.', targetCount: 30, rewardXp: 2000, rewardCoins: 800, criteria: 'question_correct' },
-  { title: 'Lenda da Biblioteca', description: 'Acesse 40 recursos este mês.', targetCount: 40, rewardXp: 3000, rewardCoins: 1200, criteria: 'library_access' },
-  { title: 'Avatar Mestre', description: 'Personalize seu avatar 10 vezes.', targetCount: 10, rewardXp: 2500, rewardCoins: 1000, criteria: 'avatar_customized' },
+  // Ação e Duelos
+  { title: 'Lenda do Coliseu', description: 'Prove ser indestrutível completando 40 duelos no mês.', targetCount: 40, rewardXp: 1500, rewardCoins: 800, criteria: 'duel_completed' },
+  { title: 'A Fúria dos Deuses', description: 'Consolide seu império com incriveis 100 duelos finalizados!', targetCount: 100, rewardXp: 4000, rewardCoins: 2000, criteria: 'duel_completed' },
+
+  // Atividades e Resoluções
+  { title: 'O Sábio Produtivo', description: 'Finalize impressionantes 50 atividades este mês.', targetCount: 50, rewardXp: 2000, rewardCoins: 1000, criteria: 'activity_completed' },
+  { title: 'Mente Imparável', description: 'A jornada do infinito: 120 atividades concluídas.', targetCount: 120, rewardXp: 5000, rewardCoins: 2500, criteria: 'activity_completed' },
+  { title: 'Acumulador de Fortunas', description: 'Acertos em massa: Chegue à marca de 250 questões corretas.', targetCount: 250, rewardXp: 2500, rewardCoins: 1200, criteria: 'question_correct' },
+  { title: 'Entidade Triunfal', description: 'Mestre da precisão mensal: 600 questões corretas no mês!', targetCount: 600, rewardXp: 7000, rewardCoins: 3500, criteria: 'question_correct' },
+
+  // Trilhas
+  { title: 'Filósofo dos Caminhos', description: 'Adquira conhecimento completo em 5 Trilhas.', targetCount: 5, rewardXp: 3000, rewardCoins: 1500, criteria: 'path_completed' },
+  { title: 'A Bússola Dourada', description: 'O desbravador mestre de 10 Trilhas de Aprendizagem mensais.', targetCount: 10, rewardXp: 8000, rewardCoins: 4000, criteria: 'path_completed' },
+
+  // Ferramentas da Plataforma
+  { title: 'O Cronista Histórico', description: 'Trabalho de historiador: 20 registros épicos no Diário.', targetCount: 20, rewardXp: 1000, rewardCoins: 500, criteria: 'diary_entry' },
+  { title: 'Conversa Infinita', description: 'Faça 100 interações avançadas e perguntas ao Tutor IA.', targetCount: 100, rewardXp: 1500, rewardCoins: 800, criteria: 'tutor_question' },
+  { title: 'Simbiose Cibernética', description: 'Você e a inteligência artificial são um só: 300 interações com o Tutor IA.', targetCount: 300, rewardXp: 4000, rewardCoins: 2000, criteria: 'tutor_question' },
+  { title: 'A Grande Biblioteca de Alexandria', description: 'Mergulho profundo: acesse 50 recursos literários.', targetCount: 50, rewardXp: 2000, rewardCoins: 1000, criteria: 'library_access' },
+
+  // Social e Perfil
+  { title: 'Determinação Intocável', description: 'Não escorregue, mantenha sua ofensiva por 15 dias corridos.', targetCount: 15, rewardXp: 1500, rewardCoins: 800, criteria: 'streak' },
+  { title: 'O Mito Onipresente', description: 'Esteve presente e manteve a chama (streak) viva por 30 dias inteiros!', targetCount: 30, rewardXp: 5000, rewardCoins: 3000, criteria: 'streak' },
+  { title: 'Magnata Fashionista', description: 'Vire cliente premium acessando a Loja de Avatares 20 vezes.', targetCount: 20, rewardXp: 800, rewardCoins: 400, criteria: 'store_visit' },
+  { title: 'Metamorfose Divina', description: 'Altere seu avatar minuciosamente 15 vezes no mês.', targetCount: 15, rewardXp: 1200, rewardCoins: 600, criteria: 'avatar_customized' },
+  { title: 'Olho de Rapina', description: 'Observe o ranking subindo de perto 20 vezes este mês.', targetCount: 20, rewardXp: 500, rewardCoins: 250, criteria: 'ranking_visit' },
 ];
 
 
@@ -216,29 +1202,40 @@ const EPIC_TEMPLATES = [
 // SEED ACHIEVEMENTS INTO DATABASE
 // ============================================================
 export async function seedAchievements() {
-  const existingCount = await db.achievements.count();
-  if (existingCount >= 100) return; // Already seeded
-  
-  // Clear and re-insert all 100
-  await db.achievements.clear();
-  await db.achievements.bulkAdd(ALL_ACHIEVEMENTS as any[]);
-  console.log('[GameSeeder] Seeded 100 achievements.');
+  // Always wipe and re-upsert to guarantee 100 unique valid achievements without duplicate IDs
+  const { data: existing } = await supabase.from('achievements').select('id');
+  if (existing && existing.length > 0) {
+    if (existing.length !== 100) {
+        console.log('[GameSeeder] Found', existing.length, 'achievements, wiping out for clean fresh start...');
+        await supabase.from('achievements').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+    } else {
+        // Exactly 100 array items and exactly 100 in DB. No duplicates!
+        return; 
+    }
+  }
+
+  // Wait, if it's less than 100, we should probably delete them and re-insert, but Supabase doesn't have .clear() easily. We can just upsert.
+  const toUpsert = ALL_ACHIEVEMENTS.map(ach => ({
+    id: ach.id,
+    title: ach.title,
+    description: ach.description,
+    icon: ach.icon,
+    condition: ach.criteria,
+    rewardXp: ach.rewardXp,
+    rewardCoins: ach.rewardCoins
+  }));
+
+  const { error } = await supabase.from('achievements').upsert(toUpsert);
+  if (error) {
+    console.error('[GameSeeder] Fail to seed achievements', error);
+  } else {
+    console.log('[GameSeeder] Seeded 100 achievements.');
+  }
 }
 
 // ============================================================
 // AUTO-GENERATE MISSIONS (daily/weekly/epic refresh)
 // ============================================================
-function getDayKey(d: Date) {
-  return `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`;
-}
-function getWeekKey(d: Date) {
-  const start = new Date(d);
-  start.setDate(d.getDate() - d.getDay());
-  return `week-${start.getFullYear()}-${start.getMonth() + 1}-${start.getDate()}`;
-}
-function getMonthKey(d: Date) {
-  return `month-${d.getFullYear()}-${d.getMonth() + 1}`;
-}
 
 function pickRandom<T>(arr: T[], n: number): T[] {
   const shuffled = [...arr].sort(() => Math.random() - 0.5);
@@ -247,47 +1244,53 @@ function pickRandom<T>(arr: T[], n: number): T[] {
 
 export async function ensureMissionsAreUpToDate() {
   const now = new Date();
-  
-  const dayKey = getDayKey(now);
-  const weekKey = getWeekKey(now);
-  const monthKey = getMonthKey(now);
 
-  // Remove expired missions
-  const allMissions = await db.missions.toArray();
-  const expired = allMissions.filter(m => new Date(m.expiresAt!) < now);
-  for (const m of expired) {
-    await db.missions.delete(m.id);
+  // Fetch all missions
+  const { data: allMissionsObj } = await supabase.from('missions').select('*');
+  const allMissions = allMissionsObj || [];
+
+  const expired = allMissions.filter(m => m.expiresAt && new Date(m.expiresAt) < now);
+  if (expired.length > 0) {
+    await supabase.from('missions').delete().in('id', expired.map(m => m.id));
   }
 
   // Check what types still exist
-  const remaining = await db.missions.toArray();
+  const { data: remainingObj } = await supabase.from('missions').select('*');
+  const remaining = remainingObj || [];
 
   // CLEANUP: Remove duplicates or obsolete missions
   const titlesSeen = new Set<string>();
   const validTitles = new Set([...DAILY_TEMPLATES, ...WEEKLY_TEMPLATES, ...EPIC_TEMPLATES].map(t => t.title));
   
+  const toDelete = [];
+  const toKeep = [];
+
   for (const m of remaining) {
     if (titlesSeen.has(m.title) || !validTitles.has(m.title) || m.criteria === 'activity_feedback') {
-      await db.missions.delete(m.id);
-      // Also cleanup progress
-      await db.studentMissions.where('missionId').equals(m.id).delete();
+      toDelete.push(m.id);
     } else {
       titlesSeen.add(m.title);
+      toKeep.push(m);
     }
   }
 
-  // Refresh remaining list after cleanup
-  const cleanedRemaining = await db.missions.toArray();
-  
+  if (toDelete.length > 0) {
+    await supabase.from('missions').delete().in('id', toDelete);
+    await supabase.from('student_missions').delete().in('missionId', toDelete);
+  }
+
   // Fix existing missions that might be missing 'criteria'
-  for (const m of cleanedRemaining) {
+  for (const m of toKeep) {
     if (!m.criteria) {
       const template = [...DAILY_TEMPLATES, ...WEEKLY_TEMPLATES, ...EPIC_TEMPLATES].find(t => t.title === m.title);
       if (template) {
-        await db.missions.update(m.id, { criteria: (template as any).criteria });
+        await supabase.from('missions').update({ criteria: (template as any).criteria }).eq('id', m.id);
+        m.criteria = (template as any).criteria;
       }
     }
   }
+
+  const cleanedRemaining = toKeep;
 
   const dailyMissions = cleanedRemaining.filter(m => m.type === 'daily');
   const weeklyMissions = cleanedRemaining.filter(m => m.type === 'weekly');
@@ -309,8 +1312,7 @@ export async function ensureMissionsAreUpToDate() {
     templates: any[], 
     type: 'daily' | 'weekly' | 'epic', 
     targetCount: number,
-    expiry: string,
-    keyPrefix: string
+    expiry: string
   ) => {
     if (currentMissions.length < targetCount) {
       const toAdd = targetCount - currentMissions.length;
@@ -318,10 +1320,10 @@ export async function ensureMissionsAreUpToDate() {
       const availableTemplates = templates.filter(t => !existingTitles.has(t.title));
       const picks = pickRandom(availableTemplates.length > 0 ? availableTemplates : templates, toAdd);
       
+      const inserts = [];
       for (let i = 0; i < picks.length; i++) {
         const t = picks[i];
-        await db.missions.add({
-          id: `mission-${keyPrefix}-${Date.now()}-${i}`,
+        inserts.push({
           type,
           title: t.title,
           description: t.description,
@@ -331,15 +1333,18 @@ export async function ensureMissionsAreUpToDate() {
           criteria: t.criteria,
           expiresAt: expiry,
           requiredLevel: 1,
-        } as any);
+        });
       }
-      console.log(`[GameSeeder] Added ${picks.length} new ${type} missions.`);
+      if (inserts.length > 0) {
+        await supabase.from('missions').insert(inserts);
+        console.log(`[GameSeeder] Added ${inserts.length} new ${type} missions.`);
+      }
     }
   };
 
-  await topUpMissions(dailyMissions, DAILY_TEMPLATES, 'daily', 6, tomorrow.toISOString(), `daily-${dayKey}`);
-  await topUpMissions(weeklyMissions, WEEKLY_TEMPLATES, 'weekly', 6, nextMonday.toISOString(), `weekly-${weekKey}`);
-  await topUpMissions(epicMissions, EPIC_TEMPLATES, 'epic', 6, nextMonthFirst.toISOString(), `epic-${monthKey}`);
+  await topUpMissions(dailyMissions, DAILY_TEMPLATES, 'daily', 6, tomorrow.toISOString());
+  await topUpMissions(weeklyMissions, WEEKLY_TEMPLATES, 'weekly', 6, nextMonday.toISOString());
+  await topUpMissions(epicMissions, EPIC_TEMPLATES, 'epic', 6, nextMonthFirst.toISOString());
 }
 
 // ============================================================
@@ -348,28 +1353,34 @@ export async function ensureMissionsAreUpToDate() {
 export async function checkAndUnlockAchievements(studentId: string) {
   if (!studentId) return;
 
-  const stats = await db.gamificationStats.get(studentId);
-  if (!stats) return;
+  const { data: statsObj } = await supabase.from('gamification_stats').select('*').eq('id', studentId).single();
+  if (!statsObj) return;
+  const stats = statsObj;
 
-  const allAchs = await db.achievements.toArray();
-  const unlocked = await db.studentAchievements.where('studentId').equals(studentId).toArray();
+  const { data: allAchsObj } = await supabase.from('achievements').select('*');
+  const allAchs = allAchsObj || [];
+  
+  const { data: unlockedObj } = await supabase.from('student_achievements').select('*').eq('studentId', studentId);
+  const unlocked = unlockedObj || [];
   const unlockedIds = new Set(unlocked.map(u => u.achievementId));
 
   const toUnlock: { achievementId: string; unlockedAt: string }[] = [];
 
+  // Local static ALL_ACHIEVEMENTS mapped by condition because DB doesn't store target count easily in old schema
   for (const ach of allAchs) {
     if (unlockedIds.has(ach.id)) continue;
-    const a = ach as any;
-    if (!a.criteria || !a.requiredCount) continue;
+    
+    // Find matching logic
+    const template = ALL_ACHIEVEMENTS.find(a => a.id === ach.id || a.title === ach.title);
+    if (!template) continue;
 
     let achieved = false;
-
-    switch (a.criteria) {
-      case 'xp': achieved = stats.xp >= a.requiredCount; break;
-      case 'coins': achieved = stats.coins >= a.requiredCount; break;
-      case 'level': achieved = stats.level >= a.requiredCount; break;
-      case 'streak': achieved = stats.streak >= a.requiredCount; break;
-      case 'login': achieved = true; break; // First login = always true
+    switch (template.criteria) {
+      case 'xp': achieved = stats.xp >= template.requiredCount; break;
+      case 'coins': achieved = stats.coins >= template.requiredCount; break;
+      case 'level': achieved = stats.level >= template.requiredCount; break;
+      case 'streak': achieved = stats.streak >= template.requiredCount; break;
+      case 'login': achieved = true; break;
       default: achieved = false;
     }
 
@@ -379,32 +1390,29 @@ export async function checkAndUnlockAchievements(studentId: string) {
   }
 
   if (toUnlock.length > 0) {
-    for (const item of toUnlock) {
-      await db.studentAchievements.add({
-        id: crypto.randomUUID(),
-        studentId,
-        achievementId: item.achievementId,
-        progress: 1,
-        unlockedAt: item.unlockedAt,
-      } as any);
-    }
+    const inserts = toUnlock.map(item => ({
+      studentId,
+      achievementId: item.achievementId,
+      unlockedAt: item.unlockedAt,
+    }));
+    await supabase.from('student_achievements').insert(inserts);
     console.log(`[GameSeeder] Unlocked ${toUnlock.length} achievements for ${studentId}`);
 
     // Award XP for newly unlocked achievements
     let bonusXp = 0;
     let bonusCoins = 0;
     for (const item of toUnlock) {
-      const def = allAchs.find(a => a.id === item.achievementId) as any;
+      const def = allAchs.find((a: any) => a.id === item.achievementId) as any;
       if (def) {
         bonusXp += def.rewardXp || 0;
         bonusCoins += def.rewardCoins || 0;
       }
     }
     if (bonusXp > 0 || bonusCoins > 0) {
-      await db.gamificationStats.update(studentId, {
+      await supabase.from('gamification_stats').update({
         xp: stats.xp + bonusXp,
         coins: stats.coins + bonusCoins,
-      });
+      }).eq('id', studentId);
     }
   }
 }

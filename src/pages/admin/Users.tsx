@@ -283,7 +283,7 @@ const UserModal: React.FC<UserModalProps> = ({ editUser, onClose, schools, isAdm
           id: targetUserId,
           isRegistered: !!data.password,
           createdAt: now, 
-          avatar: data.role === 'student' ? '/avatars/default-capybara.png' : null,
+          avatar: data.role === 'student' ? '/avatars/default-impacto.png' : null,
           studentIds: data.role === 'guardian' ? data.studentIds : []
         };
         

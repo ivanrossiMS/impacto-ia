@@ -3,7 +3,7 @@ import { useAuthStore } from '../../store/auth.store';
 import { supabase } from '../../lib/supabase';
 import type { Activity } from '../../types/learning';
 import {
-  BookOpen, CheckCircle, Clock, PlayCircle, Star,
+  BookOpen, CheckCircle, Clock, PlayCircle, Star, Timer,
   Zap, ChevronRight, X
 } from 'lucide-react';
 
@@ -30,6 +30,7 @@ export const Activities: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [timeLeft, setTimeLeft] = useState<number | null>(null);
   const [startedAt, setStartedAt] = useState<number | null>(null);
+  const [viewingResult, setViewingResult] = useState<{ activity: any; result: any } | null>(null);
 
 
   const [data, setData] = useState<any>({
@@ -271,6 +272,13 @@ export const Activities: React.FC = () => {
     setTimeLeft(null);
   };
 
+  const handleViewResult = (activity: any) => {
+    const result = activityResults[activity.id];
+    if (result) {
+      setViewingResult({ activity, result });
+    }
+  };
+
 
   const pending: any[] = activities.filter((a: any) => !activityResults[a.id]);
   const completed: any[] = activities.filter((a: any) => !!activityResults[a.id]);
@@ -375,9 +383,10 @@ export const Activities: React.FC = () => {
             return (
               <Card
                 key={activity.id}
+                onClick={() => isDone && handleViewResult(activity)}
                 className={cn(
                   'p-6 flex flex-col group transition-all duration-300',
-                  isDone ? 'bg-success-50/50 border-success-100 opacity-80' : 'hover:-translate-y-1 hover:shadow-floating hover:border-primary-100'
+                  isDone ? 'bg-success-50/50 border-success-100 opacity-80 cursor-pointer hover:bg-success-50 hover:shadow-md' : 'hover:-translate-y-1 hover:shadow-floating hover:border-primary-100'
                 )}
               >
                 <div className="flex justify-between items-start mb-4">
@@ -580,6 +589,175 @@ export const Activities: React.FC = () => {
                 </Button>
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* Activity Review Modal */}
+      {viewingResult && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-md">
+          <div className="bg-white rounded-[3rem] shadow-2xl w-full max-w-2xl animate-in zoom-in-95 duration-300 overflow-hidden flex flex-col max-h-[90vh]">
+            
+            {/* Modal Header */}
+            <div className="bg-slate-900 p-8 text-white flex justify-between items-start shrink-0 relative overflow-hidden">
+              <div className="absolute top-0 right-0 w-32 h-32 bg-primary-500/10 rounded-full blur-3xl -mr-10 -mt-10" />
+              
+              <div className="relative z-10 space-y-3">
+                <div className="flex items-center gap-3">
+                  <span className={cn(
+                    "px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-[0.15em] border border-white/20",
+                    subjectColors[viewingResult.activity.subject] ? "bg-white/10 text-white" : "bg-primary-500/20 text-primary-400"
+                  )}>
+                    {viewingResult.activity.subject}
+                  </span>
+                  <div className="flex items-center gap-1.5 text-white/40 text-[10px] font-black uppercase tracking-widest">
+                    <CheckCircle size={14} className="text-primary-400" />
+                    Revisão de Atividade
+                  </div>
+                </div>
+                
+                <h2 className="text-3xl font-black leading-tight">{viewingResult.activity.title}</h2>
+                
+                <div className="flex flex-wrap items-center gap-4 pt-1">
+                  <div className="flex items-center gap-2 bg-white/5 px-3 py-1.5 rounded-xl border border-white/5">
+                    <BookOpen size={14} className="text-primary-400" />
+                    <span className="text-xs font-bold text-white/70">{viewingResult.activity.questions?.length || 0} Questões</span>
+                  </div>
+                  <div className="flex items-center gap-2 bg-white/5 px-3 py-1.5 rounded-xl border border-white/5">
+                    <Timer size={14} className="text-orange-400" />
+                    <span className="text-xs font-bold text-white/70">Limite: {viewingResult.activity.duration || 'Sem limite'}</span>
+                  </div>
+                  <div className="flex items-center gap-2 bg-white/5 px-3 py-1.5 rounded-xl border border-white/5">
+                    <Clock size={14} className="text-success-400" />
+                    <span className="text-xs font-bold text-white/70">
+                      Tempo: {Math.floor((viewingResult.result.timeSpent || 0) / 60)}:{(viewingResult.result.timeSpent % 60 || 0).toString().padStart(2, '0')}
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              <button 
+                onClick={() => setViewingResult(null)}
+                className="relative z-10 p-2 hover:bg-white/10 rounded-xl transition-colors"
+                title="Fechar"
+              >
+                <X size={24} />
+              </button>
+            </div>
+
+            {/* Modal Content - Scrollable */}
+            <div className="p-8 overflow-y-auto space-y-8">
+              {/* Score Summary */}
+              <div className="grid grid-cols-2 gap-4">
+                <div className="bg-slate-50 p-6 rounded-3xl border border-slate-100 text-center">
+                  <div className="text-slate-400 text-[10px] font-black uppercase tracking-widest mb-1">Desempenho</div>
+                  <div className="text-3xl font-black text-slate-800">
+                    {viewingResult.result.score} / {viewingResult.result.totalQuestions}
+                  </div>
+                  <div className={cn(
+                    "inline-block mt-2 px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest",
+                    viewingResult.result.status === 'passed' ? "bg-success-100 text-success-700" : "bg-red-100 text-red-700"
+                  )}>
+                    {viewingResult.result.status === 'passed' ? 'Aprovado' : 'Não Aprovado'}
+                  </div>
+                </div>
+                <div className="bg-primary-50 p-6 rounded-3xl border border-primary-100 text-center text-primary-700">
+                  <div className="text-primary-400 text-[10px] font-black uppercase tracking-widest mb-1">Recompensa</div>
+                  <div className="text-3xl font-black">+{viewingResult.result.xpEarned} XP</div>
+                  <div className="text-[10px] font-black uppercase tracking-widest mt-2">🪙 {viewingResult.result.coinsEarned} moedas</div>
+                </div>
+              </div>
+
+              {/* Questions Review */}
+              <div className="space-y-6">
+                <h3 className="text-lg font-black text-slate-800 flex items-center gap-2">
+                  <Star size={20} className="text-warning-500 fill-warning-500" /> Detalhes das Questões
+                </h3>
+                
+                {viewingResult.activity.questions?.map((q: any, idx: number) => {
+                  const studentResponse = viewingResult.result.responses?.find((r: any) => r.questionId === q.id);
+                  const isCorrect = studentResponse?.isCorrect;
+                  
+                  return (
+                    <div key={q.id} className="bg-white border-2 border-slate-50 rounded-2xl p-6 space-y-4 shadow-sm">
+                      <div className="flex justify-between items-start gap-3">
+                        <div className="flex gap-3">
+                          <span className="shrink-0 w-8 h-8 rounded-lg bg-slate-100 flex items-center justify-center font-black text-slate-500 text-sm">
+                            {idx + 1}
+                          </span>
+                          <p className="font-bold text-slate-700 leading-relaxed">{q.questionText}</p>
+                        </div>
+                        {isCorrect ? (
+                          <div className="shrink-0 text-success-500 bg-success-50 p-2 rounded-xl">
+                            <CheckCircle size={20} />
+                          </div>
+                        ) : (
+                          <div className="shrink-0 text-red-500 bg-red-50 p-2 rounded-xl">
+                            <X size={20} />
+                          </div>
+                        )}
+                      </div>
+
+                      <div className="grid grid-cols-1 gap-2 ml-11">
+                        {q.options?.map((opt: any) => {
+                          const isStudentChoice = studentResponse?.selectedOptionId === opt.id;
+                          const isCorrectOption = opt.isCorrect;
+                          
+                          return (
+                            <div 
+                              key={opt.id}
+                              className={cn(
+                                "p-3 rounded-xl border-2 text-sm font-medium flex items-center justify-between",
+                                isCorrectOption 
+                                  ? "bg-success-50 border-success-200 text-success-700" 
+                                  : isStudentChoice && !isCorrectOption
+                                    ? "bg-red-50 border-red-200 text-red-700"
+                                    : "bg-slate-50 border-slate-50 text-slate-500"
+                              )}
+                            >
+                              <span>{opt.text}</span>
+                              {isStudentChoice && (
+                                <span className="text-[9px] font-black uppercase tracking-tighter px-2 py-0.5 rounded-full bg-white/50">
+                                  Sua Escolha
+                                </span>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+
+                      {/* Explanation */}
+                      <div className="ml-11 bg-indigo-50/50 border border-indigo-100 rounded-xl p-4">
+                        <p className="text-xs text-indigo-700 leading-relaxed italic">
+                          <span className="font-black not-italic uppercase mr-1">💡 Dica do Professor:</span>
+                          {isCorrect ? (
+                            q.explanation || "Muito bem! Continue assim."
+                          ) : (
+                            <>
+                              <span className="font-bold text-indigo-800">Não desanime!</span> Errar faz parte do aprendizado. Vamos revisar este ponto para brilhar na próxima! 🚀
+                              {q.explanation && !q.explanation.toLowerCase().includes('muito bem') && (
+                                <span className="block mt-2 opacity-80">— {q.explanation}</span>
+                              )}
+                            </>
+                          )}
+                        </p>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Modal Footer */}
+            <div className="p-8 border-t border-slate-100 shrink-0">
+              <Button 
+                className="w-full rounded-2xl h-14 font-black" 
+                variant="primary"
+                onClick={() => setViewingResult(null)}
+              >
+                Entendi, voltar às atividades
+              </Button>
+            </div>
           </div>
         </div>
       )}

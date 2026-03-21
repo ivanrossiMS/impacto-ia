@@ -2,7 +2,16 @@ import React, { useEffect, useState } from 'react';
 import { useAuthStore } from '../../store/auth.store';
 import { supabase } from '../../lib/supabase';
 import type { Student } from '../../types/user';
-import type { DiaryEntry } from '../../lib/dexie';
+export interface DiaryEntry {
+  id: string;
+  studentId: string;
+  title: string;
+  content: string;
+  mood: string;
+  tags: string[];
+  isAIGenerated?: boolean;
+  createdAt: string;
+}
 import {
   BookOpen, Search,
   Sparkles, Hash,

@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { useAuthStore } from '../../store/auth.store';
-import { db, type DiaryEntry } from '../../lib/dexie';
+import { supabase } from '../../lib/supabase';
 import {
   BookOpen, Plus, Search,
   Sparkles, Trash2, Lock, Hash, Star as StarIcon,
@@ -12,6 +12,19 @@ import { Button } from '../../components/ui/Button';
 import { cn } from '../../lib/utils';
 import { toast } from 'sonner';
 import { incrementMissionProgress } from '../../lib/missionUtils';
+
+// Redefining DiaryEntry as we removed it from Dexie types
+export interface DiaryEntry {
+  id: string;
+  studentId: string;
+  title: string;
+  content: string;
+  mood: string;
+  tags: string[];
+  isAIGenerated: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
 
 
 export const Diary: React.FC = () => {
@@ -35,7 +48,8 @@ export const Diary: React.FC = () => {
 
   const loadEntries = async () => {
     if (!user) return;
-    const raw = await db.diaryEntries.where('studentId').equals(user.id).toArray();
+    const { data: rawObj } = await supabase.from('diary_entries').select('*').eq('studentId', user.id);
+    const raw = (rawObj || []) as DiaryEntry[];
     // Sort by newest first
     raw.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
     setEntries(raw);
@@ -60,7 +74,8 @@ export const Diary: React.FC = () => {
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
       };
-      await db.diaryEntries.add(entry);
+      const { error } = await supabase.from('diary_entries').insert(entry);
+      if (error) throw error;
       setEntries(prev => [entry, ...prev]);
       setShowModal(false);
       setFormTitle('');
@@ -80,7 +95,7 @@ export const Diary: React.FC = () => {
   };
 
   const handleDelete = async (id: string) => {
-    await db.diaryEntries.delete(id);
+    await supabase.from('diary_entries').delete().eq('id', id);
     setEntries(prev => prev.filter(e => e.id !== id));
     toast.success('Anotação excluída.');
   };
@@ -89,7 +104,7 @@ export const Diary: React.FC = () => {
     !searchTerm ||
     e.title.toLowerCase().includes(searchTerm.toLowerCase()) ||
     e.content.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    e.tags.some(t => t.toLowerCase().includes(searchTerm.toLowerCase()))
+    e.tags.some((t: string) => t.toLowerCase().includes(searchTerm.toLowerCase()))
   );
 
   const allTags = [...new Set(entries.flatMap(e => e.tags))];
@@ -267,7 +282,7 @@ export const Diary: React.FC = () => {
 
                     {entry.tags.length > 0 && (
                       <div className="flex flex-wrap gap-2 pt-2">
-                        {entry.tags.map(tag => (
+                        {entry.tags.map((tag: string) => (
                           <Badge key={tag} variant="primary" className="bg-primary-50/50 border-primary-100/50 flex items-center gap-1.5">
                             <Hash size={10} /> {tag}
                           </Badge>

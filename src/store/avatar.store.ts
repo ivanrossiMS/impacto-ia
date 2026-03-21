@@ -60,25 +60,20 @@ export const useAvatarStore = create<AvatarState>((set) => ({
   fetchProfile: async (studentId) => {
     set({ isLoading: true });
     try {
-      let { data: profile, error } = await supabase.from('student_avatar_profiles').select('*').eq('studentId', studentId).single();
+      let { data: profile, error } = await supabase.from('student_avatar_profiles').select('*').eq('studentId', studentId).maybeSingle();
       
-      if (error && error.code !== 'PGRST116') throw error; // PGRST116 means no rows
+      if (error) throw error;
 
       if (!profile) {
-        // Create a default profile with the student capybara
         profile = {
           studentId,
-          selectedAvatarId: 'default-student',
-          selectedBackgroundId: '',
-          selectedBorderId: '',
+          selectedAvatarId: null,
+          selectedBackgroundId: null,
+          selectedBorderId: null,
           equippedStickerIds: [],
           updatedAt: new Date().toISOString(),
-        };
+        } as any;
         await supabase.from('student_avatar_profiles').insert(profile);
-      } else if (!profile.selectedAvatarId) {
-        // Migration for existing students without avatar
-        profile.selectedAvatarId = 'default-student';
-        await supabase.from('student_avatar_profiles').update({ selectedAvatarId: 'default-student' }).eq('studentId', studentId);
       }
       set({ profile });
     } catch (error) {
@@ -87,12 +82,12 @@ export const useAvatarStore = create<AvatarState>((set) => ({
       set({
         profile: {
           studentId,
-          selectedAvatarId: 'default-student',
-          selectedBackgroundId: '',
-          selectedBorderId: '',
+          selectedAvatarId: null,
+          selectedBackgroundId: null,
+          selectedBorderId: null,
           equippedStickerIds: [],
           updatedAt: new Date().toISOString(),
-        }
+        } as any
       });
     } finally {
       set({ isLoading: false });
@@ -153,7 +148,12 @@ export const useAvatarStore = create<AvatarState>((set) => ({
   },
 
   updateProfile: async (profile) => {
-    await supabase.from('student_avatar_profiles').upsert(profile, { onConflict: 'studentId' });
+    const cleanProfile = { ...profile } as any;
+    if (!cleanProfile.selectedBackgroundId) cleanProfile.selectedBackgroundId = null;
+    if (!cleanProfile.selectedBorderId) cleanProfile.selectedBorderId = null;
+    if (!cleanProfile.selectedAvatarId) cleanProfile.selectedAvatarId = null;
+
+    await supabase.from('student_avatar_profiles').upsert(cleanProfile, { onConflict: 'studentId' });
     set({ profile });
   }
 }));

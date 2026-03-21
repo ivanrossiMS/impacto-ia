@@ -59,7 +59,7 @@ export async function seedDatabase(force?: boolean) {
     {
       id: 'default-student',
       name: 'Capivara Estudante',
-      assetUrl: '/avatars/default-capybara.png',
+      assetUrl: '/avatars/default-impacto.png',
       type: 'avatar',
       rarity: 'comum',
       priceCoins: 0,
@@ -339,7 +339,7 @@ export async function ensureDefaultItems() {
       await db.avatarCatalog.add({
         id: 'default-student',
         name: 'Capivara Estudante',
-        assetUrl: '/avatars/default-capybara.png',
+        assetUrl: '/avatars/default-impacto.png',
         type: 'avatar',
         rarity: 'comum',
         priceCoins: 0,

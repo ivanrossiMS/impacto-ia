@@ -22,7 +22,7 @@ import { cn } from '../../lib/utils';
 import { toast } from 'sonner';
 import type { AvatarCatalogItem, AvatarRarity } from '../../types/avatar';
 import { createBulkNotifications } from '../../lib/notificationUtils';
-import { db } from '../../lib/dexie';
+import { supabase } from '../../lib/supabase';
 
 const RARITIES: { value: AvatarRarity; label: string; color: string }[] = [
   { value: 'comum', label: 'Comum', color: 'bg-slate-400' },
@@ -101,41 +101,10 @@ export const AvatarManager: React.FC = () => {
         const reader = new FileReader();
         
         reader.onload = async (event) => {
-            const img = new Image();
-            img.onload = () => {
-                const canvas = document.createElement('canvas');
-                const ctx = canvas.getContext('2d');
-                if (!ctx) return;
-
-                canvas.width = img.width;
-                canvas.height = img.height;
-                ctx.drawImage(img, 0, 0);
-
-                const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-                const data = imageData.data;
-
-                // Simple background removal: convert pixels close to white to transparent
-                for (let i = 0; i < data.length; i += 4) {
-                    const r = data[i];
-                    const g = data[i+1];
-                    const b = data[i+2];
-                    
-                    // Slightly more robust: remove white AND light greys
-                    const average = (r + g + b) / 3;
-                    const diff = Math.max(Math.abs(r-average), Math.abs(g-average), Math.abs(b-average));
-                    
-                    if (average > 235 && diff < 15) {
-                        data[i + 3] = 0;
-                    }
-                }
-
-                ctx.putImageData(imageData, 0, 0);
-                const processedBase64 = canvas.toDataURL('image/png');
-                setFormData({ ...formData, assetUrl: processedBase64 });
-                setIsProcessing(false);
-                toast.success('Imagem processada com fundo transparente!');
-            };
-            img.src = event.target?.result as string;
+            const result = event.target?.result as string;
+            setFormData({ ...formData, assetUrl: result });
+            setIsProcessing(false);
+            toast.success('Imagem carregada com sucesso!');
         };
         reader.readAsDataURL(file);
     };
@@ -150,8 +119,8 @@ export const AvatarManager: React.FC = () => {
                 await addCatalogItem(formData);
                 
                 // Notify students (and Guardians automatically via mirroring)
-                const allStudents = await db.users.where('role').equals('student').toArray();
-                if (allStudents.length > 0) {
+                const { data: allStudents } = await supabase.from('users').select('id').eq('role', 'student');
+                if (allStudents && allStudents.length > 0) {
                   await createBulkNotifications(
                     allStudents.map(s => s.id),
                     'student',
@@ -437,7 +406,7 @@ export const AvatarManager: React.FC = () => {
                                             className="w-full bg-slate-50 border-none rounded-2xl py-3 px-4 focus:ring-2 focus:ring-primary-500/20 text-slate-800 font-medium"
                                             placeholder="Ou cole uma URL direta..."
                                         />
-                                        <p className="mt-2 text-[10px] text-slate-400 ml-1">O upload limpa automaticamente fundos brancos.</p>
+                                        <p className="mt-2 text-[10px] text-slate-400 ml-1">Imagem original preservada (sem remoção de fundo).</p>
                                     </div>
                                     
                                     {/* Small Preview Box */}

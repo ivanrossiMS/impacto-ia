@@ -399,7 +399,7 @@ export const GuardianDashboard: React.FC = () => {
                     )}
                     <div className="relative">
                       <AvatarComposer
-                        avatarUrl={activeAvatar?.assetUrl || '/avatars/default-capybara.png'}
+                        avatarUrl={activeAvatar?.assetUrl || '/avatars/default-impacto.png'}
                         size="md"
                       />
                       <div className="absolute -bottom-2 -right-2 text-xl">{streakStatus.emoji}</div>
@@ -462,7 +462,7 @@ export const GuardianDashboard: React.FC = () => {
                 <div className="relative z-10 flex flex-col items-center gap-4">
                   <div className="relative">
                     <AvatarComposer
-                      avatarUrl={activeAvatar?.assetUrl || '/avatars/default-capybara.png'}
+                      avatarUrl={activeAvatar?.assetUrl || '/avatars/default-impacto.png'}
                       backgroundUrl={activeBg?.assetUrl}
                       borderUrl={activeBorder?.assetUrl}
                       stickerUrls={activeStickers}

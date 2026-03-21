@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { db } from '../../lib/dexie';
+import { supabase } from '../../lib/supabase';
 import type { AvatarProfile, AvatarLayer, AvatarLayerType } from '../../types/avatar';
 import { useAuthStore } from '../../store/auth.store';
 import { AvatarComposer as AvatarPreview } from '../../features/avatar/components/AvatarComposer';
@@ -14,32 +14,30 @@ export const AvatarEditor: React.FC = () => {
   const [initialProfile, setInitialProfile] = useState<AvatarProfile | null>(null);
 
   const [activeCategory, setActiveCategory] = useState<AvatarLayerType>('hair');
-  const [availableItems, setAvailableItems] = useState<AvatarLayer[]>([]);
+  const [fullCatalog, setFullCatalog] = useState<AvatarLayer[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     const loadAvatarData = async () => {
       if (!user) return;
-      let p = await db.studentAvatarProfiles.get(user.id);
+      let { data: p } = await supabase.from('student_avatar_profiles').select('*').eq('studentId', user.id).single();
       if (!p) {
         // Create default empty profile for this user
         const now = new Date().toISOString();
         const defaultProfile = {
           studentId: user.id,
-          selectedAvatarId: '',
-          selectedBackgroundId: '',
-          selectedBorderId: '',
+          selectedAvatarId: null,
+          selectedBackgroundId: null,
+          selectedBorderId: null,
           equippedStickerIds: [],
           equippedItems: {},
           updatedAt: now
-        };
-        await db.studentAvatarProfiles.add(defaultProfile);
-        p = defaultProfile;
+        } as any;
+        const { data: insertedP } = await supabase.from('student_avatar_profiles').insert(defaultProfile).select().single();
+        p = insertedP;
       }
-      setProfile({ ...p });
-      setInitialProfile({ ...p });
-
-      await db.avatarCatalog.toArray();
+      setProfile({ ...(p as AvatarProfile) });
+      setInitialProfile({ ...(p as AvatarProfile) });
 
       setLoading(false);
     };
@@ -48,18 +46,25 @@ export const AvatarEditor: React.FC = () => {
   }, [user]);
 
   useEffect(() => {
-    const fetchCategoryItems = async () => {
-      const items = await db.avatarCatalog.where('type').equals(activeCategory).toArray();
-      setAvailableItems(items);
+    const fetchCatalog = async () => {
+      const { data: items } = await supabase.from('avatar_catalog').select('*');
+      setFullCatalog((items || []) as AvatarLayer[]);
     };
 
-    fetchCategoryItems();
-  }, [activeCategory]);
+    fetchCatalog();
+  }, []);
 
   const handleEquip = (layerId: string) => {
     if (!profile) return;
+    
+    let updates: Partial<AvatarProfile> = {};
+    if (activeCategory === 'base') updates.selectedAvatarId = layerId;
+    if (activeCategory === 'background') updates.selectedBackgroundId = layerId;
+    // We don't have border in categories here, but mapping accessory or others to sticklers etc could be done
+    // For now we map main fields
     setProfile({
       ...profile,
+      ...updates,
       equippedItems: {
         ...(profile.equippedItems || {}),
         [activeCategory]: layerId
@@ -71,7 +76,12 @@ export const AvatarEditor: React.FC = () => {
   const handleSave = async () => {
     if (!profile || !user) return;
     try {
-      await db.studentAvatarProfiles.put(profile);
+      const cleanProfile = { ...profile } as any;
+      if (!cleanProfile.selectedAvatarId) cleanProfile.selectedAvatarId = null;
+      if (!cleanProfile.selectedBackgroundId) cleanProfile.selectedBackgroundId = null;
+      if (!cleanProfile.selectedBorderId) cleanProfile.selectedBorderId = null;
+
+      await supabase.from('student_avatar_profiles').upsert(cleanProfile, { onConflict: 'studentId' });
       setInitialProfile({ ...profile });
 
       toast.success('Visual salvo com sucesso!');
@@ -99,6 +109,12 @@ export const AvatarEditor: React.FC = () => {
   ];
 
   const isChanged = JSON.stringify(profile) !== JSON.stringify(initialProfile);
+
+  const availableItems = fullCatalog.filter(item => item.type === activeCategory);
+
+  const activeAvatar = fullCatalog.find(i => i.id === profile?.selectedAvatarId);
+  const activeBackground = fullCatalog.find(i => i.id === profile?.selectedBackgroundId);
+  const activeBorder = fullCatalog.find(i => i.id === profile?.selectedBorderId);
 
   return (
     <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
@@ -135,9 +151,9 @@ export const AvatarEditor: React.FC = () => {
           <div className="sticky top-24 space-y-6 flex flex-col items-center w-full">
             <div className="relative group p-4 bg-white rounded-[3rem] shadow-floating border-4 border-white">
                <AvatarPreview 
-                  avatarUrl={profile.selectedAvatarId} 
-                  backgroundUrl={profile.selectedBackgroundId}
-                  borderUrl={profile.selectedBorderId}
+                  avatarUrl={activeAvatar?.assetUrl || activeAvatar?.imageUrl || ''} 
+                  backgroundUrl={activeBackground?.assetUrl || activeBackground?.imageUrl}
+                  borderUrl={activeBorder?.assetUrl || activeBorder?.imageUrl}
                   size="xl" 
                />
                <div className="absolute -bottom-4 -right-4 bg-special-500 text-white p-4 rounded-full shadow-lg animate-bounce">

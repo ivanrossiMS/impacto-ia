@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { useAuthStore } from '../../store/auth.store';
-import { db } from '../../lib/dexie';
+import { supabase } from '../../lib/supabase';
 import type { Achievement, StudentAchievement, GamificationStats } from '../../types/gamification';
 import { Trophy, Lock } from 'lucide-react';
 import { Card } from '../../components/ui/Card';
@@ -23,14 +23,21 @@ export const Achievements: React.FC = () => {
       // First check and unlock any due achievements
       try { await checkAndUnlockAchievements(user.id); } catch(_) {}
 
-      const defs = await db.achievements.toArray();
-      setAllDefs(defs);
+      const { data: defsObj } = await supabase.from('achievements').select('*');
+      const defs = defsObj || [];
+      setAllDefs(defs as Achievement[]);
 
-      const rawUnlocked = await db.studentAchievements.where('studentId').equals(user.id).toArray();
+      const { data: rawUnlockedObj } = await supabase.from('student_achievements').select('*').eq('studentId', user.id);
+      const rawUnlocked = rawUnlockedObj || [];
+
       const enriched = rawUnlocked.map(a => ({ ...a, detail: defs.find(d => d.id === a.achievementId) }));
-      setUnlocked(enriched);
+      
+      // Safety de-duplicate by achievementId
+      const uniqueEnriched = Array.from(new Map(enriched.map(item => [item.achievementId, item])).values());
+      
+      setUnlocked(uniqueEnriched);
 
-      const s = await db.gamificationStats.get(user.id);
+      const { data: s } = await supabase.from('gamification_stats').select('*').eq('id', user.id).single();
       setStats(s || null);
 
       setLoading(false);

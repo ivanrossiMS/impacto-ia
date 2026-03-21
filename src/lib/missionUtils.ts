@@ -30,12 +30,14 @@ export async function incrementMissionProgress(
   // 2. For each mission, update the student's progress
   for (const mission of activeMissions) {
     // Check if progress entry exists
-    let { data: progress } = await supabase
+    let { data: progressArray } = await supabase
       .from('student_missions')
       .select('*')
       .eq('studentId', studentId)
       .eq('missionId', mission.id)
-      .single();
+      .limit(1);
+
+    let progress = progressArray && progressArray.length > 0 ? progressArray[0] : null;
 
     if (!progress) {
       // Create new progress entry

@@ -1,4 +1,5 @@
 import { supabase } from './supabase';
+import { createNotification } from './notificationUtils';
 
 /**
  * Gamification Utilities
@@ -122,6 +123,19 @@ export async function updateGamificationStats(
         .eq('id', studentId);
         
       if (updateError) throw updateError;
+      
+      // Trigger level up notification if applicable
+      if (newLevel > oldLevel) {
+        await createNotification({
+          userId: studentId,
+          role: 'student',
+          title: 'Subiu de Nível! 🚀',
+          message: `Parabéns! Você alcançou o Nível ${newLevel}!`,
+          type: 'reward',
+          priority: 'high'
+        });
+      }
+
       console.log(`[Stats] Updated student ${studentId}: Streak ${newStreak}, XP ${newXP}`);
       return { newLevel, oldLevel };
     } else {
@@ -141,6 +155,19 @@ export async function updateGamificationStats(
         });
         
       if (insertError) throw insertError;
+
+      // Trigger level up notification for initial level if > 1 (rare but possible)
+      if (startingLevel > 1) {
+        await createNotification({
+          userId: studentId,
+          role: 'student',
+          title: 'Subiu de Nível! 🚀',
+          message: `Você começou sua jornada no Nível ${startingLevel}!`,
+          type: 'reward',
+          priority: 'high'
+        });
+      }
+
       console.log(`[Stats] Initialized student ${studentId}: Streak 1`);
       return { newLevel: startingLevel, oldLevel: 1 };
     }
