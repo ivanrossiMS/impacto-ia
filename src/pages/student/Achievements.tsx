@@ -2,17 +2,13 @@ import React, { useEffect, useState } from 'react';
 import { useAuthStore } from '../../store/auth.store';
 import { db } from '../../lib/dexie';
 import type { Achievement, StudentAchievement, GamificationStats } from '../../types/gamification';
-import { Trophy, Lock, Star, Zap, Shield, Sparkles, Target, Medal, Crown, CheckCircle2 } from 'lucide-react';
+import { Trophy, Lock } from 'lucide-react';
 import { Card } from '../../components/ui/Card';
 import { Badge } from '../../components/ui/Badge';
 import { cn } from '../../lib/utils';
 import { checkAndUnlockAchievements } from '../../lib/gameSeeder';
 
 type UnlockedAch = StudentAchievement & { detail?: Achievement };
-
-const ICON_MAP: Record<string, React.FC<{ size?: number }>> = {
-  Trophy, Star, Zap, Shield, Sparkles, Target, Medal, Crown, CheckCircle2,
-};
 
 export const Achievements: React.FC = () => {
   const user = useAuthStore(state => state.user);
@@ -102,8 +98,7 @@ export const Achievements: React.FC = () => {
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
             {unlocked.map((ach, i) => {
               const colorClass = achColors[i % achColors.length];
-              const [textColor, bgColor, borderColor] = colorClass.split(' ');
-              const IcComponent = Zap; // default icon since icon names stored as strings
+              const [, bgColor, borderColor] = colorClass.split(' ');
               return (
                 <Card key={ach.id} className="p-8 border-slate-100 group hover:shadow-floating hover:border-primary-100 transition-all duration-500 relative overflow-hidden">
                   <div className="flex items-center gap-6 mb-6">
@@ -142,7 +137,7 @@ export const Achievements: React.FC = () => {
             <Lock size={20} /> Bloqueadas ({lockedDefs.length})
           </h2>
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-            {lockedDefs.map((def, i) => (
+            {lockedDefs.map((def) => (
               <Card key={def.id} className="p-8 border-slate-50 opacity-70 sepia-[0.2] relative overflow-hidden">
                 <div className="absolute top-4 right-4 text-slate-300">
                   <Lock size={18} />

@@ -2,7 +2,6 @@ import React, { useState } from 'react';
 import { Store, Trophy, Target, Settings, Plus, Sparkles, X, Trash2 } from 'lucide-react';
 import { Button } from '../../components/ui/Button';
 import { Badge } from '../../components/ui/Badge';
-import { Card } from '../../components/ui/Card';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
