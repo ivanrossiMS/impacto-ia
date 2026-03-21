@@ -1,8 +1,8 @@
 import React, { useEffect, useState } from 'react';
 import { useAuthStore } from '../../store/auth.store';
-import { db, type DiaryEntry } from '../../lib/dexie';
-import { useLiveQuery } from 'dexie-react-hooks';
+import { supabase } from '../../lib/supabase';
 import type { Student } from '../../types/user';
+import type { DiaryEntry } from '../../lib/dexie';
 import {
   BookOpen, Search,
   Sparkles, Hash,
@@ -19,24 +19,35 @@ export const Diary: React.FC = () => {
   const [searchTerm, setSearchTerm] = useState('');
   const [loading, setLoading] = useState(true);
 
-  const studentsList = useLiveQuery(async () => {
-    if (!guardian || guardian.role !== 'guardian') return [] as Student[];
-    
-    const liveG = await db.users.get(guardian.id);
-    const sidList = (liveG && liveG.role === 'guardian') ? (liveG.studentIds || []) : [];
+  const [studentsList, setStudentsList] = useState<Student[]>([]);
 
-    // 2. Fetch by studentIds array OR search where guardianIds contains guardian.id
-    const linkedByGuardian = await db.users.where('id').anyOf(sidList).toArray();
-    const linkedByStudent = await db.users.where('guardianIds').equals(guardian.id).toArray();
-    
-    const all = [...linkedByGuardian, ...linkedByStudent];
-    const uniqueIds = new Set();
-    return all.filter(s => {
-      if (s.role !== 'student' || uniqueIds.has(s.id)) return false;
-      uniqueIds.add(s.id);
-      return true;
-    }) as Student[];
-  }, [guardian?.id]) || [];
+  useEffect(() => {
+    const fetchStudents = async () => {
+      if (!guardian || guardian.role !== 'guardian') return;
+      
+      const { data: liveG } = await supabase.from('users').select('*').eq('id', guardian.id).single();
+      const sidList = liveG?.studentIds || [];
+
+      let linkedByGuardian: any[] = [];
+      if (sidList.length > 0) {
+        const { data } = await supabase.from('users').select('*').in('id', sidList);
+        linkedByGuardian = data || [];
+      }
+      
+      const { data: linkedByStudent } = await supabase.from('users').select('*').contains('guardianIds', [guardian.id]);
+      
+      const all = [...linkedByGuardian, ...(linkedByStudent || [])];
+      const uniqueIds = new Set();
+      const st = all.filter(s => {
+        if (s.role !== 'student' || uniqueIds.has(s.id)) return false;
+        uniqueIds.add(s.id);
+        return true;
+      }) as Student[];
+      
+      setStudentsList(st);
+    };
+    fetchStudents();
+  }, [guardian?.id]);
 
   useEffect(() => {
     if (studentsList.length > 0 && !selectedStudentId) {
@@ -52,12 +63,21 @@ export const Diary: React.FC = () => {
 
   const loadEntries = async (studentId: string) => {
     setLoading(true);
-    const raw = await db.diaryEntries.where('studentId').equals(studentId).toArray();
-    // Sort by newest first
-    raw.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
-    setEntries(raw);
+    const { data: raw } = await supabase.from('diary_entries').select('*').eq('studentId', studentId);
+    let entries = raw || [];
+    entries.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+    setEntries(entries);
     setLoading(false);
   };
+  
+  useEffect(() => {
+    if (selectedStudentId) {
+       const ch = supabase.channel(`diary_${selectedStudentId}`)
+         .on('postgres_changes', { event: '*', schema: 'public', table: 'diary_entries', filter: `studentId=eq.${selectedStudentId}` }, () => loadEntries(selectedStudentId))
+         .subscribe();
+       return () => { supabase.removeChannel(ch); };
+    }
+  }, [selectedStudentId]);
 
   const filtered = entries.filter(e =>
     !searchTerm ||

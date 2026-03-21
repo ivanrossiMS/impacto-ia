@@ -5,8 +5,7 @@ import {
   BookOpen, Zap, AlertCircle, ArrowUpRight
 } from 'lucide-react';
 import { cn } from '../../lib/utils';
-import { db } from '../../lib/dexie';
-import { useLiveQuery } from 'dexie-react-hooks';
+import { useSupabaseQuery } from '../../hooks/useSupabase';
 import { useAuthStore } from '../../store/auth.store';
 import { motion } from 'framer-motion';
 import { useNavigate } from 'react-router-dom';
@@ -16,39 +15,29 @@ export const Reports: React.FC = () => {
   const navigate = useNavigate();
   const [period, setPeriod] = useState<'7' | '30' | '90'>('30');
 
-  // ── Real data from Dexie ─────────────────────────────────────────────────
-  const teacherUser = useLiveQuery(async () => user ? db.users.get(user.id) : null, [user?.id]);
-  const classIds: string[] = (teacherUser as any)?.classIds || [];
+  // ── Real data from Supabase ───────────────────────────────────────────────
+  const teacherUsersData = useSupabaseQuery<any>('users');
+  const teacherUser = teacherUsersData?.find((u: any) => u.id === user?.id);
+  const classIds: string[] = teacherUser?.classIds || [];
 
-  const classes = useLiveQuery(async () => {
-    if (!classIds.length) return [];
-    const all = await db.classes.toArray();
-    return all.filter(c => classIds.includes(c.id));
-  }, [classIds.join(',')]) || [];
+  const allClassesData = useSupabaseQuery<any>('classes');
+  const classes = (allClassesData || []).filter((c: any) => classIds.includes(c.id));
 
   // Get all student IDs from teacher's classes
   const studentIds = useMemo(() => {
-    return [...new Set(classes.flatMap(c => c.studentIds || []))];
+    return [...new Set(classes.flatMap((c: any) => c.studentIds || []))];
   }, [classes]);
 
-  const students = useLiveQuery(async () => {
-    if (!studentIds.length) return [];
-    const all = await db.users.where('role').equals('student').toArray();
-    return all.filter(u => studentIds.includes(u.id));
-  }, [studentIds.join(',')]) || [];
+  const allStudentsData = useSupabaseQuery<any>('users');
+  const students = (allStudentsData || []).filter((u: any) => u.role === 'student' && studentIds.includes(u.id));
 
-
-  // Activities from Dexie
-  const activities = useLiveQuery(async () => {
-    const all = await db.activities.toArray();
-    return all.filter((a: any) => !a.teacherId || a.teacherId === user?.id);
-  }, [user?.id]) || [];
+  // Activities from Supabase
+  const allActivitiesData = useSupabaseQuery<any>('activities');
+  const activities = (allActivitiesData || []).filter((a: any) => !a.teacherId || a.teacherId === user?.id);
 
   // Results for all students in teacher's classes
-  const activityResults = useLiveQuery(async () => {
-    if (!studentIds.length) return [];
-    return db.studentActivityResults.where('studentId').anyOf(studentIds).toArray();
-  }, [studentIds.join(',')]) || [];
+  const allActivityResultsData = useSupabaseQuery<any>('student_activity_results');
+  const activityResults = (allActivityResultsData || []).filter((r: any) => studentIds.includes(r.studentId));
 
   // ── Computed metrics ─────────────────────────────────────────────────────
   const totalStudents = students.length;

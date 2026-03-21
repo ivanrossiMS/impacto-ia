@@ -1,4 +1,4 @@
-import { db } from '../lib/dexie';
+import { supabase } from '../lib/supabase';
 import type { Duel, DuelQuestion, DuelTheme, DuelDifficulty } from '../types/duel';
 import { createNotification, createBulkNotifications } from '../lib/notificationUtils';
 import { updateGamificationStats } from '../lib/gamificationUtils';
@@ -26,11 +26,11 @@ export class DuelService {
       createdAt: new Date().toISOString(),
     };
 
-    await db.duels.add(duel);
+    await supabase.from('duels').insert(duel);
     await this.generateQuestions(duel);
 
     // Notify the challenged student
-    const challenger = await db.users.get(challengerId);
+    const { data: challenger } = await supabase.from('users').select('*').eq('id', challengerId).single();
     await createNotification({
       userId: challengedId,
       role: 'student',
@@ -77,7 +77,7 @@ export class DuelService {
       });
     }
 
-    await db.duelQuestions.bulkAdd(questions);
+    await supabase.from('duel_questions').insert(questions);
   }
 
   static async submitTurn(
@@ -85,10 +85,11 @@ export class DuelService {
     userId: string,
     answers: { questionId: string; selectedOptionId: string }[]
   ): Promise<Duel> {
-    const duel = await db.duels.get(duelId);
+    const { data: duel } = await supabase.from('duels').select('*').eq('id', duelId).single();
     if (!duel) throw new Error('Duel not found');
 
-    const questions = await db.duelQuestions.where('duelId').equals(duelId).toArray();
+    const { data: questionsArr } = await supabase.from('duel_questions').select('*').eq('duelId', duelId);
+    const questions = questionsArr || [];
     let score = 0;
 
     for (const answer of answers) {
@@ -99,9 +100,9 @@ export class DuelService {
 
         // Update question record with user's answer
         if (userId === duel.challengerId) {
-          await db.duelQuestions.update(question.id, { challengerAnswerId: answer.selectedOptionId });
+          await supabase.from('duel_questions').update({ challengerAnswerId: answer.selectedOptionId }).eq('id', question.id);
         } else {
-          await db.duelQuestions.update(question.id, { challengedAnswerId: answer.selectedOptionId });
+          await supabase.from('duel_questions').update({ challengedAnswerId: answer.selectedOptionId }).eq('id', question.id);
         }
       }
     }
@@ -177,7 +178,7 @@ export class DuelService {
       );
     }
 
-    await db.duels.update(duelId, finalDuel);
+    await supabase.from('duels').update(finalDuel).eq('id', duelId);
     return finalDuel;
   }
 }

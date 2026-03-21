@@ -4,8 +4,8 @@ import {
   Users as UsersIcon, User, GraduationCap, Shield, Filter, School as SchoolIcon,
   Coins, BookOpen, UserCheck, Download
 } from 'lucide-react';
-import { db } from '../../lib/dexie';
-import { useLiveQuery } from 'dexie-react-hooks';
+import { supabase } from '../../lib/supabase';
+import { useSupabaseQuery } from '../../hooks/useSupabase';
 import { Button } from '../../components/ui/Button';
 import { Card } from '../../components/ui/Card';
 import { Badge } from '../../components/ui/Badge';
@@ -52,7 +52,8 @@ const RoleBadge: React.FC<{ role: string }> = ({ role }) => {
 };
 
 const SchoolCell: React.FC<{ schoolId?: string }> = ({ schoolId }) => {
-  const school = useLiveQuery(async () => (schoolId ? await db.schools.get(schoolId) : undefined), [schoolId]);
+  const schools = useSupabaseQuery<any>('schools');
+  const school = schools.find(s => s.id === schoolId);
   if (!schoolId || !school) return <span className="text-slate-300 text-[10px] font-black uppercase tracking-widest">—</span>;
   return (
     <div className="flex items-center gap-2 text-xs font-bold text-slate-600">
@@ -69,9 +70,12 @@ interface UserModalProps {
   schools: any[];
   isAdminMaster: boolean;
   userSchoolId?: string;
+  allUsers: any[];
+  allClasses: any[];
+  allGamStats: any[];
 }
 
-const UserModal: React.FC<UserModalProps> = ({ editUser, onClose, schools, isAdminMaster, userSchoolId }) => {
+const UserModal: React.FC<UserModalProps> = ({ editUser, onClose, schools, isAdminMaster, userSchoolId, allUsers, allClasses, allGamStats }) => {
   const isEdit = !!editUser;
   const [guardianSearch, setGuardianSearch] = useState('');
   const [studentSearch, setStudentSearch] = useState('');
@@ -92,18 +96,13 @@ const UserModal: React.FC<UserModalProps> = ({ editUser, onClose, schools, isAdm
   });
 
   // Load existing coins if editing a student
-  const studentStats = useLiveQuery(async () => {
-    if (isEdit && editUser.role === 'student') {
-      return db.gamificationStats.get(editUser.id);
-    }
-    return undefined;
-  }, [isEdit, editUser?.id]);
+  const studentStats = allGamStats.find(s => s.id === editUser?.id);
 
   useEffect(() => {
-    if (studentStats && isEdit) {
+    if (studentStats && isEdit && editUser.role === 'student') {
       setValue('initialCoins', studentStats.coins);
     }
-  }, [studentStats, isEdit, setValue]);
+  }, [studentStats, isEdit, setValue, editUser]);
 
   const selectedRole = watch('role');
   const selectedSchoolId = watch('schoolId');
@@ -112,25 +111,15 @@ const UserModal: React.FC<UserModalProps> = ({ editUser, onClose, schools, isAdm
   const watchedStudentIds = watch('studentIds') || [];
 
   // Fetch classes and guardians for the selected school
-  const schoolClasses = useLiveQuery(async () => {
-    if (!selectedSchoolId) return [];
-    return db.classes.where({ schoolId: selectedSchoolId }).toArray();
-  }, [selectedSchoolId]) || [];
-
-  const schoolGuardians = useLiveQuery(async () => {
-    if (!selectedSchoolId) return [];
-    return db.users.where({ schoolId: selectedSchoolId, role: 'guardian' }).toArray();
-  }, [selectedSchoolId]) || [];
+  const schoolClasses = allClasses.filter(c => c.schoolId === selectedSchoolId);
+  const schoolGuardians = allUsers.filter(u => u.schoolId === selectedSchoolId && u.role === 'guardian');
 
   const filteredGuardians = schoolGuardians.filter(g => 
     g.name.toLowerCase().includes(guardianSearch.toLowerCase()) || 
     (g.email || (g as any).guardianCode || '').toLowerCase().includes(guardianSearch.toLowerCase())
   );
 
-  const schoolStudents = useLiveQuery(async () => {
-    if (!selectedSchoolId) return [];
-    return db.users.where({ schoolId: selectedSchoolId, role: 'student' }).toArray();
-  }, [selectedSchoolId]) || [];
+  const schoolStudents = allUsers.filter(u => u.schoolId === selectedSchoolId && u.role === 'student');
 
   const filteredStudents = schoolStudents.filter(s => 
     s.name.toLowerCase().includes(studentSearch.toLowerCase()) || 
@@ -150,19 +139,19 @@ const UserModal: React.FC<UserModalProps> = ({ editUser, onClose, schools, isAdm
         // Guardians to remove student from
         const removed = oldGuardianIds.filter((id: string) => !newGuardianIds.includes(id));
         for (const gid of removed) {
-          const g = await db.users.get(gid);
+          const { data: g } = await supabase.from('users').select('*').eq('id', gid).single();
           if (g && g.role === 'guardian') {
             const newIds = (g.studentIds || []).filter((id: string) => id !== targetUserId);
-            await db.users.update(gid, { studentIds: newIds } as any);
+            await supabase.from('users').update({ studentIds: newIds }).eq('id', gid);
           }
         }
         
         // Guardians to add student to
         for (const gid of newGuardianIds) {
-          const g = await db.users.get(gid);
+          const { data: g } = await supabase.from('users').select('*').eq('id', gid).single();
           if (g && g.role === 'guardian') {
             const newIds = Array.from(new Set([...(g.studentIds || []), targetUserId]));
-            await db.users.update(gid, { studentIds: newIds } as any);
+            await supabase.from('users').update({ studentIds: newIds }).eq('id', gid);
           }
         }
       }
@@ -173,17 +162,17 @@ const UserModal: React.FC<UserModalProps> = ({ editUser, onClose, schools, isAdm
         const oldClassId = editUser?.classId;
         if (newClassId !== oldClassId) {
           if (oldClassId) {
-            const oldC = await db.classes.get(oldClassId);
+            const { data: oldC } = await supabase.from('classes').select('*').eq('id', oldClassId).single();
             if (oldC) {
               const newIds = (oldC.studentIds || []).filter((id: string) => id !== targetUserId);
-              await db.classes.update(oldClassId, { studentIds: newIds } as any);
+              await supabase.from('classes').update({ studentIds: newIds }).eq('id', oldClassId);
             }
           }
           if (newClassId) {
-            const newC = await db.classes.get(newClassId);
+            const { data: newC } = await supabase.from('classes').select('*').eq('id', newClassId).single();
             if (newC) {
               const newIds = Array.from(new Set([...(newC.studentIds || []), targetUserId]));
-              await db.classes.update(newClassId, { studentIds: newIds } as any);
+              await supabase.from('classes').update({ studentIds: newIds }).eq('id', newClassId);
             }
           }
         }
@@ -197,15 +186,15 @@ const UserModal: React.FC<UserModalProps> = ({ editUser, onClose, schools, isAdm
         // Classes to remove teacher from
         const removed = oldIds.filter((id: string) => !newIds.includes(id));
         for (const cid of removed) {
-          const c = await db.classes.get(cid);
+          const { data: c } = await supabase.from('classes').select('*').eq('id', cid).single();
           if (c && c.teacherId === targetUserId) {
-            await db.classes.update(cid, { teacherId: undefined } as any);
+            await supabase.from('classes').update({ teacherId: null }).eq('id', cid);
           }
         }
         
         // Classes to add teacher to
         for (const cid of newIds) {
-          await db.classes.update(cid, { teacherId: targetUserId } as any);
+          await supabase.from('classes').update({ teacherId: targetUserId }).eq('id', cid);
         }
       }
 
@@ -217,19 +206,19 @@ const UserModal: React.FC<UserModalProps> = ({ editUser, onClose, schools, isAdm
         // Students to remove guardian from
         const removed = oldStudentIds.filter((id: string) => !newStudentIds.includes(id));
         for (const sid of removed) {
-          const s = await db.users.get(sid);
+          const { data: s } = await supabase.from('users').select('*').eq('id', sid).single();
           if (s && s.role === 'student') {
             const newGIds = (s.guardianIds || []).filter((id: string) => id !== targetUserId);
-            await db.users.update(sid, { guardianIds: newGIds } as any);
+            await supabase.from('users').update({ guardianIds: newGIds }).eq('id', sid);
           }
         }
         
         // Students to add guardian to
         for (const sid of newStudentIds) {
-          const s = await db.users.get(sid);
+          const { data: s } = await supabase.from('users').select('*').eq('id', sid).single();
           if (s && s.role === 'student') {
             const newGIds = Array.from(new Set([...(s.guardianIds || []), targetUserId]));
-            await db.users.update(sid, { guardianIds: newGIds } as any);
+            await supabase.from('users').update({ guardianIds: newGIds }).eq('id', sid);
           }
         }
       }
@@ -237,22 +226,21 @@ const UserModal: React.FC<UserModalProps> = ({ editUser, onClose, schools, isAdm
       // Fetch class grade if student
       let classGrade = undefined;
       if (data.role === 'student' && data.classId) {
-        const cls = await db.classes.get(data.classId);
+        const { data: cls } = await supabase.from('classes').select('grade').eq('id', data.classId).single();
         if (cls) classGrade = cls.grade;
       }
 
       const userUpdate: any = { 
         name: data.name, 
         role: data.role === 'master' ? 'admin' : data.role, 
-        isMaster: data.role === 'master' ? true : undefined,
-        schoolId: data.schoolId || undefined, 
+        isMaster: data.role === 'master' ? true : false,
+        schoolId: data.schoolId || null, 
         updatedAt: now,
-        grade: classGrade || (isEdit ? editUser.grade : undefined),
-        classId: data.role === 'student' ? data.classId : (data.role === 'teacher' ? data.classIds?.[0] : undefined),
+        grade: classGrade || (isEdit ? editUser.grade : null),
+        classId: data.role === 'student' ? data.classId || null : (data.role === 'teacher' ? data.classIds?.[0] || null : null),
         classIds: data.role === 'teacher' ? data.classIds : (data.role === 'student' && data.classId ? [data.classId] : []),
-        guardianId: data.role === 'student' ? data.guardianIds?.[0] : undefined,
-        guardianIds: data.role === 'student' ? data.guardianIds : undefined,
-        studentIds: data.role === 'guardian' ? data.studentIds : undefined
+        guardianIds: data.role === 'student' ? data.guardianIds : [],
+        studentIds: data.role === 'guardian' ? data.studentIds : []
       };
 
       if (data.password) {
@@ -261,19 +249,29 @@ const UserModal: React.FC<UserModalProps> = ({ editUser, onClose, schools, isAdm
       }
       
       const normalizedLogin = data.loginCode.trim().toLowerCase();
-      if (data.role === 'admin' || data.role === 'teacher' || data.role === 'master') userUpdate.email = normalizedLogin;
-      else if (data.role === 'student') userUpdate.studentCode = data.loginCode;
-      else userUpdate.guardianCode = data.loginCode;
+      if (data.role === 'admin' || data.role === 'teacher' || data.role === 'master') {
+          userUpdate.email = normalizedLogin;
+          userUpdate.studentCode = null;
+          userUpdate.guardianCode = null;
+      } else if (data.role === 'student') {
+          userUpdate.studentCode = data.loginCode;
+          userUpdate.email = null;
+          userUpdate.guardianCode = null;
+      } else {
+          userUpdate.guardianCode = data.loginCode;
+          userUpdate.email = null;
+          userUpdate.studentCode = null;
+      }
 
       if (isEdit) {
-        await db.users.update(editUser.id, userUpdate);
+        await supabase.from('users').update(userUpdate).eq('id', editUser.id);
         
         if (data.role === 'student') {
-          const stats = await db.gamificationStats.get(editUser.id);
+          const { data: stats } = await supabase.from('gamification_stats').select('*').eq('id', editUser.id).single();
           if (stats) {
-            await db.gamificationStats.update(editUser.id, { coins: data.initialCoins || 0 });
+            await supabase.from('gamification_stats').update({ coins: data.initialCoins || 0 }).eq('id', editUser.id);
           } else {
-            await db.gamificationStats.add({ 
+            await supabase.from('gamification_stats').insert({ 
               id: editUser.id, level: 1, xp: 0, coins: data.initialCoins || 100, streak: 0, lastStudyDate: now 
             });
           }
@@ -285,20 +283,24 @@ const UserModal: React.FC<UserModalProps> = ({ editUser, onClose, schools, isAdm
           id: targetUserId,
           isRegistered: !!data.password,
           createdAt: now, 
-          avatar: data.role === 'student' ? '/avatars/default-capybara.png' : undefined,
-          studentIds: data.role === 'guardian' ? data.studentIds : undefined
+          avatar: data.role === 'student' ? '/avatars/default-capybara.png' : null,
+          studentIds: data.role === 'guardian' ? data.studentIds : []
         };
         
-        await db.users.add(newUser);
+        await supabase.from('users').insert(newUser);
+        
         if (data.role === 'student') {
-          await db.gamificationStats.add({ 
+          await supabase.from('gamification_stats').insert({ 
             id: targetUserId, level: 1, xp: 0, coins: data.initialCoins || 100, streak: 0, lastStudyDate: now 
           });
         }
         toast.success('Usuário cadastrado!');
       }
       onClose();
-    } catch (e) { toast.error('Erro ao salvar.'); }
+    } catch (e: any) { 
+        console.error("Save error:", e);
+        toast.error('Erro ao salvar. Verifique se o login já existe.'); 
+    }
   };
 
   return (
@@ -362,7 +364,7 @@ const UserModal: React.FC<UserModalProps> = ({ editUser, onClose, schools, isAdm
                      <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest ml-1">Turma / Classe</label>
                      <select {...register('classId')} className="w-full bg-slate-50 border border-slate-200 rounded-2xl px-4 py-2.5 font-bold text-slate-800 outline-none appearance-none focus:bg-white transition-colors">
                         <option value="">Sem Turma</option>
-                        {schoolClasses.map(c => <option key={c.id} value={c.id}>{c.name} ({c.grade})</option>)}
+                        {schoolClasses.map((c: any) => <option key={c.id} value={c.id}>{c.name} ({c.grade})</option>)}
                      </select>
                   </div>
 
@@ -421,7 +423,7 @@ const UserModal: React.FC<UserModalProps> = ({ editUser, onClose, schools, isAdm
                 <div className="col-span-2 space-y-3">
                    <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest ml-1">Turmas Atribuídas</label>
                    <div className="grid grid-cols-2 gap-2 max-h-40 overflow-y-auto p-3 bg-slate-50/50 rounded-2xl border border-slate-200 custom-scrollbar">
-                      {schoolClasses.map(c => (
+                      {schoolClasses.map((c: any) => (
                         <label key={c.id} className="flex items-center gap-2.5 p-2 bg-white rounded-xl border border-slate-100 cursor-pointer hover:border-primary-200 hover:shadow-sm transition-all group">
                           <input 
                             type="checkbox" 
@@ -519,10 +521,10 @@ export const Users: React.FC = () => {
   const [isBulkActionsOpen, setIsBulkActionsOpen] = useState(false);
   const [editingUser, setEditingUser] = useState<any | null>(null);
 
-  const users = useLiveQuery(() => db.users.toArray()) || [];
-  const schools = useLiveQuery(() => db.schools.toArray()) || [];
-  const classes = useLiveQuery(() => db.classes.toArray()) || [];
-  const stats = useLiveQuery(() => db.gamificationStats.toArray()) || [];
+  const users = useSupabaseQuery<any>('users') || [];
+  const schools = useSupabaseQuery<any>('schools') || [];
+  const classes = useSupabaseQuery<any>('classes') || [];
+  const stats = useSupabaseQuery<any>('gamification_stats') || [];
 
   const filteredUsers = users.filter(u => {
     const matchesRole = activeRole === 'all' || u.role === activeRole;
@@ -533,14 +535,14 @@ export const Users: React.FC = () => {
   });
 
   const handleToggleStatus = async (user: any) => {
-    await db.users.update(user.id, { status: user.status === 'active' ? 'inactive' : 'active', updatedAt: new Date().toISOString() });
+    await supabase.from('users').update({ status: user.status === 'active' ? 'inactive' : 'active', updatedAt: new Date().toISOString() }).eq('id', user.id);
     toast.success('Status atualizado!');
   };
 
   const handleDelete = async (user: any) => {
     if (!window.confirm(`Excluir ${user.name}?`)) return;
-    await db.users.delete(user.id);
-    if (user.role === 'student') await db.gamificationStats.delete(user.id);
+    await supabase.from('users').delete().eq('id', user.id);
+    if (user.role === 'student') await supabase.from('gamification_stats').delete().eq('id', user.id);
     toast.success('Usuário removido.');
   };
 
@@ -657,7 +659,7 @@ export const Users: React.FC = () => {
                                             <div className="text-[9px] font-black text-slate-300 uppercase tracking-widest">Turmas:</div>
                                             <div className="flex flex-wrap gap-1">
                                                {cids.map((cid: string) => {
-                                                 const c = classes.find(cl => cl.id === cid);
+                                                 const c = classes.find((cl: any) => cl.id === cid);
                                                  return c ? (
                                                    <span key={cid} className="text-[9px] font-black bg-indigo-50 text-indigo-600 px-2 py-0.5 rounded-md border border-indigo-100/50">
                                                       {c.name}
@@ -669,7 +671,7 @@ export const Users: React.FC = () => {
                                        );
                                      }
 
-                                     const clsName = classes.find(c => c.id === cids[0])?.name || 'N/A';
+                                     const clsName = classes.find((c: any) => c.id === cids[0])?.name || 'N/A';
                                      return (
                                        <div className="text-[10px] font-black text-primary-500/70 flex items-center gap-1 uppercase tracking-tight">
                                           <BookOpen size={10} /> Turma: {clsName}
@@ -681,7 +683,7 @@ export const Users: React.FC = () => {
                                      <div className="text-[10px] font-black text-slate-400 flex items-center gap-1 uppercase tracking-tight">
                                         <UserCheck size={10} /> Responsaveis: {
                                           users
-                                            .filter(g => g.role === 'guardian' && (g.studentIds?.includes(u.id) || g.id === (u as any).guardianId))
+                                            .filter(g => g.role === 'guardian' && ((g.studentIds || []).includes(u.id)))
                                             .map(g => g.name.split(' ')[0])
                                             .join(', ') || 'Nenhum'
                                         }
@@ -692,7 +694,7 @@ export const Users: React.FC = () => {
                                      <div className="text-[10px] font-black text-slate-400 flex items-center gap-1 uppercase tracking-tight">
                                         <UsersIcon size={10} /> Alunos: {
                                           users
-                                            .filter(s => s.role === 'student' && ((s as any).guardianIds?.includes(u.id) || (s as any).guardianId === u.id || (u as any).studentIds?.includes(s.id)))
+                                            .filter(s => s.role === 'student' && ((s as any).guardianIds?.includes(u.id)))
                                             .map(s => s.name.split(' ')[0])
                                             .join(', ') || 'Nenhum'
                                         }
@@ -764,6 +766,9 @@ export const Users: React.FC = () => {
           schools={schools}
           isAdminMaster={isAdminMaster}
           userSchoolId={userSchoolId}
+          allUsers={users}
+          allClasses={classes}
+          allGamStats={stats}
         />
       )}
 

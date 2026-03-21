@@ -1,8 +1,7 @@
 import React, { useState } from 'react';
 import { Bell, Check, Flag, MailOpen, Trash2, Sparkles, Zap } from 'lucide-react';
 import { useAuthStore } from '../store/auth.store';
-import { db } from '../lib/dexie';
-import { useLiveQuery } from 'dexie-react-hooks';
+import { supabase } from '../lib/supabase';
 import { clsx } from 'clsx';
 import { toast } from 'sonner';
 
@@ -10,14 +9,26 @@ export const Notifications: React.FC = () => {
   const { user } = useAuthStore();
   const [filter, setFilter] = useState<'all' | 'unread'>('all');
 
-  // Load real notifications from Dexie
-  const notifications = useLiveQuery(async () => {
-    if (!user) return [];
-    return await db.notifications
-      .where('userId').equals(user.id)
-      .reverse()
-      .sortBy('createdAt');
-  }, [user]) || [];
+  const [notifications, setNotifications] = useState<any[]>([]);
+
+  const fetchNotifications = async () => {
+    if (!user) return;
+    const { data } = await supabase
+      .from('notifications')
+      .select('*')
+      .eq('userId', user.id)
+      .order('createdAt', { ascending: false });
+    
+    setNotifications(data || []);
+  };
+
+  React.useEffect(() => {
+    fetchNotifications();
+    const ch = supabase.channel('notif_channel')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'notifications', filter: `userId=eq.${user?.id}` }, fetchNotifications)
+      .subscribe();
+    return () => { supabase.removeChannel(ch); };
+  }, [user]);
 
   const filteredList = filter === 'all' ? notifications : notifications.filter(n => !n.read);
 
@@ -33,19 +44,21 @@ export const Notifications: React.FC = () => {
   };
 
   const handleMarkAsRead = async (id: string) => {
-    await db.notifications.update(id, { read: true });
+    await supabase.from('notifications').update({ read: true }).eq('id', id);
     toast.success('Notificação lida');
   };
 
   const handleMarkAllAsRead = async () => {
     if (!user) return;
-    const unread = notifications.filter(n => !n.read);
-    await Promise.all(unread.map(n => db.notifications.update(n.id, { read: true })));
+    const unreadIds = notifications.filter(n => !n.read).map(n => n.id);
+    if (unreadIds.length > 0) {
+      await supabase.from('notifications').update({ read: true }).in('id', unreadIds);
+    }
     toast.success('Todas as notificações foram marcadas como lidas');
   };
 
   const handleDelete = async (id: string) => {
-    await db.notifications.delete(id);
+    await supabase.from('notifications').delete().eq('id', id);
     toast.success('Notificação removida');
   };
 

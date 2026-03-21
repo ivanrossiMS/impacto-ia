@@ -1,8 +1,8 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuthStore } from '../../store/auth.store';
-import { db } from '../../lib/dexie';
-import { useLiveQuery } from 'dexie-react-hooks';
+import { useEffect } from 'react';
+import { supabase } from '../../lib/supabase';
 import { 
   Trophy, 
   Sword, 
@@ -26,16 +26,54 @@ export const DuelList: React.FC = () => {
   const user = useAuthStore(state => state.user);
   const [activeTab, setActiveTab] = useState<'active' | 'pending' | 'history'>('active');
 
-  const duels = useLiveQuery(async () => {
-    if (!user) return [];
-    return db.duels
-      .where('challengerId').equals(user.id)
-      .or('challengedId').equals(user.id)
-      .reverse()
-      .sortBy('createdAt');
-  }, [user?.id]) || [];
+  const [duels, setDuels] = useState<Duel[]>([]);
+  const [users, setUsers] = useState<any[]>([]);
+  const [classRanking, setClassRanking] = useState<number>(1);
+  const [loading, setLoading] = useState(true);
 
-  const users = useLiveQuery(() => db.users.toArray()) || [];
+  const fetchData = async () => {
+    if (!user) return;
+    try {
+      const { data: d1 } = await supabase.from('duels').select('*').eq('challengerId', user.id);
+      const { data: d2 } = await supabase.from('duels').select('*').eq('challengedId', user.id);
+      const allDuels = [...(d1 || []), ...(d2 || [])].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+      
+      const opponentIds = Array.from(new Set(allDuels.map(d => d.challengerId === user.id ? d.challengedId : d.challengerId)));
+      const { data: opponentUsers } = await supabase.from('users').select('*').in('id', opponentIds);
+      
+      let ranking = 1;
+      const { data: myData } = await supabase.from('users').select('classId').eq('id', user.id).single();
+      if (myData?.classId) {
+         const { data: classmates } = await supabase.from('users').select('id').eq('classId', myData.classId);
+         if (classmates) {
+           const classIds = classmates.map(c => c.id);
+           if (!classIds.includes(user.id)) classIds.push(user.id);
+           const { data: stats } = await supabase.from('gamification_stats').select('*').in('id', classIds);
+           if (stats) {
+             stats.sort((a, b) => (b.xp || 0) - (a.xp || 0));
+             const r = stats.findIndex(s => s.id === user.id) + 1;
+             ranking = r > 0 ? r : 1;
+           }
+         }
+      }
+
+      setDuels(allDuels);
+      setUsers(opponentUsers || []);
+      setClassRanking(ranking);
+      setLoading(false);
+    } catch (e) {
+      console.error(e);
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchData();
+    const ch = supabase.channel('duels_list')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'duels' }, fetchData)
+      .subscribe();
+    return () => { supabase.removeChannel(ch); };
+  }, [user?.id]);
 
   const activeDuels = duels.filter(d => 
     d.status === 'active' || 
@@ -138,32 +176,15 @@ export const DuelList: React.FC = () => {
     return acc + winXp + (myScore * 15);
   }, 0);
 
-  // Real ranking: based on XP among students in the same class
-  const classRanking = useLiveQuery(async () => {
-    if (!user) return 1;
-    
-    // 1. Get student's class
-    const allClasses = await db.classes.toArray();
-    const myClasses = allClasses.filter(c => c.studentIds?.includes(user.id));
-    
-    let studentIds: string[] = [];
-    for (const cls of myClasses) {
-      studentIds.push(...(cls.studentIds || []));
-    }
-    const studentIdSet = new Set([...studentIds, user.id]);
-    const finalStudentIds = Array.from(studentIdSet);
-
-    // 2. Load stats for these students
-    const statsAll = await db.gamificationStats.where('id').anyOf(finalStudentIds).toArray();
-    
-    // 3. Sort by XP and find current user's rank
-    statsAll.sort((a, b) => b.xp - a.xp);
-    const myRank = statsAll.findIndex(s => s.id === user.id) + 1;
-    
-    return myRank > 0 ? myRank : 1;
-  }, [user?.id]) || 1;
-
   const ranking = classRanking;
+
+  if (loading) {
+    return (
+      <div className="flex justify-center items-center h-screen">
+         <div className="w-16 h-16 border-4 border-special-100 border-t-special-500 rounded-full animate-spin"></div>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500 pb-10">

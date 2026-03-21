@@ -7,8 +7,7 @@ import {
   PenTool, BrainCircuit, Info
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { db } from '../../lib/dexie';
-import { useLiveQuery } from 'dexie-react-hooks';
+import { supabase } from '../../lib/supabase';
 import { Button } from '../../components/ui/Button';
 import { Badge } from '../../components/ui/Badge';
 import { toast } from 'sonner';
@@ -159,11 +158,20 @@ const LinkClassModal: React.FC<{ trail: any; isOpen: boolean; onClose: () => voi
   const [selectedClass, setSelectedClass] = useState('');
   const [year, setYear] = useState(new Date().getFullYear().toString());
 
-  const schools = useLiveQuery(() => db.schools.toArray()) || [];
-  const classes = useLiveQuery(async () => {
-    if (!selectedSchool) return [];
-    return db.classes.where('schoolId').equals(selectedSchool).toArray();
-  }, [selectedSchool]) || [];
+  const [schools, setSchools] = useState<any[]>([]);
+  const [classes, setClasses] = useState<any[]>([]);
+
+  React.useEffect(() => {
+    supabase.from('schools').select('*').then(({ data }) => setSchools(data || []));
+  }, []);
+
+  React.useEffect(() => {
+    if (!selectedSchool) {
+      setClasses([]);
+      return;
+    }
+    supabase.from('classes').select('*').eq('schoolId', selectedSchool).then(({ data }) => setClasses(data || []));
+  }, [selectedSchool]);
 
   if (!isOpen || !trail) return null;
 
@@ -334,8 +342,23 @@ export const AdminLearningTrails: React.FC = () => {
   const [trailToEdit, setTrailToEdit] = useState<any>(null);
   const [trailToLink, setTrailToLink] = useState<any>(null);
 
-  const trails = useLiveQuery(() => db.learningPaths.toArray()) || [];
-  const classes = useLiveQuery(() => db.classes.toArray()) || [];
+  const [trails, setTrails] = useState<any[]>([]);
+  const [classes, setClasses] = useState<any[]>([]);
+
+  const fetchData = async () => {
+    const { data: tData } = await supabase.from('learning_paths').select('*');
+    const { data: cData } = await supabase.from('classes').select('*');
+    if (tData) setTrails(tData);
+    if (cData) setClasses(cData);
+  };
+
+  React.useEffect(() => {
+    fetchData();
+    const ch = supabase.channel('admin_trails')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'learning_paths' }, fetchData)
+      .subscribe();
+    return () => { supabase.removeChannel(ch); };
+  }, []);
 
   const filteredTrails = trails.filter(t => 
     t.title.toLowerCase().includes(search.toLowerCase()) ||
@@ -345,21 +368,21 @@ export const AdminLearningTrails: React.FC = () => {
   const handleDelete = async (e: React.MouseEvent, id: string) => {
     e.stopPropagation();
     if (window.confirm('Excluir esta trilha permanentemente?')) {
-      await db.learningPaths.delete(id);
+      await supabase.from('learning_paths').delete().eq('id', id);
       toast.success('Trilha removida');
     }
   };
 
   const handleUpdateTrail = async (data: any) => {
     if (!data.id) return;
-    await db.learningPaths.update(data.id, data);
+    await supabase.from('learning_paths').update(data).eq('id', data.id);
     toast.success('Trilha atualizada com sucesso!');
   };
 
   const handleLinkTrail = async (classId: string, year: string) => {
     if (!trailToLink) return;
-    await db.learningPaths.update(trailToLink.id, { classId, schoolYear: year });
-    const cls = await db.classes.get(classId);
+    await supabase.from('learning_paths').update({ classId, schoolYear: year }).eq('id', trailToLink.id);
+    const { data: cls } = await supabase.from('classes').select('*').eq('id', classId).single();
     if (cls && cls.studentIds && cls.studentIds.length > 0) {
       // Notify students (and Guardians automatically via mirroring)
       await createBulkNotifications(
@@ -485,7 +508,7 @@ export const AdminLearningTrails: React.FC = () => {
       <TrailDetailModal trail={activeTrailDetail} isOpen={!!activeTrailDetail} onClose={() => setActiveTrailDetail(null)} />
       <EditTrailModal trail={trailToEdit} isOpen={!!trailToEdit} onClose={() => setTrailToEdit(null)} onSave={handleUpdateTrail} />
       <LinkClassModal trail={trailToLink} isOpen={!!trailToLink} onClose={() => setTrailToLink(null)} onLink={handleLinkTrail} />
-      <AIGeneratorModal isOpen={showAIModal} onClose={() => setShowAIModal(false)} onGenerate={(t) => db.learningPaths.add(t)} />
+      <AIGeneratorModal isOpen={showAIModal} onClose={() => setShowAIModal(false)} onGenerate={async (t) => { await supabase.from('learning_paths').insert(t); toast.success('Trilha gerada'); }} />
     </div>
   );
 };

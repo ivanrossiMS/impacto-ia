@@ -5,4 +5,5 @@ export interface IAuthRepository {
   validateFirstAccess(role: string, identifier: string): Promise<AppUser | null>;
   registerFirstAccess(userId: string, data: { email?: string; passwordHash: string }): Promise<void>;
   getCurrentUser(id: string): Promise<AppUser | null>;
+  getUserByRoleAndId(role: string, identifier: string): Promise<AppUser | null>;
 }

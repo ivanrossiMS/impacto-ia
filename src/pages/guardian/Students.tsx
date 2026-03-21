@@ -1,8 +1,7 @@
 import React, { useState } from 'react';
-import { db } from '../../lib/dexie';
+import { supabase } from '../../lib/supabase';
 import type { Student } from '../../types/user';
 import { useAuthStore } from '../../store/auth.store';
-import { useLiveQuery } from 'dexie-react-hooks';
 import { Card } from '../../components/ui/Card';
 import { Badge } from '../../components/ui/Badge';
 import { Button } from '../../components/ui/Button';
@@ -13,11 +12,15 @@ import { useNavigate } from 'react-router-dom';
 import { calculateLevel } from '../../lib/gamificationUtils';
 
 const StudentInfo: React.FC<{ student: Student }> = ({ student }) => {
-  const stats = useLiveQuery(() => db.gamificationStats.get(student.id), [student.id]);
-  const schoolClass = useLiveQuery(
-    () => student.classId ? db.classes.get(student.classId) : Promise.resolve(null),
-    [student.classId]
-  );
+  const [stats, setStats] = useState<any>(null);
+  const [schoolClass, setSchoolClass] = useState<any>(null);
+
+  React.useEffect(() => {
+    supabase.from('gamification_stats').select('*').eq('id', student.id).single().then(({ data }) => setStats(data));
+    if (student.classId) {
+      supabase.from('classes').select('*').eq('id', student.classId).single().then(({ data }) => setSchoolClass(data));
+    }
+  }, [student.id, student.classId]);
 
   return (
     <div>
@@ -38,34 +41,41 @@ const StudentInfo: React.FC<{ student: Student }> = ({ student }) => {
 };
 
 const StudentCardStats: React.FC<{ studentId: string }> = ({ studentId }) => {
-  const stats = useLiveQuery(async () => {
-    const results = await db.studentActivityResults.where('studentId').equals(studentId).toArray();
-    const activities = await db.activities.toArray();
-    
-    // Group by subject and calculate average score
-    const subjectStats: Record<string, { totalScore: number, count: number }> = {};
-    results.forEach(res => {
-      const act = activities.find(a => a.id === res.activityId);
-      if (act) {
-        const subject = act.subject || 'Geral';
-        if (!subjectStats[subject]) subjectStats[subject] = { totalScore: 0, count: 0 };
-        subjectStats[subject].totalScore += (res.score / (res.totalQuestions || 1));
-        subjectStats[subject].count += 1;
+  const [stats, setStats] = useState<{ completedCount: number, bestSubjects: { subject: string, avg: number }[] } | null>(null);
+
+  React.useEffect(() => {
+    const fetchStats = async () => {
+      const { data: results } = await supabase.from('student_activity_results').select('*').eq('studentId', studentId);
+      const { data: activities } = await supabase.from('activities').select('*');
+      
+      if (!results || !activities) {
+        setStats({ completedCount: 0, bestSubjects: [] });
+        return;
       }
-    });
 
-    const bestSubjects = Object.entries(subjectStats)
-      .map(([subject, data]) => ({
-        subject,
-        avg: Math.round((data.totalScore / data.count) * 100)
-      }))
-      .sort((a, b) => b.avg - a.avg)
-      .slice(0, 2);
+      // Group by subject and calculate average score
+      const subjectStats: Record<string, { totalScore: number, count: number }> = {};
+      results.forEach(res => {
+        const act = activities.find(a => a.id === res.activityId);
+        if (act) {
+          const subject = act.subject || 'Geral';
+          if (!subjectStats[subject]) subjectStats[subject] = { totalScore: 0, count: 0 };
+          subjectStats[subject].totalScore += ((res.score || 0) / (res.totalQuestions || 1));
+          subjectStats[subject].count += 1;
+        }
+      });
 
-    return {
-      completedCount: results.length,
-      bestSubjects
+      const bestSubjects = Object.entries(subjectStats)
+        .map(([subject, data]) => ({
+          subject,
+          avg: Math.round((data.totalScore / data.count) * 100)
+        }))
+        .sort((a, b) => b.avg - a.avg)
+        .slice(0, 2);
+
+      setStats({ completedCount: results.length, bestSubjects });
     };
+    fetchStats();
   }, [studentId]);
 
   if (!stats) return null;
@@ -125,26 +135,40 @@ export const Students: React.FC = () => {
   const [isLinkModalOpen, setIsLinkModalOpen] = useState(false);
   const [studentCode, setStudentCode] = useState('');
 
-  const students = useLiveQuery(async () => {
-    if (!user || user.role !== 'guardian') return [] as Student[];
-    
-    // Fetch by studentIds array (guardian side) OR guardianIds array (student side)
-    const liveG = await db.users.get(user.id);
-    const sidList = (liveG && liveG.role === 'guardian') ? (liveG.studentIds || []) : [];
+  const [studentsData, setStudentsData] = useState<Student[]>([]);
 
-    // Combine both to be safe
-    const linkedByGuardian = await db.users.where('id').anyOf(sidList).toArray();
-    const linkedByStudent = await db.users.where('guardianIds').equals(user.id).toArray();
+  const fetchStudents = async () => {
+    if (!user || user.role !== 'guardian') return;
     
-    // Unique list
-    const all = [...linkedByGuardian, ...linkedByStudent];
+    // Fetch Guardian data in case `user.studentIds` in store is stale
+    const { data: liveG } = await supabase.from('users').select('*').eq('id', user.id).single();
+    const sidList = liveG?.studentIds || [];
+
+    let linkedByGuardian: any[] = [];
+    if (sidList.length > 0) {
+      const { data } = await supabase.from('users').select('*').in('id', sidList);
+      linkedByGuardian = data || [];
+    }
+
+    // Usually guardianIds array field isn't natively queried well with .in() unless it's a JSON array. 
+    // Usually 'cs' (contains) is used.
+    const { data: linkedByStudent } = await supabase.from('users').select('*').contains('guardianIds', [user.id]);
+    
+    const all = [...linkedByGuardian, ...(linkedByStudent || [])];
     const uniqueIds = new Set();
-    return all.filter(s => {
+    const sortedStudents = all.filter(s => {
       if (s.role !== 'student' || uniqueIds.has(s.id)) return false;
       uniqueIds.add(s.id);
       return true;
     }) as Student[];
-  }, [user?.id]) || [];
+    setStudentsData(sortedStudents);
+  };
+
+  React.useEffect(() => {
+     fetchStudents();
+  }, [user?.id]);
+
+  const students = studentsData;
 
   const handleLinkStudent = async () => {
     if (!studentCode) return toast.error('Por favor, informe o código.');
@@ -152,7 +176,8 @@ export const Students: React.FC = () => {
 
     try {
       // Find student by code
-      const student = await db.users.where('studentCode').equals(studentCode).first() as Student | undefined;
+      const { data: st } = await supabase.from('users').select('*').eq('studentCode', studentCode).single();
+      const student = st as Student | undefined;
       
       if (!student || student.role !== 'student') {
         return toast.error('Código inválido ou estudante não encontrado.');
@@ -165,17 +190,19 @@ export const Students: React.FC = () => {
       }
 
       // Update student
-      await db.users.update(student.id, { 
+      await supabase.from('users').update({ 
         guardianIds: Array.from(new Set([...currentIds, user.id])),
         guardianId: currentIds[0] || user.id // Keep primary for compatibility
-      } as any);
+      }).eq('id', student.id);
 
       // Update guardian
-      const liveG = await db.users.get(user.id);
+      const { data: liveG } = await supabase.from('users').select('*').eq('id', user.id).single();
       if (liveG && liveG.role === 'guardian') {
         const newIds = Array.from(new Set([...(liveG.studentIds || []), student.id]));
-        await db.users.update(user.id, { studentIds: newIds } as any);
+        await supabase.from('users').update({ studentIds: newIds }).eq('id', user.id);
       }
+      
+      fetchStudents();
 
       toast.success(`Aluno ${student.name} vinculado com sucesso!`);
       setIsLinkModalOpen(false);

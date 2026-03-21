@@ -4,8 +4,7 @@ import { LayoutDashboard, School, Users, Settings, Database, Server, LogOut, Men
 import { useAuthStore } from '../store/auth.store';
 import { useUIStore } from '../store/ui.store';
 import { cn } from '../lib/utils';
-import { db } from '../lib/dexie';
-import { useLiveQuery } from 'dexie-react-hooks';
+import { supabase } from '../lib/supabase';
 import { format } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
 
@@ -14,29 +13,60 @@ export const AdminLayout: React.FC = () => {
   const { isSidebarOpen, setSidebarOpen } = useUIStore();
   const navigate = useNavigate();
 
-  const schoolsCount = useLiveQuery(() => db.schools.count()) || 0;
-  const usersCount = useLiveQuery(() => db.users.count()) || 0;
+  const [schoolsCount, setSchoolsCount] = React.useState(0);
+  const [usersCount, setUsersCount] = React.useState(0);
+  const [unreadSupportCount, setUnreadSupportCount] = React.useState(0);
+  const [unreadCount, setUnreadCount] = React.useState(0);
+  const [school, setSchool] = React.useState<any>(null);
 
   const isAdminMaster = user?.isMaster || user?.email === 'ivanrossi@outlook.com';
   const schoolId = user?.schoolId;
 
-  const unreadSupportCount = useLiveQuery(async () => {
-    if (!user) return 0;
-    try {
-      if (isAdminMaster) {
-        return await db.supportTickets.where('isReadByAdmin').equals(0).count();
-      }
-      if (schoolId) {
-        return await db.supportTickets
-          .where('schoolId').equals(schoolId)
-          .and(t => !t.isReadByAdmin)
-          .count();
-      }
-    } catch (e) {
-      console.error('Error fetching unread support count:', e);
+  const fetchLayoutData = async () => {
+    if (!user) return;
+    
+    // School data
+    if (schoolId) {
+      const { data: sch } = await supabase.from('schools').select('*').eq('id', schoolId).single();
+      if (sch) setSchool(sch);
     }
-    return 0;
-  }, [user, isAdminMaster, schoolId]) || 0;
+
+    // Counts (if master)
+    if (isAdminMaster) {
+      const { count: sCount } = await supabase.from('schools').select('*', { count: 'exact', head: true });
+      const { count: uCount } = await supabase.from('users').select('*', { count: 'exact', head: true });
+      setSchoolsCount(sCount || 0);
+      setUsersCount(uCount || 0);
+    }
+
+    // Unread Support
+    if (isAdminMaster) {
+      const { count: supportCount } = await supabase.from('support_tickets').select('*', { count: 'exact', head: true }).eq('isReadByAdmin', false);
+      setUnreadSupportCount(supportCount || 0);
+    } else if (schoolId) {
+      const { count: supportCount } = await supabase.from('support_tickets').select('*', { count: 'exact', head: true }).eq('schoolId', schoolId).eq('isReadByAdmin', false);
+      setUnreadSupportCount(supportCount || 0);
+    }
+
+    // Unread Notifications
+    const { count: notifCount } = await supabase.from('notifications').select('*', { count: 'exact', head: true }).eq('userId', user.id).eq('read', false);
+    setUnreadCount(notifCount || 0);
+  };
+
+  React.useEffect(() => {
+    fetchLayoutData();
+    const chSupport = supabase.channel('admin_layout_support')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'support_tickets' }, fetchLayoutData)
+      .subscribe();
+    const chNotifs = supabase.channel('admin_layout_notifs')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'notifications', filter: `userId=eq.${user?.id}` }, fetchLayoutData)
+      .subscribe();
+
+    return () => { 
+      supabase.removeChannel(chSupport);
+      supabase.removeChannel(chNotifs);
+    };
+  }, [user, isAdminMaster, schoolId]);
 
   const getGreeting = () => {
     const hour = new Date().getHours();
@@ -49,11 +79,6 @@ export const AdminLayout: React.FC = () => {
     logout();
     navigate('/login');
   };
-
-  const school = useLiveQuery(
-    async () => (schoolId ? await db.schools.get(schoolId) : undefined),
-    [schoolId]
-  );
 
   const navItems = [
     { to: '/admin', icon: LayoutDashboard, label: 'Geral', end: true },
@@ -197,13 +222,7 @@ export const AdminLayout: React.FC = () => {
                 className="relative p-2 rounded-lg text-slate-400 hover:bg-slate-100 transition-colors"
               >
                  <Bell size={20} />
-                 {(useLiveQuery(async () => {
-                   if (!user) return 0;
-                   return await db.notifications
-                     .where('userId').equals(user.id)
-                     .and(n => !n.read)
-                     .count();
-                 }, [user]) || 0) > 0 && (
+                 {unreadCount > 0 && (
                    <span className="absolute top-1.5 right-1.5 w-2.5 h-2.5 bg-red-500 rounded-full border-2 border-white shadow-sm"></span>
                  )}
               </button>

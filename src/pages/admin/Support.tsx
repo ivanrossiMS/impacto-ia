@@ -12,8 +12,7 @@ import { Card } from '../../components/ui/Card';
 import { Badge } from '../../components/ui/Badge';
 import { Button } from '../../components/ui/Button';
 import { cn } from '../../lib/utils';
-import { db } from '../../lib/dexie';
-import { useLiveQuery } from 'dexie-react-hooks';
+import { supabase } from '../../lib/supabase';
 import { toast } from 'sonner';
 import { format } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
@@ -29,48 +28,77 @@ export const AdminSupport: React.FC = () => {
   const [replyText, setReplyText] = useState('');
   const [selectedSchoolId, setSelectedSchoolId] = useState<string>('all');
 
-  const schools = useLiveQuery(() => db.schools.toArray()) || [];
+  const [schools, setSchools] = useState<any[]>([]);
+  const [ticketsData, setTicketsData] = useState<any[]>([]);
+  const [messages, setMessages] = useState<any[]>([]);
 
-  const tickets = useLiveQuery(async () => {
-    const allTickets = await db.supportTickets.toArray();
-    const allUsers = await db.users.toArray();
-    
-    return allTickets.filter(t => {
+  React.useEffect(() => {
+     // Fetch schools
+     supabase.from('schools').select('*').then(({ data }) => setSchools(data || []));
+  }, []);
+
+  const fetchTickets = async () => {
+     const { data: allTickets } = await supabase.from('support_tickets').select('*');
+     const { data: allUsers } = await supabase.from('users').select('id, schoolId');
+     
+     if (allTickets) {
+        // We only fetch data, then we'll filter it inside a useMemo or straight in render
+        const enriched = allTickets.map(t => {
+           if (!t.schoolId && allUsers) {
+              const u = allUsers.find(user => user.id === t.userId);
+              return { ...t, schoolId: u?.schoolId };
+           }
+           return t;
+        });
+        setTicketsData(enriched);
+     }
+  };
+
+  React.useEffect(() => {
+     fetchTickets();
+     const channel = supabase.channel('admin_support_tickets')
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'support_tickets' }, fetchTickets)
+        .subscribe();
+     return () => { supabase.removeChannel(channel); };
+  }, []);
+
+  const tickets = React.useMemo(() => {
+     return ticketsData.filter(t => {
       const matchesSearch = t.subject.toLowerCase().includes(searchTerm.toLowerCase()) ||
                            t.userName.toLowerCase().includes(searchTerm.toLowerCase());
       
-      // Admin Master sees everything. 
-      // Regular Admin only sees their school.
       let matchesAccess = true;
-      
       if (isAdminMaster) {
         if (selectedSchoolId !== 'all') {
           matchesAccess = t.schoolId === selectedSchoolId;
         }
       } else {
-        if (t.schoolId) {
-          matchesAccess = t.schoolId === userSchoolId;
-        } else {
-          // Fallback for older tickets without schoolId
-          const ticketUser = allUsers.find(u => u.id === t.userId);
-          matchesAccess = (ticketUser as any)?.schoolId === userSchoolId;
-        }
+        matchesAccess = t.schoolId === userSchoolId;
       }
-      
       return matchesSearch && matchesAccess;
     });
-  }, [searchTerm, isAdminMaster, userSchoolId, selectedSchoolId]) || [];
+  }, [ticketsData, searchTerm, isAdminMaster, userSchoolId, selectedSchoolId]);
 
   const selectedTicket = tickets.find(t => t.id === selectedTicketId);
-  
-  const messages = useLiveQuery(async () => {
-    if (!selectedTicketId) return [];
-    return db.ticketMessages
-      .where('ticketId')
-      .equals(selectedTicketId)
-      .sortBy('createdAt');
-  }, [selectedTicketId]) || [];
 
+  React.useEffect(() => {
+     if (!selectedTicketId) {
+        setMessages([]);
+        return;
+     }
+     const fetchMessages = async () => {
+        const { data } = await supabase.from('ticket_messages')
+           .select('*')
+           .eq('ticketId', selectedTicketId)
+           .order('createdAt', { ascending: true });
+        setMessages(data || []);
+     };
+     fetchMessages();
+     const channel = supabase.channel(`ticket_msgs_${selectedTicketId}`)
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'ticket_messages', filter: `ticketId=eq.${selectedTicketId}` }, fetchMessages)
+        .subscribe();
+     return () => { supabase.removeChannel(channel); };
+  }, [selectedTicketId]);
   const handleSendMessage = async () => {
     if (!selectedTicketId || !replyText.trim()) return;
 
@@ -85,14 +113,14 @@ export const AdminSupport: React.FC = () => {
         senderRole: 'admin'
       };
 
-      await db.ticketMessages.add(newMessage);
-      await db.supportTickets.update(selectedTicketId, { 
+      await supabase.from('ticket_messages').insert(newMessage);
+      await supabase.from('support_tickets').update({ 
         updatedAt: new Date().toISOString(),
         lastMessage: replyText,
         status: 'pending',
         isReadByParticipant: false,
         isReadByAdmin: true
-      });
+      }).eq('id', selectedTicketId);
 
       setReplyText('');
       toast.success('Resposta enviada!');
@@ -106,8 +134,8 @@ export const AdminSupport: React.FC = () => {
     if (!confirm('Tem certeza que deseja excluir este chamado permanentemente?')) return;
 
     try {
-      await db.supportTickets.delete(id);
-      await db.ticketMessages.where('ticketId').equals(id).delete();
+      await supabase.from('support_tickets').delete().eq('id', id);
+      await supabase.from('ticket_messages').delete().eq('ticketId', id);
       if (selectedTicketId === id) setSelectedTicketId(null);
       toast.success('Chamado excluído com sucesso.');
     } catch (error) {
@@ -118,7 +146,7 @@ export const AdminSupport: React.FC = () => {
   const handleToggleStatus = async (ticket: any) => {
     const newStatus = ticket.status === 'resolved' ? 'open' : 'resolved';
     try {
-      await db.supportTickets.update(ticket.id, { status: newStatus });
+      await supabase.from('support_tickets').update({ status: newStatus }).eq('id', ticket.id);
       toast.success(`Chamado ${newStatus === 'resolved' ? 'resolvido' : 'reaberto'}.`);
     } catch (error) {
       toast.error('Erro ao atualizar status.');
@@ -179,7 +207,9 @@ export const AdminSupport: React.FC = () => {
                   key={ticket.id}
                   onClick={() => {
                     setSelectedTicketId(ticket.id);
-                    db.supportTickets.update(ticket.id, { isReadByAdmin: true });
+                    if (!ticket.isReadByAdmin) {
+                      supabase.from('support_tickets').update({ isReadByAdmin: true }).eq('id', ticket.id);
+                    }
                   }}
                   className={cn(
                     "p-6 border-b border-slate-50 cursor-pointer transition-all hover:bg-slate-50 relative group",

@@ -7,8 +7,7 @@ import { Card } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
 import { User, Mail, Save, Camera, Lock, GraduationCap, Zap, Star } from 'lucide-react';
 import { useAuthStore } from '../../store/auth.store';
-import { db } from '../../lib/dexie';
-import { useLiveQuery } from 'dexie-react-hooks';
+import { supabase } from '../../lib/supabase';
 import { cn } from '../../lib/utils';
 import { calculateLevel } from '../../lib/gamificationUtils';
 
@@ -35,17 +34,39 @@ export const Profile: React.FC = () => {
   const fileInputRef = React.useRef<HTMLInputElement>(null);
   const [avatarPreview, setAvatarPreview] = React.useState<string | undefined>(user?.avatar || '/avatars/default-capybara.png');
 
-  const liveUser = useLiveQuery(() => db.users.get(user?.id || ''), [user?.id]) as any;
-  const myClass = useLiveQuery(async () => {
-    if (!liveUser?.classId) return null;
-    return db.classes.get(liveUser.classId);
-  }, [liveUser?.classId]);
-  const stats = useLiveQuery(() => db.gamificationStats.get(user?.id || ''), [user?.id]);
+  // liveUser kept for potential future use or removed if unused.
+  const [, setLiveUser] = React.useState<any>(null);
+  const [myClass, setMyClass] = React.useState<any>(null);
+  const [stats, setStats] = React.useState<any>(null);
+
+  const fetchProfileData = async () => {
+    if (!user) return;
+    
+    // User
+    const { data: u } = await supabase.from('users').select('*').eq('id', user.id).single();
+    if (u) {
+      setLiveUser(u);
+      if (u.classId) {
+        const { data: c } = await supabase.from('classes').select('*').eq('id', u.classId).single();
+        if (c) setMyClass(c);
+      }
+    }
+
+    // Stats
+    const { data: s } = await supabase.from('gamification_stats').select('*').eq('id', user.id).single();
+    if (s) setStats(s);
+  };
+
+  React.useEffect(() => {
+    fetchProfileData();
+    const chStats = supabase.channel('profile_stats')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'gamification_stats', filter: `id=eq.${user?.id}` }, fetchProfileData)
+      .subscribe();
+    return () => { supabase.removeChannel(chStats); };
+  }, [user]);
 
   const className = myClass?.name || '';
   const currentLevel = stats ? calculateLevel(stats.xp) : 1;
-
-
   const { register, handleSubmit, reset, formState: { errors, isSubmitting } } = useForm<ProfileFormData>({
     resolver: zodResolver(profileSchema),
     defaultValues: {
@@ -92,7 +113,7 @@ export const Profile: React.FC = () => {
         updateData.passwordHash = data.password;
       }
 
-      await db.users.update(user.id, updateData);
+      await supabase.from('users').update(updateData).eq('id', user.id);
       
       const updatedUser = { ...user, ...updateData };
       login(updatedUser as any);

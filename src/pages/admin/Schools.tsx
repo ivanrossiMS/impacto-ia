@@ -7,8 +7,8 @@ import {
 import { Card } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
 import { Badge } from '../../components/ui/Badge';
-import { db } from '../../lib/dexie';
-import { useLiveQuery } from 'dexie-react-hooks';
+import { supabase } from '../../lib/supabase';
+import { useSupabaseQuery } from '../../hooks/useSupabase';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
@@ -42,12 +42,16 @@ type ClassFormData = z.infer<typeof classSchema>;
 
 // ─── Hooks ───────────────────────────────────────────────────────────────────
 function useSchoolStats(schoolId: string) {
-  const students = useLiveQuery(() => db.users.where({ schoolId, role: 'student' }).toArray(), [schoolId]) || [];
-  const teachers = useLiveQuery(() => db.users.where({ schoolId, role: 'teacher' }).toArray(), [schoolId]) || [];
-  const classes = useLiveQuery(() => db.classes.where({ schoolId }).toArray(), [schoolId]) || [];
+  const allUsers = useSupabaseQuery<any>('users') || [];
+  const allClasses = useSupabaseQuery<any>('classes') || [];
+  const allGamStats = useSupabaseQuery<any>('gamification_stats') || [];
+
+  const students = allUsers.filter(u => u.schoolId === schoolId && u.role === 'student');
+  const teachers = allUsers.filter(u => u.schoolId === schoolId && u.role === 'teacher');
+  const classes = allClasses.filter(c => c.schoolId === schoolId);
   
   const studentIds = students.map(s => s.id);
-  const studentStats = useLiveQuery(() => db.gamificationStats.where('id').anyOf(studentIds).toArray(), [studentIds]) || [];
+  const studentStats = allGamStats.filter(s => studentIds.includes(s.id));
   
   const totalCoins = studentStats.reduce((sum, s) => sum + (s.coins || 0), 0);
   const totalXp = studentStats.reduce((sum, s) => sum + (s.xp || 0), 0);
@@ -88,26 +92,26 @@ const ClassForm: React.FC<{ schoolId: string; teachers: any[]; editingClass?: an
 
     if (newTeacherId !== oldTeacherId) {
       if (oldTeacherId) {
-        const oldT = await db.users.get(oldTeacherId);
+        const { data: oldT } = await supabase.from('users').select('*').eq('id', oldTeacherId).single();
         if (oldT) {
-          const newIds = ((oldT as any).classIds || []).filter((id: string) => id !== targetClassId);
-          await db.users.update(oldTeacherId, { classIds: newIds, classId: newIds[0] || undefined } as any);
+          const newIds = (oldT.classIds || []).filter((id: string) => id !== targetClassId);
+          await supabase.from('users').update({ classIds: newIds, classId: newIds[0] || null }).eq('id', oldTeacherId);
         }
       }
       if (newTeacherId) {
-        const newT = await db.users.get(newTeacherId);
+        const { data: newT } = await supabase.from('users').select('*').eq('id', newTeacherId).single();
         if (newT) {
-          const newIds = Array.from(new Set([...((newT as any).classIds || []), targetClassId]));
-          await db.users.update(newTeacherId, { classIds: newIds, classId: newIds[0] } as any);
+          const newIds = Array.from(new Set([...(newT.classIds || []), targetClassId]));
+          await supabase.from('users').update({ classIds: newIds, classId: newIds[0] }).eq('id', newTeacherId);
         }
       }
     }
 
     if (editingClass) {
-      await db.classes.update(editingClass.id, { ...data, updatedAt: now });
+      await supabase.from('classes').update({ ...data, updatedAt: now }).eq('id', editingClass.id);
       toast.success('Turma atualizada!');
     } else {
-      await db.classes.add({ id: targetClassId, ...data, schoolId, studentIds: [], createdAt: now, updatedAt: now } as any);
+      await supabase.from('classes').insert({ id: targetClassId, ...data, schoolId, studentIds: [], createdAt: now, updatedAt: now });
       toast.success('Turma criada!');
     }
     onDone();
@@ -158,9 +162,12 @@ const SchoolDashboard: React.FC<{ school: SchoolRecord; onClose: () => void }> =
   const [search, setSearch] = useState('');
   const [yearFilter, setYearFilter] = useState<string>('all');
 
-  const users = useLiveQuery(() => db.users.where({ schoolId: school.id }).toArray(), [school.id]) || [];
-  const classes = useLiveQuery(() => db.classes.where({ schoolId: school.id }).toArray(), [school.id]) || [];
-  const gamStats = useLiveQuery(() => db.gamificationStats.toArray(), []) || [];
+  const allUsers = useSupabaseQuery<any>('users') || [];
+  const allClasses = useSupabaseQuery<any>('classes') || [];
+  const gamStats = useSupabaseQuery<any>('gamification_stats') || [];
+
+  const users = allUsers.filter(u => u.schoolId === school.id);
+  const classes = allClasses.filter(c => c.schoolId === school.id);
 
   const filteredItems = (activeTab === 'classes' ? classes : [])
     .filter((it: any) => it.name.toLowerCase().includes(search.toLowerCase()))
@@ -170,10 +177,10 @@ const SchoolDashboard: React.FC<{ school: SchoolRecord; onClose: () => void }> =
 
   const handleDelete = async (item: any) => {
     if (!window.confirm(`Excluir ${item.name}?`)) return;
-    if (activeTab === 'classes') await db.classes.delete(item.id);
+    if (activeTab === 'classes') await supabase.from('classes').delete().eq('id', item.id);
     else {
-      await db.users.delete(item.id);
-      if (item.role === 'student') await db.gamificationStats.delete(item.id);
+      await supabase.from('users').delete().eq('id', item.id);
+      if (item.role === 'student') await supabase.from('gamification_stats').delete().eq('id', item.id);
     }
     toast.success('Excluído com sucesso');
   };
@@ -215,7 +222,7 @@ const SchoolDashboard: React.FC<{ school: SchoolRecord; onClose: () => void }> =
         ctx?.drawImage(img, 0, 0, width, height);
         
         const resizedBase64 = canvas.toDataURL('image/png', 0.8);
-        await db.schools.update(school.id, { logo: resizedBase64 });
+        await supabase.from('schools').update({ logo: resizedBase64 }).eq('id', school.id);
         toast.success('Logo redimensionada e salva!');
       };
       img.src = reader.result as string;
@@ -638,9 +645,9 @@ export const Schools: React.FC = () => {
   const [isAddOpen, setIsAddOpen] = useState(false);
   const [selectedSchool, setSelectedSchool] = useState<SchoolRecord | null>(null);
 
-  const schools = useLiveQuery(() => db.schools.toArray()) || [];
-  const users = useLiveQuery(() => db.users.toArray()) || [];
-  const classes = useLiveQuery(() => db.classes.toArray()) || [];
+  const schools = useSupabaseQuery<any>('schools') || [];
+  const users = useSupabaseQuery<any>('users') || [];
+  const classes = useSupabaseQuery<any>('classes') || [];
 
   const filteredSchools = schools.filter(s => (isAdminMaster || s.id === userSchoolId) && s.name.toLowerCase().includes(searchTerm.toLowerCase()));
 
@@ -651,7 +658,7 @@ export const Schools: React.FC = () => {
   const { register, handleSubmit, reset } = useForm<SchoolFormData>({ defaultValues: { status: 'active' } });
 
   const onSubmit = async (data: SchoolFormData) => {
-    await db.schools.add({ id: crypto.randomUUID(), ...data, usersCount: 0, globalScore: 0 } as any);
+    await supabase.from('schools').insert({ id: crypto.randomUUID(), ...data, usersCount: 0, globalScore: 0 });
     toast.success('Escola Cadastrada!');
     setIsAddOpen(false);
     reset();
@@ -659,14 +666,14 @@ export const Schools: React.FC = () => {
 
   const handleToggleStatus = async (school: any, e: React.MouseEvent) => {
     e.stopPropagation();
-    await db.schools.update(school.id, { status: school.status === 'active' ? 'inactive' : 'active' });
+    await supabase.from('schools').update({ status: school.status === 'active' ? 'inactive' : 'active' }).eq('id', school.id);
     toast.success('Status atualizado!');
   };
 
   const handleDelete = async (school: any, e: React.MouseEvent) => {
     e.stopPropagation();
     if (window.confirm(`Excluir ${school.name}?`)) {
-      await db.schools.delete(school.id);
+      await supabase.from('schools').delete().eq('id', school.id);
       toast.success('Excluída!');
     }
   };

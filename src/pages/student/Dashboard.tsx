@@ -3,8 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { useAuthStore } from '../../store/auth.store';
 import { useAvatarStore } from '../../store/avatar.store';
 import { updateGamificationStats } from '../../lib/gamificationUtils';
-import { db } from '../../lib/dexie';
-import { useLiveQuery } from 'dexie-react-hooks';
+import { supabase } from '../../lib/supabase';
 import {
   Target,
   ChevronRight,
@@ -34,7 +33,7 @@ import { Badge } from '../../components/ui/Badge';
 import { getLevelProgress } from '../../lib/gamificationUtils';
 import { cn } from '../../lib/utils';
 import { incrementMissionProgress } from '../../lib/missionUtils';
-import { ensureMissionsAreUpToDate, checkAndUnlockAchievements } from '../../lib/gameSeeder';
+import { checkAndUnlockAchievements } from '../../lib/gameSeeder';
 
 
 
@@ -44,76 +43,123 @@ export const StudentDashboard: React.FC = () => {
   const user = useAuthStore(state => state.user);
   const { profile, fetchProfile, fetchCatalog, catalog } = useAvatarStore();
   
-  const stats = useLiveQuery(() => db.gamificationStats.get(user?.id || ''), [user?.id]);
-  
-  const liveUser = useLiveQuery(() => db.users.get(user?.id || ''), [user?.id]) as any;
-  const myClass = useLiveQuery(async () => {
-    if (!liveUser?.classId) return null;
-    return db.classes.get(liveUser.classId);
-  }, [liveUser?.classId]);
-
-  const activeMission = useLiveQuery(async () => {
-    if (!user) return null;
-    const studentMissions = await db.studentMissions.where('studentId').equals(user.id).toArray();
-    const pending = studentMissions.filter(m => !m.completedAt);
-    if (pending.length === 0) return null;
-    const first = pending[0];
-    const detail = await db.missions.get(first.missionId);
-    return { ...first, detail };
-  }, [user?.id]) || null;
-
-  const activePath = useLiveQuery(async () => {
-    if (!user || !liveUser) return null;
-    
-    const userClassId = liveUser.classId || '';
-    const userGrade = liveUser.grade || myClass?.grade || '';
-    const currentYear = new Date().getFullYear().toString();
-
-    // 1. Try to find trails specifically linked to this class
-    let classPaths = await db.learningPaths
-      .where('classId').equals(userClassId)
-      .filter(p => !p.schoolYear || p.schoolYear === currentYear)
-      .toArray();
-
-    // 2. Also find general trails for this grade (not linked to any class)
-    let generalPaths = await db.learningPaths
-      .where('grade').equals(userGrade)
-      .filter(p => !p.classId || p.classId === '')
-      .filter(p => !p.schoolYear || p.schoolYear === currentYear)
-      .toArray();
-
-    let allPathDefs = [...classPaths, ...generalPaths];
-
-    const studentProgress = await db.studentProgress.where('studentId').equals(user.id).toArray();
-    const inProgress = studentProgress.filter(p => p.status === 'in_progress');
-    
-    if (inProgress.length > 0) {
-      const first = inProgress[0];
-      const detail = await db.learningPaths.get(first.pathId);
-      return { ...first, detail };
-    } else if (allPathDefs.length > 0) {
-      return { 
-        id: 'none', 
-        studentId: user.id, 
-        pathId: allPathDefs[0].id, 
-        completedStepIds: [], 
-        status: 'not_started', 
-        startedAt: '',
-        detail: allPathDefs[0]
-      };
-    }
-    return null;
-  }, [user?.id, liveUser, myClass]);
-
-  const achievements = useLiveQuery(async () => {
-    if (!user) return [];
-    const achievDefs = await db.achievements.toArray();
-    const rawAch = await db.studentAchievements.where('studentId').equals(user.id).toArray();
-    return rawAch.map(a => ({ ...a, detail: achievDefs.find(d => d.id === a.achievementId) }));
-  }, [user?.id]) || [];
-
-  const className = myClass?.name || '';
+  const [dashboardData, setDashboardData] = useState<any>({
+    stats: null,
+    liveUser: null,
+    myClass: null,
+    activeMission: null,
+    activePath: null,
+    achievements: [],
+    availableActivities: [],
+    duelData: { recent: [] }
+  });
   const [loading, setLoading] = useState(true);
+
+  const fetchDashboardData = async () => {
+    if (!user) return;
+    
+    try {
+      // 1. Stats
+      const { data: stats } = await supabase.from('gamification_stats').select('*').eq('id', user.id).single();
+
+      // 2. User & Class
+      const { data: liveUser } = await supabase.from('users').select('*').eq('id', user.id).single();
+      let myClass = null;
+      if (liveUser?.classId) {
+        const { data: c } = await supabase.from('classes').select('*').eq('id', liveUser.classId).single();
+        myClass = c;
+      }
+
+      // 3. Active Mission
+      let activeMission = null;
+      const { data: studentMissions } = await supabase.from('student_missions').select('*').eq('studentId', user.id).is('completedAt', null);
+      if (studentMissions && studentMissions.length > 0) {
+        const first = studentMissions[0];
+        const { data: detail } = await supabase.from('missions').select('*').eq('id', first.missionId).single();
+        activeMission = { ...first, detail };
+      }
+
+      // 4. Active Path
+      let activePath = null;
+      const userGrade = liveUser?.grade || myClass?.grade || '';
+      const currentYear = new Date().getFullYear().toString();
+      
+      let classPaths: any[] = [];
+      if (liveUser?.classId) {
+         const { data: cp } = await supabase.from('learning_paths').select('*').eq('classId', liveUser.classId);
+         classPaths = (cp || []).filter(p => !p.schoolYear || p.schoolYear === currentYear);
+      }
+      const { data: gp } = await supabase.from('learning_paths').select('*').eq('grade', userGrade);
+      let generalPaths = (gp || []).filter(p => (!p.classId || p.classId === '') && (!p.schoolYear || p.schoolYear === currentYear));
+      
+      let allPathDefs = [...classPaths, ...generalPaths];
+      const { data: studentProgress } = await supabase.from('student_progress').select('*').eq('studentId', user.id).eq('status', 'in_progress');
+      
+      if (studentProgress && studentProgress.length > 0) {
+        const first = studentProgress[0];
+        const detail = allPathDefs.find(p => p.id === first.pathId); // might need fetch if not in list
+        activePath = { ...first, detail };
+      } else if (allPathDefs.length > 0) {
+        activePath = { 
+          id: 'none', studentId: user.id, pathId: allPathDefs[0].id, 
+          completedStepIds: [], status: 'not_started', startedAt: '',
+          detail: allPathDefs[0]
+        };
+      }
+
+      // 5. Achievements
+      const { data: achievDefs } = await supabase.from('achievements').select('*');
+      const { data: rawAch } = await supabase.from('student_achievements').select('*').eq('studentId', user.id);
+      const achievements = (rawAch || []).map(a => ({ ...a, detail: (achievDefs || []).find(d => d.id === a.achievementId) }));
+
+      // 6. Activities
+      let availableActivities: any[] = [];
+      if (liveUser?.classId) {
+        const { data: classActivities } = await supabase.from('activities').select('*').eq('classId', liveUser.classId);
+        const { data: results } = await supabase.from('student_activity_results').select('*').eq('studentId', user.id);
+        
+        availableActivities = (classActivities || []).map(act => {
+          const result = (results || []).find(r => r.activityId === act.id);
+          return { ...act, status: result ? 'Concluída' : 'Pendente' };
+        }).sort((a, b) => b.id.localeCompare(a.id));
+      }
+
+      // 7. Duels
+      const { data: d1 } = await supabase.from('duels').select('*').eq('challengerId', user.id);
+      const { data: d2 } = await supabase.from('duels').select('*').eq('challengedId', user.id);
+      let allDuels = [...(d1 || []), ...(d2 || [])].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+      
+      const recent = await Promise.all(allDuels.slice(0, 3).map(async (d: any) => {
+        const opponentId = d.challengerId === user.id ? d.challengedId : d.challengerId;
+        const { data: opponent } = await supabase.from('users').select('name').eq('id', opponentId).single();
+        
+        let outcome = 'Pendente';
+        if (d.status === 'completed') {
+          if (d.winnerId === user.id) outcome = 'Vitória';
+          else if (d.winnerId === 'draw') outcome = 'Empate';
+          else outcome = 'Derrota';
+        }
+        const myScore = d.challengerId === user.id ? d.challengerScore : d.challengedScore;
+        const opScore = d.challengerId === user.id ? d.challengedScore : d.challengerScore;
+
+        return { 
+          ...d, 
+          opponentName: opponent?.name?.split(' ')[0] || 'Oponente',
+          outcome, myScore, opScore
+        };
+      }));
+
+      setDashboardData({
+        stats, liveUser, myClass, activeMission, activePath,
+        achievements, availableActivities, duelData: { recent }
+      });
+    } catch (e) {
+       console.error("Dashboard Supabase fetch error:", e);
+    }
+  };
+
+  const { stats, myClass, activeMission, activePath, achievements } = dashboardData;
+  const className = myClass?.name || '';
  
   // --- AI Tips Engine ---
   const ALL_AI_TIPS = [
@@ -192,54 +238,7 @@ export const StudentDashboard: React.FC = () => {
   }, []);
   // ----------------------
 
-  // --- Real Data for New Cards ---
-  const availableActivities = useLiveQuery(async () => {
-    if (!liveUser?.classId) return [];
-    // Get all activities for this class
-    const classActivities = await db.activities.where('classId').equals(liveUser.classId).toArray();
-    // Get results for this student
-    const results = await db.studentActivityResults.where('studentId').equals(user?.id || '').toArray();
-    
-    return classActivities.map(act => {
-      const result = results.find(r => r.activityId === act.id);
-      return { ...act, status: result ? 'Concluída' : 'Pendente' };
-    }).sort((a, b) => b.id.localeCompare(a.id)); // Assume higher ID = newer
-  }, [liveUser?.classId, user?.id]) || [];
-
-  const duelData = useLiveQuery(async () => {
-    if (!user) return { recent: [] };
-    const allDuels = await db.duels
-      .where('challengerId').equals(user.id)
-      .or('challengedId').equals(user.id)
-      .reverse()
-      .sortBy('createdAt');
-    
-    const recent = await Promise.all(allDuels.slice(0, 3).map(async d => {
-      const opponentId = d.challengerId === user.id ? d.challengedId : d.challengerId;
-      const opponent = await db.users.get(opponentId);
-      
-      let outcome = 'Pendente';
-      if (d.status === 'completed') {
-        if (d.winnerId === user.id) outcome = 'Vitória';
-        else if (d.winnerId === 'draw') outcome = 'Empate';
-        else outcome = 'Derrota';
-      }
-      
-      const myScore = d.challengerId === user.id ? d.challengerScore : d.challengedScore;
-      const opScore = d.challengerId === user.id ? d.challengedScore : d.challengerScore;
-
-      return { 
-        ...d, 
-        opponentName: opponent?.name.split(' ')[0] || 'Oponente',
-        outcome,
-        myScore,
-        opScore
-      };
-    }));
-    
-    return { recent };
-  }, [user?.id]) || { recent: [] };
-  // -------------------------------
+  const { availableActivities, duelData } = dashboardData;
 
   useEffect(() => {
     if (!user) return;
@@ -247,9 +246,9 @@ export const StudentDashboard: React.FC = () => {
       await fetchProfile(user.id);
       await fetchCatalog();
       try {
+        await fetchDashboardData();
         await updateGamificationStats(user.id, {}); // Updates streak if needed
         await checkAndUnlockAchievements(user.id);
-        await ensureMissionsAreUpToDate();
         await incrementMissionProgress(user.id, 'login', 1);
       } catch (error) {
         console.error('Error updating gamification stats:', error);
@@ -257,6 +256,19 @@ export const StudentDashboard: React.FC = () => {
       setLoading(false);
     };
     init();
+    
+    const channel = supabase.channel('dashboard_updates')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'gamification_stats' }, () => {
+        fetchDashboardData();
+      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'student_missions' }, () => {
+        fetchDashboardData();
+      })
+      .subscribe();
+      
+    return () => {
+      supabase.removeChannel(channel);
+    };
   }, [user?.id, fetchProfile, fetchCatalog]);
 
   if (loading) {
@@ -476,7 +488,7 @@ export const StudentDashboard: React.FC = () => {
 
             {/* Listagem das Últimas 3 Atividades */}
             <div className="space-y-3 flex-1">
-              {availableActivities.slice(0, 3).map((act) => (
+              {availableActivities.slice(0, 3).map((act: any) => (
                 <div key={act.id} className="flex items-center justify-between p-4 bg-slate-50/50 border border-slate-100 rounded-2xl hover:bg-white hover:border-primary-100 transition-all group/item">
                   <div className="flex items-center gap-3">
                     <div className={cn(
@@ -527,7 +539,7 @@ export const StudentDashboard: React.FC = () => {
                   <p className="text-slate-400 font-bold text-sm uppercase tracking-widest leading-none mt-1">Desafio de Conhecimento</p>
                 </div>
               </div>
-              {duelData.recent.filter(d => d.status === 'active').length > 0 && (
+              {duelData.recent.filter((d: any) => d.status === 'active').length > 0 && (
                 <div className="bg-energy-500 animate-bounce text-white px-4 py-2 rounded-xl font-black text-sm shadow-lg shadow-energy-500/20">
                   Duelo Ativo!
                 </div>
@@ -536,7 +548,7 @@ export const StudentDashboard: React.FC = () => {
 
             {/* Listagem dos Últimos 3 Duelos */}
             <div className="space-y-3 flex-1">
-              {duelData.recent.map((duel) => (
+              {duelData.recent.map((duel: any) => (
                 <div key={duel.id} className="flex items-center justify-between p-4 bg-slate-50/50 border border-slate-100 rounded-2xl hover:bg-white hover:border-special-100 transition-all group/duel">
                   <div className="flex flex-col">
                     <div className="flex items-center gap-2">

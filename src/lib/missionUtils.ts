@@ -1,4 +1,4 @@
-import { db } from './dexie';
+import { supabase } from './supabase';
 import { toast } from 'sonner';
 import { updateGamificationStats } from './gamificationUtils';
 
@@ -20,39 +20,56 @@ export async function incrementMissionProgress(
   }
 
   // 1. Get all active missions that match this criteria
-  const activeMissions = await db.missions.where('criteria').equals(criteria).toArray();
-  if (activeMissions.length === 0) return;
+  const { data: activeMissions, error: missionsError } = await supabase
+    .from('missions')
+    .select('*')
+    .eq('criteria', criteria);
+
+  if (missionsError || !activeMissions || activeMissions.length === 0) return;
 
   // 2. For each mission, update the student's progress
   for (const mission of activeMissions) {
     // Check if progress entry exists
-    let progress = await db.studentMissions
-      .where('[studentId+missionId]')
-      .equals([studentId, mission.id])
-      .first();
+    let { data: progress } = await supabase
+      .from('student_missions')
+      .select('*')
+      .eq('studentId', studentId)
+      .eq('missionId', mission.id)
+      .single();
 
     if (!progress) {
       // Create new progress entry
-      progress = {
+      const newProgress = {
         id: crypto.randomUUID(),
         studentId,
         missionId: mission.id,
         currentCount: 0
       };
-      await db.studentMissions.add(progress);
+      
+      const { data: insertedProgress, error: insertError } = await supabase
+        .from('student_missions')
+        .insert(newProgress)
+        .select()
+        .single();
+        
+      if (insertError) continue;
+      progress = insertedProgress;
     }
 
     // Skip if already completed
-    if (progress.completedAt) continue;
+    if (progress?.completedAt) continue;
 
     // Increment count
     const newCount = (progress.currentCount || 0) + amount;
     const isNowCompleted = newCount >= mission.targetCount;
 
-    await db.studentMissions.update(progress.id, {
-      currentCount: newCount,
-      completedAt: isNowCompleted ? new Date().toISOString() : undefined
-    });
+    await supabase
+      .from('student_missions')
+      .update({
+        currentCount: newCount,
+        completedAt: isNowCompleted ? new Date().toISOString() : null
+      })
+      .eq('id', progress.id);
 
     if (isNowCompleted) {
       toast.success(`Missão Concluída: ${mission.title}! 🎉`, {

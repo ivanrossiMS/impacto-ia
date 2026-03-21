@@ -17,8 +17,7 @@ import {
   TrendingUp,
   Award
 } from 'lucide-react';
-import { db } from '../../lib/dexie';
-import { useLiveQuery } from 'dexie-react-hooks';
+import { supabase } from '../../lib/supabase';
 import { cn } from '../../lib/utils';
 import { Card } from '../../components/ui/Card';
 import { Badge } from '../../components/ui/Badge';
@@ -43,35 +42,235 @@ export const AdminDashboard: React.FC = () => {
 
   const [searchTerm, setSearchTerm] = useState('');
   const navigate = useNavigate();
-  
-  // Real database metrics with filtering
-  const usersCount = useLiveQuery(() => {
-    if (isAdminMaster) return db.users.count();
-    return db.users.where('schoolId').equals(userSchoolId || '').count();
-  }, [isAdminMaster, userSchoolId]) || 0;
+  const [metrics, setMetrics] = useState({
+    usersCount: 0,
+    schools: [] as any[],
+    activitiesCount: 0,
+    classesCount: 0,
+    supportStats: { open: 0, resolved: 0, pending: 0, avgTime: '...' },
+    rankingData: [] as any[],
+    topStudents: [] as any[],
+    engagementData: { chartData: [] as any[], activeToday: 0 }
+  });
 
-  const schools = useLiveQuery(() => {
-    if (isAdminMaster) return db.schools.toArray();
-    return db.schools.where('id').equals(userSchoolId || '').toArray();
-  }, [isAdminMaster, userSchoolId]) || [];
+  const fetchDashboardData = async () => {
+    try {
+      // 1. Schools
+      let schoolsData: any[] = [];
+      if (isAdminMaster) {
+        const { data } = await supabase.from('schools').select('*');
+        schoolsData = data || [];
+      } else if (userSchoolId) {
+        const { data } = await supabase.from('schools').select('*').eq('id', userSchoolId);
+        schoolsData = data || [];
+      }
 
-  const activitiesCount = useLiveQuery(async () => {
-    if (isAdminMaster) return db.activities.count();
-    // For school-specific, we need to filter activities by schoolId
-    // If activities don't have schoolId, we might need to filter by teacher's school or similar
-    const allActivities = await db.activities.toArray();
-    const allUsers = await db.users.toArray();
-    return allActivities.filter(a => {
-      const teacher = allUsers.find(u => u.id === a.teacherId);
-      return teacher?.schoolId === userSchoolId;
-    }).length;
-  }, [isAdminMaster, userSchoolId]) || 0;
+      // 2. Users Count
+      let uCount = 0;
+      if (isAdminMaster) {
+        const { count } = await supabase.from('users').select('*', { count: 'exact', head: true });
+        uCount = count || 0;
+      } else if (userSchoolId) {
+        const { count } = await supabase.from('users').select('*', { count: 'exact', head: true }).eq('schoolId', userSchoolId);
+        uCount = count || 0;
+      }
 
-  const classesCount = useLiveQuery(() => {
-    if (isAdminMaster) return db.classes.count();
-    return db.classes.where('schoolId').equals(userSchoolId || '').count();
-  }, [isAdminMaster, userSchoolId]) || 0;
-  
+      // 3. Classes Count
+      let cCount = 0;
+      if (isAdminMaster) {
+        const { count } = await supabase.from('classes').select('*', { count: 'exact', head: true });
+        cCount = count || 0;
+      } else if (userSchoolId) {
+        const { count } = await supabase.from('classes').select('*', { count: 'exact', head: true }).eq('schoolId', userSchoolId);
+        cCount = count || 0;
+      }
+
+      // 4. Activities Count (Approximation based on all activities for now, or filter by teacher's school if needed)
+      // Since Supabase doesn't easily let us join on a JSON array client side efficiently for exactly this without RPC, 
+      // we'll fetch activities and filter if not master.
+      let aCount = 0;
+      if (isAdminMaster) {
+        const { count } = await supabase.from('activities').select('*', { count: 'exact', head: true });
+        aCount = count || 0;
+      } else if (userSchoolId) {
+        // Find teachers of this school
+        const { data: teachers } = await supabase.from('users').select('id').eq('schoolId', userSchoolId).eq('role', 'teacher');
+        const teacherIds = teachers?.map(t => t.id) || [];
+        if (teacherIds.length > 0) {
+          const { count } = await supabase.from('activities').select('*', { count: 'exact', head: true }).in('teacherId', teacherIds);
+          aCount = count || 0;
+        }
+      }
+
+      // 5. Support Stats
+      let supportStats = { open: 0, resolved: 0, pending: 0, avgTime: 'N/A' };
+      if (isAdminMaster) {
+         const { data: tickets } = await supabase.from('support_tickets').select('*');
+         if (tickets) {
+           const open = tickets.filter(t => t.status === 'open').length;
+           const resolvedTickets = tickets.filter(t => t.status === 'resolved');
+           const pending = tickets.filter(t => t.status === 'pending').length;
+           
+           const avgResponseTime = resolvedTickets.length > 0 
+             ? Math.round(resolvedTickets.reduce((sum, t) => {
+                 const created = new Date(t.createdAt).getTime();
+                 const updated = new Date(t.updatedAt || t.createdAt).getTime();
+                 return sum + (updated - created);
+               }, 0) / (resolvedTickets.length * 60000))
+             : 0;
+
+           supportStats = { open, resolved: resolvedTickets.length, pending, avgTime: avgResponseTime > 0 ? `${avgResponseTime} min` : 'N/A' };
+         }
+      } else if (userSchoolId) {
+         const { data: tickets } = await supabase.from('support_tickets').select('*').eq('schoolId', userSchoolId);
+         if (tickets) {
+            const open = tickets.filter(t => t.status === 'open').length;
+            const resolvedTickets = tickets.filter(t => t.status === 'resolved');
+            const pending = tickets.filter(t => t.status === 'pending').length;
+            const avgResponseTime = resolvedTickets.length > 0 ? Math.round(resolvedTickets.reduce((sum, t) => sum + (new Date(t.updatedAt || t.createdAt).getTime() - new Date(t.createdAt).getTime()), 0) / (resolvedTickets.length * 60000)) : 0;
+            supportStats = { open, resolved: resolvedTickets.length, pending, avgTime: avgResponseTime > 0 ? `${avgResponseTime} min` : 'N/A' };
+         }
+      }
+
+      // 6. Ranking Data
+      let rankingData: any[] = [];
+      if (isAdminMaster) {
+        // Simplified globally
+        const { data: globalStats } = await supabase.from('gamification_stats').select('xp, id');
+        // Because stats doesn't have schoolId, we need users.
+        const { data: allUsers } = await supabase.from('users').select('id, schoolId').eq('role', 'student');
+        if (globalStats && allUsers) {
+           const schoolXp: Record<string, number> = {};
+           allUsers.forEach(u => {
+              if (u.schoolId) {
+                 const stat = globalStats.find(s => s.id === u.id);
+                 schoolXp[u.schoolId] = (schoolXp[u.schoolId] || 0) + (stat?.xp || 0);
+              }
+           });
+           rankingData = schoolsData.map(s => ({
+              name: s.name,
+              value: schoolXp[s.id] || 0,
+              type: 'Escola'
+           })).sort((a, b) => b.value - a.value).slice(0, 3);
+        }
+      } else if (userSchoolId) {
+        const { data: schoolClasses } = await supabase.from('classes').select('*').eq('schoolId', userSchoolId);
+        const { data: schoolStudents } = await supabase.from('users').select('id, classId').eq('schoolId', userSchoolId).eq('role', 'student');
+        const studentIds = schoolStudents?.map(s => s.id) || [];
+        if (studentIds.length > 0) {
+           const { data: stats } = await supabase.from('gamification_stats').select('id, xp').in('id', studentIds);
+           if (schoolClasses && stats && schoolStudents) {
+              const classXp: Record<string, number> = {};
+              schoolStudents.forEach(st => {
+                 const cId = st.classId; 
+                 // We also need to check studentIds array on class if classId is not on student
+                 const matchingClass = schoolClasses.find(c => c.id === cId || (c.studentIds && c.studentIds.includes(st.id)));
+                 if (matchingClass) {
+                    const stStat = stats.find(s => s.id === st.id);
+                    classXp[matchingClass.id] = (classXp[matchingClass.id] || 0) + (stStat?.xp || 0);
+                 }
+              });
+              rankingData = schoolClasses.map(c => ({
+                 name: `${c.name} (${c.grade})`,
+                 value: classXp[c.id] || 0,
+                 type: 'Turma'
+              })).sort((a, b) => b.value - a.value).slice(0, 3);
+           }
+        }
+      }
+
+      // 7. Top Students
+      let topStudents: any[] = [];
+      let studentIdsForEngagement: string[] = [];
+      if (isAdminMaster) {
+         const { data: allStudents } = await supabase.from('users').select('*').eq('role', 'student');
+         if (allStudents && allStudents.length > 0) {
+            studentIdsForEngagement = allStudents.map(s => s.id);
+            const { data: allStats } = await supabase.from('gamification_stats').select('*').in('id', studentIdsForEngagement);
+            if (allStats) {
+               topStudents = allStudents.map(s => {
+                  const stat = allStats.find(st => st.id === s.id);
+                  return { ...s, xp: stat?.xp || 0, coins: stat?.coins || 0 };
+               }).sort((a, b) => b.xp - a.xp).slice(0, 3);
+            }
+         }
+      } else if (userSchoolId) {
+         const { data: schoolStudents } = await supabase.from('users').select('*').eq('role', 'student').eq('schoolId', userSchoolId);
+         if (schoolStudents && schoolStudents.length > 0) {
+            studentIdsForEngagement = schoolStudents.map(s => s.id);
+            const { data: schoolStats } = await supabase.from('gamification_stats').select('*').in('id', studentIdsForEngagement);
+            if (schoolStats) {
+               topStudents = schoolStudents.map(s => {
+                  const stat = schoolStats.find(st => st.id === s.id);
+                  return { ...s, xp: stat?.xp || 0, coins: stat?.coins || 0 };
+               }).sort((a, b) => b.xp - a.xp).slice(0, 3);
+            }
+         }
+      }
+
+      // 8. Engagement Data
+      let engagementData = { chartData: [] as any[], activeToday: 0 };
+      const days = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];
+      const eData = days.map((name) => ({ name, users: 0, activity: 0 }));
+      let activeToday = 0;
+
+      if (studentIdsForEngagement.length > 0) {
+         const now = new Date();
+         const startOfWeek = new Date(now);
+         startOfWeek.setDate(now.getDate() - now.getDay()); 
+         startOfWeek.setHours(0, 0, 0, 0);
+
+         // Rough approximation for dashboard - we'll just query recent activity results as a proxy for engagement
+         // to avoid fetching too many tables for the aggregate view.
+         const { data: recentResults } = await supabase.from('student_activity_results')
+            .select('studentId, completedAt')
+            .in('studentId', studentIdsForEngagement)
+            .gte('completedAt', startOfWeek.toISOString());
+
+         if (recentResults) {
+            const todayStr = new Date().toLocaleDateString();
+            const todayActiveUsers = new Set<string>();
+
+            recentResults.forEach(r => {
+               if (!r.completedAt) return;
+               const d = new Date(r.completedAt);
+               if (d >= startOfWeek) {
+                 const dayIdx = d.getDay();
+                 eData[dayIdx].activity++;
+                 eData[dayIdx].users++; // Proxy
+               }
+               if (d.toLocaleDateString() === todayStr) {
+                  todayActiveUsers.add(r.studentId);
+               }
+            });
+            activeToday = todayActiveUsers.size;
+         }
+      }
+      
+      engagementData = { chartData: eData, activeToday };
+
+      setMetrics({
+        usersCount: uCount,
+        schools: schoolsData,
+        activitiesCount: aCount,
+        classesCount: cCount,
+        supportStats,
+        rankingData,
+        topStudents,
+        engagementData
+      });
+
+    } catch (error) {
+       console.error("Error fetching admin dashboard data:", error);
+    }
+  };
+
+  React.useEffect(() => {
+     fetchDashboardData();
+  }, [userSchoolId, isAdminMaster]);
+
+  const { usersCount, schools, activitiesCount, classesCount, supportStats, rankingData, topStudents, engagementData } = metrics;
+
   const schoolsCount = schools.length;
   const activeUsersFormatted = usersCount.toLocaleString();
 
@@ -80,77 +279,6 @@ export const AdminDashboard: React.FC = () => {
     s.name.toLowerCase().includes(searchTerm.toLowerCase())
   );
 
-  // New High-Value Metrics
-  const supportStats = useLiveQuery(async () => {
-    const allTickets = await db.supportTickets.toArray();
-    const allUsers = await db.users.toArray();
-    
-    const filtered = allTickets.filter(t => {
-      const ticketUser = allUsers.find(u => u.id === t.userId);
-      return isAdminMaster || (ticketUser as any)?.schoolId === userSchoolId;
-    });
-
-    const resolvedTickets = filtered.filter(t => t.status === 'resolved');
-    const avgResponseTime = resolvedTickets.length > 0 
-      ? Math.round(resolvedTickets.reduce((sum, t) => {
-          const created = new Date(t.createdAt).getTime();
-          const updated = new Date(t.updatedAt || t.createdAt).getTime();
-          return sum + (updated - created);
-        }, 0) / (resolvedTickets.length * 60000))
-      : 0;
-
-    return {
-      open: filtered.filter(t => t.status === 'open').length,
-      resolved: resolvedTickets.length,
-      pending: filtered.filter(t => t.status === 'pending').length,
-      avgTime: avgResponseTime > 0 ? `${avgResponseTime} min` : 'N/A'
-    };
-  }, [isAdminMaster, userSchoolId]) || { open: 0, resolved: 0, pending: 0, avgTime: '...' };
-
-  const rankingData = useLiveQuery(async () => {
-    if (isAdminMaster) {
-      // Top 3 Schools by Global Student XP
-      const allSchools = await db.schools.toArray();
-      const schoolsWithXp = await Promise.all(allSchools.map(async (s) => {
-        const students = await db.users.where({ schoolId: s.id, role: 'student' }).toArray();
-        const studentIds = students.map(st => st.id);
-        const stats = await db.gamificationStats.where('id').anyOf(studentIds).toArray();
-        const totalXp = stats.reduce((sum, st) => sum + (st.xp || 0), 0);
-        return { name: s.name, value: totalXp, type: 'Escola' };
-      }));
-      return schoolsWithXp.sort((a, b) => b.value - a.value).slice(0, 3);
-    } else {
-      // Top 3 Classes in the school by Student XP
-      const schoolClasses = await db.classes.where('schoolId').equals(userSchoolId || '').toArray();
-      const classesWithXp = await Promise.all(schoolClasses.map(async (c) => {
-        const students = await db.users.where({ schoolId: userSchoolId || '', role: 'student' }).toArray();
-        const classStudents = students.filter(s => (c.studentIds || []).includes(s.id) || (s as any).classId === c.id);
-        const studentIds = classStudents.map(st => st.id);
-        const stats = await db.gamificationStats.where('id').anyOf(studentIds).toArray();
-        const totalXp = stats.reduce((sum, st) => sum + (st.xp || 0), 0);
-        return { name: `${c.name} (${c.grade})`, value: totalXp, type: 'Turma' };
-      }));
-      return classesWithXp.sort((a, b) => b.value - a.value).slice(0, 3);
-    }
-  }, [isAdminMaster, userSchoolId]) || [];
-
-  const topStudents = useLiveQuery(async () => {
-    const query = db.users.where('role').equals('student');
-    const students = isAdminMaster 
-      ? await query.toArray() 
-      : await query.filter(u => u.schoolId === userSchoolId).toArray();
-    
-    // Fetch stats for each student to get coins
-    const studentsWithStats = await Promise.all(students.map(async (s) => {
-      const stats = await db.gamificationStats.get(s.id);
-      return { ...s, coins: stats?.coins || 0, xp: stats?.xp || 0 };
-    }));
-
-    return studentsWithStats
-      .sort((a, b) => (b as any).xp - (a as any).xp) // Sort by XP for "Destaque"
-      .slice(0, 3);
-  }, [isAdminMaster, userSchoolId]) || [];
-
   const handleExport = () => {
     if (!schools.length) {
       toast.error('Nenhuma escola para exportar.');
@@ -158,13 +286,11 @@ export const AdminDashboard: React.FC = () => {
     }
     const data = schools.map(s => ({
       Nome: s.name,
-      Alunos: s.usersCount,
       Status: s.status,
-      Score: s.globalScore
     }));
     
     const csvContent = "data:text/csv;charset=utf-8," 
-      + ["Nome,Alunos,Status,Score"].concat(data.map(d => `${d.Nome},${d.Alunos},${d.Status},${d.Score}`)).join("\n");
+      + ["Nome,Status"].concat(data.map(d => `${d.Nome},${d.Status}`)).join("\n");
     
     const encodedUri = encodeURI(csvContent);
     const link = document.createElement("a");
@@ -176,73 +302,24 @@ export const AdminDashboard: React.FC = () => {
     toast.success('Relatório exportado com sucesso!');
   };
 
-  // Real engagement data calculation
-  const engagementData = useLiveQuery(async () => {
-    const now = new Date();
-    const startOfWeek = new Date(now);
-    startOfWeek.setDate(now.getDate() - now.getDay()); 
-    startOfWeek.setHours(0, 0, 0, 0);
-
-    // Get all students for context
-    const students = isAdminMaster 
-      ? await db.users.where('role').equals('student').toArray()
-      : await db.users.where({ schoolId: userSchoolId || '', role: 'student' }).toArray();
-    
-    const studentIds = students.map(s => s.id);
-
-    // Fetch activity markers
-    const [results, diary, challengerDuels, challengedDuels, achievements] = await Promise.all([
-      db.studentActivityResults.where('studentId').anyOf(studentIds).toArray(),
-      db.diaryEntries.where('studentId').anyOf(studentIds).toArray(),
-      db.duels.where('challengerId').anyOf(studentIds).toArray(),
-      db.duels.where('challengedId').anyOf(studentIds).toArray(),
-      db.studentAchievements.where('studentId').anyOf(studentIds).toArray()
-    ]);
- 
-    const duels = [...challengerDuels, ...challengedDuels];
-    const days = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];
-    const data = days.map((name) => ({ name, users: 0, activity: 0 }));
- 
-    const processDate = (dateStr: string | undefined) => {
-      if (!dateStr) return;
-      const d = new Date(dateStr);
-      if (d >= startOfWeek) {
-        const dayIdx = d.getDay();
-        data[dayIdx].activity++;
-        // Rough estimation of unique users per day would require a Set, but 'activity' count is sufficient for the chart
-        data[dayIdx].users++; 
-      }
-    };
- 
-    results.forEach(r => processDate(r.completedAt));
-    diary.forEach(d => processDate(d.createdAt));
-    duels.forEach(d => d.completedAt && processDate(d.completedAt));
-    achievements.forEach(a => processDate(a.unlockedAt));
- 
-    // Unique users active today (from any activity signal)
-    const today = new Date().toLocaleDateString();
-    const activeToday = new Set([
-      ...results.filter(r => new Date(r.completedAt).toLocaleDateString() === today).map(r => r.studentId),
-      ...diary.filter(d => new Date(d.createdAt).toLocaleDateString() === today).map(d => d.studentId),
-      ...duels.filter(d => d.completedAt && new Date(d.completedAt).toLocaleDateString() === today).map(d => (d as any).challengerId || (d as any).studentId),
-      ...achievements.filter(a => new Date(a.unlockedAt).toLocaleDateString() === today).map(a => a.studentId)
-    ]).size;
-
-    return { chartData: data, activeToday };
-  }, [isAdminMaster, userSchoolId]) || { chartData: [], activeToday: 0 };
-
   // Sub-component for dynamic school stats in the list
   const SchoolListItem = ({ school }: { school: any }) => {
-    const stats = useLiveQuery(async () => {
-      const students = await db.users.where({ schoolId: school.id, role: 'student' }).toArray();
-      const studentIds = students.map(s => s.id);
-      const gamStats = await db.gamificationStats.where('id').anyOf(studentIds).toArray();
-      const totalXp = gamStats.reduce((sum, s) => sum + (s.xp || 0), 0);
-      return {
-        studentCount: students.length,
-        // Formula: XP contribution + Activity participation points
-        globalScore: Math.floor(totalXp / 5) + (students.length * 10)
+    const [stats, setStats] = React.useState({ studentCount: 0, globalScore: 0 });
+
+    React.useEffect(() => {
+      const fetchSchoolStats = async () => {
+         const { data: students } = await supabase.from('users').select('id').eq('schoolId', school.id).eq('role', 'student');
+         if (students && students.length > 0) {
+            const studentIds = students.map(s => s.id);
+            const { data: gamStats } = await supabase.from('gamification_stats').select('xp').in('id', studentIds);
+            const totalXp = gamStats?.reduce((sum, s) => sum + (s.xp || 0), 0) || 0;
+            setStats({
+               studentCount: students.length,
+               globalScore: Math.floor(totalXp / 5) + (students.length * 10)
+            });
+         }
       };
+      fetchSchoolStats();
     }, [school.id]);
 
     return (

@@ -9,13 +9,13 @@ import { Card } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
 import { cn } from '../../lib/utils';
 import { toast } from 'sonner';
-import { db } from '../../lib/dexie';
-import { useLiveQuery } from 'dexie-react-hooks';
+import { supabase } from '../../lib/supabase';
 import { useAuthStore } from '../../store/auth.store';
 import { incrementMissionProgress } from '../../lib/missionUtils';
 import { updateGamificationStats } from '../../lib/gamificationUtils';
 import { motion, AnimatePresence } from 'framer-motion';
 import type { LibraryItem } from '../../types/learning';
+import { useEffect } from 'react';
 
 const TYPE_CONFIG = {
   video: { color: 'bg-red-500', icon: Video, label: 'Vídeo', emoji: '🎥' },
@@ -86,20 +86,44 @@ export const Library: React.FC = () => {
   const [filterType, setFilterType] = useState('Todos');
   const [previewItem, setPreviewItem] = useState<LibraryItem | null>(null);
 
-  // Get student's class
-  const studentData = useLiveQuery(() => 
-    user ? db.users.get(user.id) : Promise.resolve(undefined)
-  ) as any;
-  const classId = studentData?.classId;
-  const grade = studentData?.grade;
+  const [items, setItems] = useState<LibraryItem[]>([]);
+  const [loading, setLoading] = useState(true);
 
-  // Get library items for this class OR generic items for this grade
-  const items = useLiveQuery(async () => {
-    const all = await db.libraryItems.toArray();
-    return all.filter(item => 
-      (item.classId === classId) || (item.grade === grade && !item.classId)
-    );
-  }, [classId, grade]) || [];
+  const fetchItems = async () => {
+    if (!user) return;
+    try {
+      const { data: studentData } = await supabase.from('users').select('*').eq('id', user.id).single();
+      const classId = studentData?.classId;
+      const grade = studentData?.grade;
+
+      let classItems: any[] = [];
+      if (classId) {
+        const { data } = await supabase.from('library_items').select('*').eq('classId', classId);
+        classItems = data || [];
+      }
+      let gradeItems: any[] = [];
+      if (grade) {
+         const { data } = await supabase.from('library_items').select('*').eq('grade', grade).is('classId', null);
+         gradeItems = data || [];
+      }
+      
+      const allItems = [...classItems, ...gradeItems];
+      const uniqueItems = Array.from(new Map(allItems.map(item => [item.id, item])).values());
+      setItems(uniqueItems);
+      setLoading(false);
+    } catch (e) {
+      console.error(e);
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchItems();
+    const ch = supabase.channel('library_channel')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'library_items' }, fetchItems)
+      .subscribe();
+    return () => { supabase.removeChannel(ch); };
+  }, [user?.id]);
 
   const SUBJECTS = ['Todas', ...new Set(items.map(i => i.subject))];
   const TYPES = ['Todos', 'Texto', 'Vídeo', 'Quiz', 'Áudio'];
@@ -131,11 +155,19 @@ export const Library: React.FC = () => {
     }
     
     // Increment downloads count in DB for this item
-    await db.libraryItems.update(item.id, { downloads: (item.downloads || 0) + 1 });
+    await supabase.from('library_items').update({ downloads: (item.downloads || 0) + 1 }).eq('id', item.id);
     
     if (item.url) window.open(item.url, '_blank');
     setPreviewItem(null);
   };
+
+  if (loading) {
+    return (
+      <div className="flex justify-center items-center h-screen">
+         <div className="w-16 h-16 border-4 border-primary-100 border-t-primary-500 rounded-full animate-spin"></div>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">

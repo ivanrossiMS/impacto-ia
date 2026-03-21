@@ -3,76 +3,75 @@ import { Outlet, NavLink, useNavigate } from 'react-router-dom';
 import { Bot, Home, Map, Trophy, UserSquare, Store, Bell, LogOut, Menu, BookOpen, Target, BookText, Library, Medal, Zap, GraduationCap, Sword, LifeBuoy } from 'lucide-react';
 import { useAuthStore } from '../store/auth.store';
 import { useUIStore } from '../store/ui.store';
-import { useLiveQuery } from 'dexie-react-hooks';
+import { supabase } from '../lib/supabase';
 import { calculateLevel } from '../lib/gamificationUtils';
 import { AITutorWidget } from '../components/AITutorWidget';
 import { cn } from '../lib/utils';
-import { db } from '../lib/dexie';
 
 export const StudentLayout: React.FC = () => {
   const { user, logout } = useAuthStore();
   const { isSidebarOpen, setSidebarOpen } = useUIStore();
   const navigate = useNavigate();
 
-  // Reactive gamification stats
-  const stats = useLiveQuery(
-    async () => {
-      if (!user) return undefined;
-      return await db.gamificationStats.get(user.id);
-    },
-    [user]
-  );
+  const [stats, setStats] = React.useState<any>(null);
+  const [className, setClassName] = React.useState('');
+  const [schoolLogo, setSchoolLogo] = React.useState<string | null>(null);
+  const [unreadSupportCount, setUnreadSupportCount] = React.useState(0);
+  const [unreadCount, setUnreadCount] = React.useState(0);
+
+  const fetchLayoutData = async () => {
+    if (!user) return;
+    
+    // Stats
+    const { data: st } = await supabase.from('gamification_stats').select('*').eq('id', user.id).single();
+    if (st) setStats(st);
+
+    // Class Name
+    if (user.role === 'student') {
+      const { data: userData } = await supabase.from('users').select('classId').eq('id', user.id).single();
+      const cId = (userData as any)?.classId || (user as any)?.classId;
+      if (cId) {
+        const { data: cls } = await supabase.from('classes').select('name').eq('id', cId).single();
+        if (cls) setClassName(cls.name);
+      }
+    }
+
+    // School Logo
+    if (user.schoolId) {
+      const { data: school } = await supabase.from('schools').select('logo').eq('id', user.schoolId).single();
+      if (school) setSchoolLogo(school.logo);
+    }
+
+    // Unread Support
+    const { count: supportCount } = await supabase.from('support_tickets').select('*', { count: 'exact', head: true }).eq('userId', user.id).eq('isReadByParticipant', false);
+    setUnreadSupportCount(supportCount || 0);
+
+    // Unread Notifications
+    const { count: notifCount } = await supabase.from('notifications').select('*', { count: 'exact', head: true }).eq('userId', user.id).eq('read', false);
+    setUnreadCount(notifCount || 0);
+  };
+
+  React.useEffect(() => {
+    fetchLayoutData();
+    const chStats = supabase.channel('layout_stats')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'gamification_stats', filter: `id=eq.${user?.id}` }, fetchLayoutData)
+      .subscribe();
+    const chSupport = supabase.channel('layout_support')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'support_tickets', filter: `userId=eq.${user?.id}` }, fetchLayoutData)
+      .subscribe();
+    const chNotifs = supabase.channel('layout_notifs')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'notifications', filter: `userId=eq.${user?.id}` }, fetchLayoutData)
+      .subscribe();
+
+    return () => { 
+      supabase.removeChannel(chStats);
+      supabase.removeChannel(chSupport);
+      supabase.removeChannel(chNotifs);
+    };
+  }, [user]);
 
   // Derived level from XP (ensures consistency)
   const currentLevel = stats ? calculateLevel(stats.xp) : 1;
-
-  // Reactive class name
-  const className = useLiveQuery(async () => {
-    if (!user) return '';
-    try {
-      const allClasses = await db.classes.toArray();
-      const myClass = allClasses.find(c => c.studentIds?.includes(user.id));
-      if (myClass) return myClass.name;
-      
-      if (user.role === 'student' && (user as any).classId) {
-        const groupClass = await db.classes.get((user as any).classId);
-        return groupClass?.name || '';
-      }
-    } catch (e) {
-      console.error('Error loading class name:', e);
-    }
-    return '';
-  }, [user]);
-
-  const schoolLogo = useLiveQuery(async () => {
-    if (!user?.schoolId) return null;
-    const school = await db.schools.get(user.schoolId);
-    return school?.logo || null;
-  }, [user?.schoolId]);
-
-  const unreadSupportCount = useLiveQuery(async () => {
-    if (!user) return 0;
-    try {
-      return await db.supportTickets
-        .where('userId').equals(user.id)
-        .and(t => !t.isReadByParticipant)
-        .count();
-    } catch (e) {
-      return 0;
-    }
-  }, [user]) || 0;
-
-  const unreadCount = useLiveQuery(async () => {
-    if (!user) return 0;
-    try {
-      return await db.notifications
-        .where('userId').equals(user.id)
-        .and(n => !n.read)
-        .count();
-    } catch (e) {
-      return 0;
-    }
-  }, [user]) || 0;
 
   const handleLogout = () => {
     logout();

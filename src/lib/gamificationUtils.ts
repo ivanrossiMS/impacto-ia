@@ -1,4 +1,4 @@
-import { db } from './dexie';
+import { supabase } from './supabase';
 
 /**
  * Gamification Utilities
@@ -84,46 +84,69 @@ export function calculateNewStreak(currentStreak: number, lastStudyDateStr: stri
 export async function updateGamificationStats(
   studentId: string, 
   updates: { xpToAdd?: number; coinsToAdd?: number }
-) {
+): Promise<{ newLevel: number, oldLevel: number } | void> {
   if (!studentId) return;
 
   const nowString = new Date().toISOString();
 
-  // Use a transaction for reliability and atomicity
-  await db.transaction('rw', [db.gamificationStats], async () => {
-    let stats = await db.gamificationStats.get(studentId);
-    
+  try {
+    const { data: stats, error: fetchError } = await supabase
+      .from('gamification_stats')
+      .select('*')
+      .eq('id', studentId)
+      .single();
+
+    if (fetchError && fetchError.code !== 'PGRST116') {
+      console.error('Error fetching gamification stats:', fetchError);
+      return;
+    }
+
     if (stats) {
       const newXP = (stats.xp || 0) + (updates.xpToAdd || 0);
       const newCoins = (stats.coins || 0) + (updates.coinsToAdd || 0);
       const newLevel = calculateLevel(newXP);
       const newStreak = calculateNewStreak(stats.streak || 0, stats.lastStudyDate);
 
-      await db.gamificationStats.update(studentId, {
-        xp: newXP,
-        coins: newCoins,
-        level: newLevel,
-        streak: newStreak,
-        lastStudyDate: nowString,
-        updatedAt: nowString
-      });
+      const oldLevel = stats.level || 1;
+
+      const { error: updateError } = await supabase
+        .from('gamification_stats')
+        .update({
+          xp: newXP,
+          coins: newCoins,
+          level: newLevel,
+          streak: newStreak,
+          lastStudyDate: nowString,
+          updatedAt: nowString
+        })
+        .eq('id', studentId);
+        
+      if (updateError) throw updateError;
       console.log(`[Stats] Updated student ${studentId}: Streak ${newStreak}, XP ${newXP}`);
+      return { newLevel, oldLevel };
     } else {
       const startingXP = updates.xpToAdd || 0;
       const startingLevel = calculateLevel(startingXP);
       
-      await db.gamificationStats.put({
-        id: studentId,
-        xp: startingXP,
-        coins: updates.coinsToAdd || 500, // Matching initial user seeds
-        level: startingLevel,
-        streak: 1,
-        lastStudyDate: nowString,
-        updatedAt: nowString
-      });
+      const { error: insertError } = await supabase
+        .from('gamification_stats')
+        .insert({
+          id: studentId,
+          xp: startingXP,
+          coins: updates.coinsToAdd || 500, // Matching initial user seeds
+          level: startingLevel,
+          streak: 1,
+          lastStudyDate: nowString,
+          updatedAt: nowString
+        });
+        
+      if (insertError) throw insertError;
       console.log(`[Stats] Initialized student ${studentId}: Streak 1`);
+      return { newLevel: startingLevel, oldLevel: 1 };
     }
-  });
+  } catch (error) {
+    console.error('Error updating gamification stats:', error);
+  }
 }
 
 /**

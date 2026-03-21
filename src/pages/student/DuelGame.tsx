@@ -1,8 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useAuthStore } from '../../store/auth.store';
-import { db } from '../../lib/dexie';
-import { useLiveQuery } from 'dexie-react-hooks';
+import { supabase } from '../../lib/supabase';
 import { 
   Sword, 
   ChevronRight, 
@@ -30,19 +29,36 @@ export const DuelGame: React.FC = () => {
   const [isFinished, setIsFinished] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
 
-  const duel = useLiveQuery(() => 
-    duelId ? db.duels.get(duelId) : undefined
-  , [duelId]);
+  const [duel, setDuel] = useState<Duel | null>(null);
+  const [questions, setQuestions] = useState<DuelQuestion[]>([]);
+  const [opponent, setOpponent] = useState<any>(null);
 
-  const questions = useLiveQuery(() => 
-    duelId ? db.duelQuestions.where('duelId').equals(duelId).toArray() : []
-  , [duelId]);
+  const fetchData = async () => {
+    if (!duelId || !user) return;
+    try {
+      const { data: d } = await supabase.from('duels').select('*').eq('id', duelId).single();
+      setDuel(d);
+      
+      if (d) {
+        const { data: q } = await supabase.from('duel_questions').select('*').eq('duelId', duelId);
+        setQuestions(q || []);
+        
+        const opponentId = d.challengerId === user.id ? d.challengedId : d.challengerId;
+        const { data: opp } = await supabase.from('users').select('*').eq('id', opponentId).single();
+        setOpponent(opp);
+      }
+    } catch (e) {
+      console.error(e);
+    }
+  };
 
-  const opponent = useLiveQuery(async () => {
-    if (!duel || !user) return undefined;
-    const opponentId = duel.challengerId === user.id ? duel.challengedId : duel.challengerId;
-    return db.users.get(opponentId);
-  }, [duel, user?.id]);
+  useEffect(() => {
+    fetchData();
+    const ch = supabase.channel(`duel_game_${duelId}`)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'duels', filter: `id=eq.${duelId}` }, fetchData)
+      .subscribe();
+    return () => { supabase.removeChannel(ch); };
+  }, [duelId, user?.id]);
 
   useEffect(() => {
     if (duel && questions && questions.length > 0) {

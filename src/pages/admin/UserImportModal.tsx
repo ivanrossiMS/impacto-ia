@@ -7,7 +7,7 @@ import {
 import { Button } from '../../components/ui/Button';
 import { Card } from '../../components/ui/Card';
 import { Badge } from '../../components/ui/Badge';
-import { db } from '../../lib/dexie';
+import { supabase } from '../../lib/supabase';
 import { toast } from 'sonner';
 import { cn } from '../../lib/utils';
 
@@ -209,7 +209,8 @@ export const UserImportModal: React.FC<UserImportModalProps> = ({
       // Check for duplicates in DB
       let existingUser = null;
       if (mapped.code) {
-        existingUser = await db.users.where('studentCode').equals(mapped.code).first();
+        const { data } = await supabase.from('users').select('*').eq('studentCode', mapped.code).maybeSingle();
+        existingUser = data;
       }
 
       return {
@@ -256,17 +257,19 @@ export const UserImportModal: React.FC<UserImportModalProps> = ({
           const emailNormalized = gData.email?.trim().toLowerCase();
           
           if (emailNormalized) {
-            guardian = await db.users.where({ email: emailNormalized, role: 'guardian' }).first();
+            const { data } = await supabase.from('users').select('*').eq('email', emailNormalized).eq('role', 'guardian').maybeSingle();
+            guardian = data;
           }
           if (!guardian && gData.name) {
-            guardian = await db.users.where({ name: gData.name, role: 'guardian', schoolId: selectedSchoolId }).first();
+            const { data } = await supabase.from('users').select('*').eq('name', gData.name).eq('role', 'guardian').eq('schoolId', selectedSchoolId).maybeSingle();
+            guardian = data;
           }
 
           if (guardian) {
             processedGuardianIds.push(guardian.id);
             // If replace strategy, update guardian email if provided
             if (importStrategy === 'replace' && emailNormalized && guardian.email !== emailNormalized) {
-              await db.users.update(guardian.id, { email: emailNormalized, guardianCode: emailNormalized } as any);
+              await supabase.from('users').update({ email: emailNormalized, guardianCode: emailNormalized }).eq('id', guardian.id);
             }
           } else {
             // Create new guardian
@@ -286,7 +289,7 @@ export const UserImportModal: React.FC<UserImportModalProps> = ({
               updatedAt: now,
               studentIds: []
             };
-            await db.users.add(newG);
+            await supabase.from('users').insert(newG);
             processedGuardianIds.push(gId);
           }
         }
@@ -297,28 +300,19 @@ export const UserImportModal: React.FC<UserImportModalProps> = ({
           
           if (importStrategy === 'replace') {
             if (row.mappedData.name) updates.name = row.mappedData.name;
-            // In replace mode, we clear and set new classes and guardians
             updates.guardianIds = processedGuardianIds;
           } else {
-            // In keep mode, we append and preserve existing name if it might be more complete
-            if (row.mappedData.name && !row.existingUser.name.includes(row.mappedData.name)) {
-               // Optional: keep old name if better, but usually import is the source of truth
-               // updates.name = row.mappedData.name; 
-            }
             updates.guardianIds = Array.from(new Set([...(row.existingUser.guardianIds || []), ...processedGuardianIds]));
           }
 
           // Handle Class
           if (row.mappedData.class) {
-            let cls = await db.classes.where({ 
-              schoolId: selectedSchoolId,
-              name: row.mappedData.class 
-            }).first();
+            let { data: cls } = await supabase.from('classes').select('*').eq('schoolId', selectedSchoolId).eq('name', row.mappedData.class).maybeSingle();
             
             // Auto-create class if not exists
             if (!cls) {
                const newClsId = crypto.randomUUID();
-               // Try to standardize grade: if name is "6A" or "6º Ano B", map to "6º Ano"
+               // Try to standardize grade
                const rawClass = row.mappedData.class;
                let standardGrade = rawClass;
                const gradeMatch = rawClass.match(/(\d+)[\sº]*[Aa]no/);
@@ -337,7 +331,7 @@ export const UserImportModal: React.FC<UserImportModalProps> = ({
                  createdAt: now,
                  updatedAt: now
                };
-               await db.classes.add(newCls);
+               await supabase.from('classes').insert(newCls);
                cls = newCls;
             }
 
@@ -355,20 +349,20 @@ export const UserImportModal: React.FC<UserImportModalProps> = ({
               
               // Update class.studentIds
               const sIds = Array.from(new Set([...(cls.studentIds || []), row.existingUser.id]));
-              await db.classes.update(cls.id, { studentIds: sIds });
+              await supabase.from('classes').update({ studentIds: sIds }).eq('id', cls.id);
             }
           }
 
           // Link Guardians back to Student
           for (const gId of processedGuardianIds) {
-            const g = await db.users.get(gId);
+            const { data: g } = await supabase.from('users').select('*').eq('id', gId).maybeSingle();
             if (g && g.role === 'guardian') {
               const sIds = Array.from(new Set([...(g.studentIds || []), row.existingUser.id]));
-              await db.users.update(gId, { studentIds: sIds } as any);
+              await supabase.from('users').update({ studentIds: sIds }).eq('id', gId);
             }
           }
 
-          await db.users.update(row.existingUser.id, updates);
+          await supabase.from('users').update(updates).eq('id', row.existingUser.id);
           updatedCount++;
         } else {
           // CREATE LOGIC
@@ -389,10 +383,7 @@ export const UserImportModal: React.FC<UserImportModalProps> = ({
           };
 
           if (row.mappedData.class) {
-            let cls = await db.classes.where({ 
-              schoolId: selectedSchoolId,
-              name: row.mappedData.class 
-            }).first();
+            let { data: cls } = await supabase.from('classes').select('*').eq('schoolId', selectedSchoolId).eq('name', row.mappedData.class).maybeSingle();
             
             // Auto-create class on create too
             if (!cls) {
@@ -416,7 +407,7 @@ export const UserImportModal: React.FC<UserImportModalProps> = ({
                  createdAt: now,
                  updatedAt: now
                };
-               await db.classes.add(newCls);
+               await supabase.from('classes').insert(newCls);
                cls = newCls;
             }
 
@@ -426,46 +417,48 @@ export const UserImportModal: React.FC<UserImportModalProps> = ({
               newUser.grade = cls.grade;
               
               const sIds = Array.from(new Set([...(cls.studentIds || []), userId]));
-              await db.classes.update(cls.id, { studentIds: sIds });
+              await supabase.from('classes').update({ studentIds: sIds }).eq('id', cls.id);
             }
           }
 
           // Link Guardians to NEW Student
           for (const gId of processedGuardianIds) {
-            const g = await db.users.get(gId);
-            if (g && g.role === 'guardian') {
-              const sIds = Array.from(new Set([...(g.studentIds || []), userId]));
-              await db.users.update(gId, { studentIds: sIds } as any);
-            }
+             const { data: g } = await supabase.from('users').select('*').eq('id', gId).maybeSingle();
+             if (g && g.role === 'guardian') {
+               const sIds = Array.from(new Set([...(g.studentIds || []), userId]));
+               await supabase.from('users').update({ studentIds: sIds }).eq('id', gId);
+             }
           }
 
-          await db.users.add(newUser);
-          await db.gamificationStats.add({
-            id: userId,
-            level: 1,
-            xp: 0,
-            coins: 100,
-            streak: 0,
-            lastStudyDate: now
+          await supabase.from('users').insert(newUser);
+          await supabase.from('gamification_stats').insert({
+             id: userId,
+             level: 1,
+             xp: 0,
+             coins: 100,
+             streak: 0,
+             lastStudyDate: now
           });
           createdCount++;
         }
       }
 
       // Update School Stats
-      const schoolUsers = await db.users.where({ schoolId: selectedSchoolId }).toArray();
-      const students = schoolUsers.filter(u => u.role === 'student');
-      const studentIds = students.map(s => s.id);
-      const studentStats = await db.gamificationStats.where('id').anyOf(studentIds).toArray();
-      const totalXp = studentStats.reduce((sum, s) => sum + (s.xp || 0), 0);
-      
-      // Calculate a rough global score based on XP and activity
-      const globalScore = Math.floor(totalXp / 10) + (students.length * 5);
+      const { data: schoolUsers } = await supabase.from('users').select('*').eq('schoolId', selectedSchoolId);
+      if (schoolUsers) {
+        const students = schoolUsers.filter((u: any) => u.role === 'student');
+        const studentIds = students.map((s: any) => s.id);
+        const { data: studentStats } = await supabase.from('gamification_stats').select('*').in('id', studentIds);
+        const totalXp = studentStats ? studentStats.reduce((sum: number, s: any) => sum + (s.xp || 0), 0) : 0;
+        
+        // Calculate a rough global score based on XP and activity
+        const globalScore = Math.floor(totalXp / 10) + (students.length * 5);
 
-      await db.schools.update(selectedSchoolId, {
-        usersCount: schoolUsers.length,
-        globalScore: globalScore
-      });
+        await supabase.from('schools').update({
+          usersCount: schoolUsers.length,
+          globalScore: globalScore
+        }).eq('id', selectedSchoolId);
+      }
 
       toast.success(`Importação concluída! ${createdCount} criados, ${updatedCount} atualizados.`);
       onClose();

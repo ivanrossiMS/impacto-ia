@@ -12,8 +12,7 @@ import { Button } from '../../components/ui/Button';
 import { useNavigate } from 'react-router-dom';
 import { AnnouncementModal } from '../../components/modals/AnnouncementModal';
 import { cn } from '../../lib/utils';
-import { db } from '../../lib/dexie';
-import { useLiveQuery } from 'dexie-react-hooks';
+import { useSupabaseQuery } from '../../hooks/useSupabase';
 
 export const TeacherDashboard: React.FC = () => {
   const navigate = useNavigate();
@@ -27,32 +26,20 @@ export const TeacherDashboard: React.FC = () => {
   }, []);
 
   // Fetch teacher's assigned classes from DB
-  const teacherUser = useLiveQuery(async () => {
-    if (!user) return null;
-    return db.users.get(user.id);
-  }, [user?.id]);
+  const teacherUsersData = useSupabaseQuery<any>('users');
+  const teacherUser = teacherUsersData?.find((u: any) => u.id === user?.id);
 
-  const teacherClassIds: string[] = (teacherUser as any)?.classIds || [];
+  const teacherClassIds: string[] = teacherUser?.classIds || [];
 
-  const myClasses = useLiveQuery(async () => {
-    const all = await db.classes.toArray();
-    return all.filter(c => teacherClassIds.includes(c.id));
-  }, [teacherClassIds.join(',')]) || [];
+  const allClassesData = useSupabaseQuery<any>('classes');
+  const myClasses = (allClassesData || []).filter((c: any) => teacherClassIds.includes(c.id));
 
-  const allStudents = useLiveQuery(async () => {
-    if (myClasses.length === 0) return [];
-    const classIds = myClasses.map(c => c.id);
-    return db.users
-      .where('classId')
-      .anyOf(classIds)
-      .and(u => u.role === 'student')
-      .toArray();
-  }, [myClasses.map(c => c.id).join(',')]) || [];
+  const allStudentsData = useSupabaseQuery<any>('users');
+  const classIds = myClasses.map((c: any) => c.id);
+  const allStudents = (allStudentsData || []).filter((u: any) => classIds.includes(u.classId) && u.role === 'student');
 
-  // Fetch activities from Dexie
-  const dbActivities = useLiveQuery(async () => {
-    return db.activities.toArray();
-  }) || [];
+  // Fetch activities from Supabase
+  const dbActivities = useSupabaseQuery<any>('activities') || [];
 
   const savedActivitiesCount = dbActivities.length;
 

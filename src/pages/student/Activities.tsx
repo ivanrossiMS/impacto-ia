@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { useAuthStore } from '../../store/auth.store';
-import { db } from '../../lib/dexie';
+import { supabase } from '../../lib/supabase';
 import type { Activity } from '../../types/learning';
 import {
   BookOpen, CheckCircle, Clock, PlayCircle, Star,
@@ -11,8 +11,6 @@ import { cn } from '../../lib/utils';
 import { toast } from 'sonner';
 import { Card } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
-import { useLiveQuery } from 'dexie-react-hooks';
-import type { StudentActivityResult } from '../../lib/dexie';
 import { incrementMissionProgress } from '../../lib/missionUtils';
 import { REWARDS, updateGamificationStats } from '../../lib/gamificationUtils';
 
@@ -34,84 +32,75 @@ export const Activities: React.FC = () => {
   const [startedAt, setStartedAt] = useState<number | null>(null);
 
 
-  useEffect(() => {
+  const [data, setData] = useState<any>({
+    studentData: null,
+    activities: [],
+    activityResults: {},
+    stats: null
+  });
+
+  const loadData = async () => {
     if (!user) return;
-    
-    // --- CLEANUP TEST ACTIVITY ---
-    const cleanupTest = async () => {
-      try {
-        await db.activities.where('title').equals('teste').delete();
-      } catch (e) {
-        console.warn('Cleanup Dexie error:', e);
+    try {
+      const { data: studentData } = await supabase.from('users').select('*').eq('id', user.id).single();
+      const classId = studentData?.classId;
+      
+      let classActivities: any[] = [];
+      if (classId) {
+        const { data: cAct } = await supabase.from('activities').select('*').eq('classId', classId);
+        classActivities = cAct || [];
+      } else {
+        const { data: nullAct } = await supabase.from('activities').select('*').is('classId', null);
+        classActivities = nullAct || [];
       }
-    };
+      
+      const parsedActivities = classActivities.map(ta => {
+        if (ta.questions && ta.questions.length > 0 && (ta.questions[0] as any).text) {
+          return {
+            ...ta,
+            type: 'mixed',
+            questions: ta.questions.map((q: any, i: number) => ({
+              id: q.id || String(i),
+              questionText: q.text,
+              type: q.type === 'objetiva' ? 'multiple_choice' : 'true_false',
+              explanation: q.explanation || 'Muito bem!',
+              options: q.type === 'objetiva' ? (q.options || []).map((opt: string, idx: number) => ({
+                id: String(idx),
+                text: opt,
+                isCorrect: String(idx) === q.answer
+              })) : [
+                { id: 'true', text: 'Verdadeiro', isCorrect: q.answer === 'true' },
+                { id: 'false', text: 'Falso', isCorrect: q.answer === 'false' }
+              ]
+            }))
+          };
+        }
+        return ta;
+      });
 
-    cleanupTest();
-  }, [user]);
+      const { data: resultsArr } = await supabase.from('student_activity_results').select('*').eq('studentId', user.id);
+      const activityResults: Record<string, any> = {};
+      (resultsArr || []).forEach((r: any) => { activityResults[r.activityId] = r; });
 
-  // Get student data for classes
-  const studentData = useLiveQuery(async () => {
-    if (!user) return undefined;
-    return db.users.get(user.id);
-  }, [user?.id]);
-  const classId = (studentData as any)?.classId;
+      const { data: stats } = await supabase.from('gamification_stats').select('*').eq('id', user.id).single();
 
-  // Real-time Activities Query
-  const activities = useLiveQuery(async () => {
-    if (!user) return [];
-    
-    // 1. Get activities directly linked to student's class
-    const allDbActivities = await db.activities.toArray();
-    
-    return allDbActivities.filter(a => a.classId === classId || !a.classId).map(ta => {
-      // Map teacher-style questions to student-player-style if needed
-      if (ta.questions && ta.questions.length > 0 && (ta.questions[0] as any).text) {
-        return {
-          ...ta,
-          type: 'mixed',
-          questions: ta.questions.map((q: any, i: number) => ({
-            id: q.id || String(i),
-            questionText: q.text,
-            type: q.type === 'objetiva' ? 'multiple_choice' : 'true_false',
-            explanation: q.explanation || 'Muito bem!',
-            options: q.type === 'objetiva' ? (q.options || []).map((opt: string, idx: number) => ({
-              id: String(idx),
-              text: opt,
-              isCorrect: String(idx) === q.answer
-            })) : [
-              { id: 'true', text: 'Verdadeiro', isCorrect: q.answer === 'true' },
-              { id: 'false', text: 'Falso', isCorrect: q.answer === 'false' }
-            ]
-          }))
-        } as Activity;
-      }
-      return ta;
-    });
-  }, [user?.id, classId]) || [];
-
-  // Real-time Results Query
-  const activityResultsArr = useLiveQuery(async () => {
-    if (!user) return [];
-    return db.studentActivityResults.where('studentId').equals(user.id).toArray();
-  }, [user?.id]) || [];
-
-  const activityResults = React.useMemo(() => {
-    const map: Record<string, StudentActivityResult> = {};
-    activityResultsArr.forEach(r => { map[r.activityId] = r; });
-    return map;
-  }, [activityResultsArr]);
-
-  // Real-time Stats Query
-  const stats = useLiveQuery(async () => {
-    if (!user) return undefined;
-    return db.gamificationStats.get(user.id);
-  }, [user?.id]);
-
-  useEffect(() => {
-    if (activities.length > 0 || studentData) {
+      setData({ studentData, activities: parsedActivities, activityResults, stats });
+      setLoading(false);
+    } catch (e) {
+      console.error(e);
       setLoading(false);
     }
-  }, [activities, studentData]);
+  };
+
+  useEffect(() => {
+    loadData();
+    const ch = supabase.channel('activities_channel')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'student_activity_results' }, loadData)
+      .subscribe();
+    return () => { supabase.removeChannel(ch); };
+  }, [user?.id]);
+  
+  const { activities, activityResults, stats } = data;
   
   // --- Timer Effect ---
   useEffect(() => {
@@ -196,7 +185,7 @@ export const Activities: React.FC = () => {
 
       const timeSpent = startedAt ? Math.round((Date.now() - startedAt) / 1000) : 0;
 
-      const result: StudentActivityResult = {
+      const result = {
         id: `${activeActivity.id}-${user.id}`,
         activityId: activeActivity.id,
         studentId: user.id,
@@ -207,14 +196,14 @@ export const Activities: React.FC = () => {
         coinsEarned,
         completedAt: new Date().toISOString(),
         timeSpent,
-        responses: results.map(r => ({
+        responses: results.map((r: any) => ({
           questionId: r.questionId,
           selectedOptionId: r.selectedOptionId,
           isCorrect: r.correct
         }))
       };
 
-      await db.studentActivityResults.put(result);
+      await supabase.from('student_activity_results').upsert(result);
 
       try {
         await updateGamificationStats(user.id, {
@@ -244,7 +233,7 @@ export const Activities: React.FC = () => {
 
     const timeSpent = startedAt ? Math.round((Date.now() - startedAt) / 1000) : 0;
 
-    const result: StudentActivityResult = {
+    const result = {
       id: `${activeActivity.id}-${user.id}`,
       activityId: activeActivity.id,
       studentId: user.id,
@@ -257,7 +246,7 @@ export const Activities: React.FC = () => {
       timeSpent
     };
 
-    await db.studentActivityResults.put(result);
+    await supabase.from('student_activity_results').upsert(result);
 
     toast.error('Você desistiu da atividade. Ela foi marcada como falhada.');
     closeActivity();
@@ -275,9 +264,9 @@ export const Activities: React.FC = () => {
   };
 
 
-  const pending = activities.filter(a => !activityResults[a.id]);
-  const completed = activities.filter(a => !!activityResults[a.id]);
-  const shown = activeTab === 'pending' ? pending : completed;
+  const pending: any[] = activities.filter((a: any) => !activityResults[a.id]);
+  const completed: any[] = activities.filter((a: any) => !!activityResults[a.id]);
+  const shown: any[] = activeTab === 'pending' ? pending : completed;
 
 
 

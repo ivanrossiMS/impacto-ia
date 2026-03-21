@@ -4,39 +4,46 @@ import { GraduationCap, Home, Users, BookOpen, Wand2, BarChart3, Bell, LogOut, M
 import { useAuthStore } from '../store/auth.store';
 import { useUIStore } from '../store/ui.store';
 import { cn } from '../lib/utils';
-import { db } from '../lib/dexie';
-import { useLiveQuery } from 'dexie-react-hooks';
+import { supabase } from '../lib/supabase';
 
 export const TeacherLayout: React.FC = () => {
   const { user, logout } = useAuthStore();
   const { isSidebarOpen, setSidebarOpen } = useUIStore();
   const navigate = useNavigate();
 
-  const unreadSupportCount = useLiveQuery(async () => {
-    if (!user) return 0;
-    try {
-      return await db.supportTickets
-        .where('userId').equals(user.id)
-        .and(t => !t.isReadByParticipant)
-        .count();
-    } catch (e) {
-      return 0;
+  const [unreadSupportCount, setUnreadSupportCount] = React.useState(0);
+  const [schoolLogo, setSchoolLogo] = React.useState<string | null>(null);
+  const [unreadCount, setUnreadCount] = React.useState(0);
+
+  const fetchLayoutData = async () => {
+    if (!user) return;
+    
+    if (user.schoolId) {
+      const { data: school } = await supabase.from('schools').select('logo').eq('id', user.schoolId).single();
+      if (school) setSchoolLogo(school.logo);
     }
-  }, [user]) || 0;
 
-  const schoolLogo = useLiveQuery(async () => {
-    if (!user?.schoolId) return null;
-    const school = await db.schools.get(user.schoolId);
-    return school?.logo || null;
-  }, [user?.schoolId]);
+    const { count: supportCount } = await supabase.from('support_tickets').select('*', { count: 'exact', head: true }).eq('userId', user.id).eq('isReadByParticipant', false);
+    setUnreadSupportCount(supportCount || 0);
 
-  const unreadCount = useLiveQuery(async () => {
-    if (!user) return 0;
-    return await db.notifications
-      .where('userId').equals(user.id)
-      .and(n => !n.read)
-      .count();
-  }, [user]) || 0;
+    const { count: notifCount } = await supabase.from('notifications').select('*', { count: 'exact', head: true }).eq('userId', user.id).eq('read', false);
+    setUnreadCount(notifCount || 0);
+  };
+
+  React.useEffect(() => {
+    fetchLayoutData();
+    const chSupport = supabase.channel('teacher_layout_support')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'support_tickets', filter: `userId=eq.${user?.id}` }, fetchLayoutData)
+      .subscribe();
+    const chNotifs = supabase.channel('teacher_layout_notifs')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'notifications', filter: `userId=eq.${user?.id}` }, fetchLayoutData)
+      .subscribe();
+
+    return () => { 
+      supabase.removeChannel(chSupport);
+      supabase.removeChannel(chNotifs);
+    };
+  }, [user]);
 
   const handleLogout = () => {
     logout();

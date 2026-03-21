@@ -1,7 +1,6 @@
 import React, { useState } from 'react';
 import { useAuthStore } from '../../store/auth.store';
-import { db } from '../../lib/dexie';
-import { useLiveQuery } from 'dexie-react-hooks';
+  import { supabase } from '../../lib/supabase';
 import type { Student, AppUser, Guardian } from '../../types/user';
 import {
   Trophy, Star, Crown, Medal, Users, ChevronDown, Target, Flame,
@@ -18,69 +17,102 @@ export const Ranking: React.FC = () => {
   const [selectedStudentId, setSelectedStudentId] = useState<string>('');
   const [activeTab, setActiveTab] = useState<'class' | 'school' | 'global'>('class');
 
-  // Load linked students
-  const studentsList = useLiveQuery(async () => {
-    if (!guardian || guardian.role !== 'guardian') return [];
-    
-    // 1. Get live guardian
-    const liveG = await db.users.get(guardian.id);
-    const sidList = (liveG && liveG.role === 'guardian') ? (liveG.studentIds || []) : [];
+  const [studentsList, setStudentsList] = useState<Student[]>([]);
+  const [rankingEntries, setRankingEntries] = useState<any[]>([]);
 
-    // 2. Fetch by studentIds array OR search where guardianIds contains guardian.id
-    const linkedByGuardian = await db.users.where('id').anyOf(sidList).toArray();
-    const linkedByStudent = await db.users.where('guardianIds').equals(guardian.id).toArray();
-    
-    const all = [...linkedByGuardian, ...linkedByStudent];
-    const uniqueIds = new Set();
-    const linked = all.filter(s => {
-      if (s.role !== 'student' || uniqueIds.has(s.id)) return false;
-      uniqueIds.add(s.id);
-      return true;
-    }) as Student[];
-    
-    if (linked.length > 0 && !selectedStudentId) {
-      setSelectedStudentId(linked[0].id);
-    }
-    return linked;
-  }, [guardian?.id]) || [];
+  // Load linked students
+  React.useEffect(() => {
+    const fetchStudents = async () => {
+      if (!guardian || guardian.role !== 'guardian') return;
+      
+      const { data: liveG } = await supabase.from('users').select('*').eq('id', guardian.id).single();
+      const sidList = liveG?.studentIds || [];
+
+      let linkedByGuardian: any[] = [];
+      if (sidList.length > 0) {
+        const { data } = await supabase.from('users').select('*').in('id', sidList);
+        linkedByGuardian = data || [];
+      }
+
+      const { data: linkedByStudent } = await supabase.from('users').select('*').contains('guardianIds', [guardian.id]);
+      
+      const all = [...linkedByGuardian, ...(linkedByStudent || [])];
+      const uniqueIds = new Set();
+      const linked = all.filter(s => {
+        if (s.role !== 'student' || uniqueIds.has(s.id)) return false;
+        uniqueIds.add(s.id);
+        return true;
+      }) as Student[];
+      
+      setStudentsList(linked);
+      if (linked.length > 0 && !selectedStudentId) {
+        setSelectedStudentId(linked[0].id);
+      }
+    };
+    fetchStudents();
+  }, [guardian?.id]);
 
   const selectedStudent = studentsList.find(s => s.id === selectedStudentId);
 
   // Load Ranking Data based on tab and selected student
-  const rankingEntries = useLiveQuery(async () => {
-    if (!selectedStudent) return [];
-
-    let studentsToRank: AppUser[] = [];
-
-    if (activeTab === 'class') {
-      const studentClass = selectedStudent.classId ? await db.classes.get(selectedStudent.classId) : null;
-      if (studentClass && studentClass.studentIds?.length) {
-        studentsToRank = await db.users.where('id').anyOf(studentClass.studentIds).toArray();
-      } else {
-        // Fallback to all students in school if no class
-        studentsToRank = await db.users.where('schoolId').equals(selectedStudent.schoolId || '').and(u => u.role === 'student').toArray();
+  React.useEffect(() => {
+    const fetchRanking = async () => {
+      if (!selectedStudent) {
+        setRankingEntries([]);
+        return;
       }
-    } else if (activeTab === 'school') {
-      studentsToRank = await db.users.where('schoolId').equals(selectedStudent.schoolId || '').and(u => u.role === 'student').toArray();
-    } else {
-      // Global
-      studentsToRank = await db.users.where('role').equals('student').toArray();
-    }
 
-    const stats = await db.gamificationStats.where('id').anyOf(studentsToRank.map(s => s.id)).toArray();
-    const statsMap = new Map(stats.map(s => [s.id, s]));
+      let studentsToRank: AppUser[] = [];
 
-    const entries = studentsToRank.map(s => ({
-      user: s,
-      stats: statsMap.get(s.id) || null,
-      isMyChild: (guardian as Guardian)?.studentIds?.includes(s.id) || (s as Student).guardianIds?.includes(guardian?.id || '') || false
-    }));
+      if (activeTab === 'class') {
+        const { data: studentClass } = selectedStudent.classId ? await supabase.from('classes').select('*').eq('id', selectedStudent.classId).single() : { data: null };
+        if (studentClass && studentClass.studentIds?.length) {
+          const { data: stRank } = await supabase.from('users').select('*').in('id', studentClass.studentIds);
+          studentsToRank = stRank || [];
+        } else {
+          // Fallback to all students in school if no class
+          const { data } = await supabase.from('users').select('*').eq('schoolId', selectedStudent.schoolId || '').eq('role', 'student');
+          studentsToRank = data || [];
+        }
+      } else if (activeTab === 'school') {
+        const { data } = await supabase.from('users').select('*').eq('schoolId', selectedStudent.schoolId || '').eq('role', 'student');
+        studentsToRank = data || [];
+      } else {
+        // Global
+        const { data } = await supabase.from('users').select('*').eq('role', 'student');
+        studentsToRank = data || [];
+      }
 
-    // Sort by XP
-    return entries
-      .sort((a, b) => (b.stats?.xp || 0) - (a.stats?.xp || 0))
-      .map((e, i) => ({ ...e, rank: i + 1 }));
-  }, [selectedStudent, activeTab, guardian?.id]) || [];
+      const ids = studentsToRank.map(s => s.id);
+      let statsMap = new Map();
+      if (ids.length > 0) {
+         const { data: stats } = await supabase.from('gamification_stats').select('*').in('id', ids);
+         if (stats) {
+            statsMap = new Map(stats.map(s => [s.id, s]));
+         }
+      }
+
+      const entries = studentsToRank.map(s => ({
+        user: s,
+        stats: statsMap.get(s.id) || null,
+        isMyChild: (guardian as Guardian)?.studentIds?.includes(s.id) || (s as Student).guardianIds?.includes(guardian?.id || '') || false
+      }));
+
+      // Sort by XP
+      const sorted = entries
+        .sort((a, b) => (b.stats?.xp || 0) - (a.stats?.xp || 0))
+        .map((e, i) => ({ ...e, rank: i + 1 }));
+        
+      setRankingEntries(sorted);
+    };
+    
+    fetchRanking();
+    
+    const ch = supabase.channel('guardian_ranking')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'gamification_stats' }, fetchRanking)
+      .subscribe();
+    return () => { supabase.removeChannel(ch); };
+  }, [selectedStudent, activeTab, guardian?.id]);
 
   const myChildEntry = rankingEntries.find(e => e.user.id === selectedStudentId);
   const top3 = rankingEntries.slice(0, 3);

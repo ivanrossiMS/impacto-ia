@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { db } from '../../lib/dexie';
+import { supabase } from '../../lib/supabase';
 import type { Student, SchoolClass, AppUser } from '../../types/user';
 import type { GamificationStats, StudentAchievement, Achievement, Mission, StudentMissionProgress } from '../../types/gamification';
 import type { StudentAvatarProfile } from '../../types/avatar';
@@ -24,7 +24,7 @@ import { AvatarComposer } from '../../features/avatar/components/AvatarComposer'
 import { useNavigate } from 'react-router-dom';
 import { cn } from '../../lib/utils';
 import { XPProgressBar } from '../../components/ui/XPProgressBar';
-import { useLiveQuery } from 'dexie-react-hooks';
+
 import { calculateLevel, getLevelProgress } from '../../lib/gamificationUtils';
 
 type StudentFull = {
@@ -114,133 +114,183 @@ export const GuardianDashboard: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [selectedStudentId, setSelectedStudentId] = useState<string>('');
 
-  // Fetch guardian's students
-  const students = useLiveQuery(async () => {
-    if (!user || user.role !== 'guardian') return [] as Student[];
-    
-    // 1. Get live guardian record to have latest studentIds
-    const liveGuardian = await db.users.get(user.id);
-    const sidList = (liveGuardian && liveGuardian.role === 'guardian') ? (liveGuardian.studentIds || []) : [];
+  const [studentsData, setStudentsData] = useState<StudentFull[]>([]);
+  const [weeklyActivity, setWeeklyActivity] = useState<boolean[]>(new Array(7).fill(false));
+  const [catalog, setCatalog] = useState<any[]>([]);
 
-    // 2. Fetch by studentIds array OR search where guardianIds contains user.id
-    const linkedByGuardian = await db.users.where('id').anyOf(sidList).toArray();
-    const linkedByStudent = await db.users.where('guardianIds').equals(user.id).toArray();
-    
-    const all = [...linkedByGuardian, ...linkedByStudent];
-    const uniqueIds = new Set();
-    return all.filter(s => {
-      if (s.role !== 'student' || uniqueIds.has(s.id)) return false;
-      uniqueIds.add(s.id);
-      return true;
-    }) as Student[];
-  }, [user?.id]) || [];
+  const fetchDashboardData = async () => {
+    if (!user || user.role !== 'guardian') {
+      setLoading(false);
+      return;
+    }
 
-  // Fetch all required definitions
-  const allAchievDefs = useLiveQuery(() => db.achievements.toArray()) || [];
-  const allMissionDefs = useLiveQuery(() => db.missions.toArray()) || [];
-  const allPathDefs = useLiveQuery(() => db.learningPaths.toArray()) || [];
-  const allCatalog = useLiveQuery(() => db.avatarCatalog.toArray()) || [];
+    try {
+      // 1. Get live guardian record for studentIds
+      const { data: liveGuardian } = await supabase.from('users').select('*').eq('id', user.id).single();
+      const sidList = liveGuardian?.studentIds || [];
 
-  // Enriched data for all students (used for pills and alerts)
-  const studentsData = useLiveQuery(async () => {
-    if (students.length === 0) return [] as StudentFull[];
-    
-    return Promise.all(students.map(async (student): Promise<StudentFull> => {
-      const stats = await db.gamificationStats.get(student.id) || null;
-      const profile = await db.studentAvatarProfiles.get(student.id) || null;
+      // 2. Fetch by studentIds array OR search where guardianIds contains user.id
+      let linkedByGuardian: any[] = [];
+      if (sidList.length > 0) {
+        const { data } = await supabase.from('users').select('*').in('id', sidList);
+        linkedByGuardian = data || [];
+      }
       
-      const rawAch = await db.studentAchievements.where('studentId').equals(student.id).toArray();
-      const achievements = rawAch.map(sa => ({
-        ...sa,
-        detail: allAchievDefs.find(a => a.id === sa.achievementId)
-      }));
+      const { data: linkedByStudent } = await supabase.from('users').select('*').contains('guardianIds', [user.id]);
 
-      const rawMissions = await db.studentMissions.where('studentId').equals(student.id).toArray();
-      const missions = rawMissions.map(sm => ({
-        ...sm,
-        detail: allMissionDefs.find(m => m.id === sm.missionId)
-      }));
+      const allUsers = [...linkedByGuardian, ...(linkedByStudent || [])];
+      const uniqueIds = new Set();
+      const students = allUsers.filter(s => {
+        if (s.role !== 'student' || uniqueIds.has(s.id)) return false;
+        uniqueIds.add(s.id);
+        return true;
+      }) as Student[];
 
-      const rawProgress = await db.studentProgress.where('studentId').equals(student.id).toArray();
-      const paths = rawProgress.map(sp => ({
-        ...sp,
-        detail: allPathDefs.find(p => p.id === sp.pathId)
-      }));
+      if (students.length === 0) {
+        setStudentsData([]);
+        setLoading(false);
+        return;
+      }
 
-      const schoolClass = student.classId ? (await db.classes.get(student.classId) || null) : null;
+      // Fetch global static definitions
+      const [
+        { data: allAchievDefs },
+        { data: allMissionDefs },
+        { data: allPathDefs },
+        { data: allCatalog }
+      ] = await Promise.all([
+        supabase.from('achievements').select('*'),
+        supabase.from('missions').select('*'),
+        supabase.from('learning_paths').select('*'),
+        supabase.from('avatar_catalog').select('*')
+      ]);
+
+      setCatalog(allCatalog || []);
+
+      const studentIds = students.map(s => s.id);
       
-      return { student, stats, profile, achievements, missions, paths, schoolClass };
-    }));
-  }, [students, allAchievDefs, allMissionDefs, allPathDefs]) || [];
+      const [
+        { data: statsData },
+        { data: profilesData },
+        { data: studentAchievsData },
+        { data: studentMissionsData },
+        { data: studentProgressData },
+        { data: classesData }
+      ] = await Promise.all([
+        supabase.from('gamification_stats').select('*').in('id', studentIds),
+        supabase.from('student_avatar_profiles').select('*').in('id', studentIds),
+        supabase.from('student_achievements').select('*').in('studentId', studentIds),
+        supabase.from('student_missions').select('*').in('studentId', studentIds),
+        supabase.from('student_progress').select('*').in('studentId', studentIds),
+        supabase.from('classes').select('*')
+      ]);
 
-  // Initial student selection
-  useEffect(() => {
-    if (studentsData.length > 0 && !selectedStudentId) {
-      setSelectedStudentId(studentsData[0].student.id);
+      const enrichedStudents: StudentFull[] = students.map(student => {
+        const stats = statsData?.find(s => s.id === student.id) || null;
+        const profile = profilesData?.find(p => p.id === student.id) || null;
+        
+        const rawAch = studentAchievsData?.filter(a => a.studentId === student.id) || [];
+        const achievements = rawAch.map(sa => ({
+          ...sa,
+          detail: allAchievDefs?.find(a => a.id === sa.achievementId)
+        }));
+
+        const rawMissions = studentMissionsData?.filter(m => m.studentId === student.id) || [];
+        const missions = rawMissions.map(sm => ({
+          ...sm,
+          detail: allMissionDefs?.find(m => m.id === sm.missionId)
+        }));
+
+        const rawProgress = studentProgressData?.filter(p => p.studentId === student.id) || [];
+        const paths = rawProgress.map(sp => ({
+          ...sp,
+          detail: allPathDefs?.find(p => p.id === sp.pathId)
+        }));
+
+        const schoolClass = classesData?.find(c => c.id === student.classId) || null;
+
+        return { student, stats, profile, achievements, missions, paths, schoolClass };
+      });
+
+      setStudentsData(enrichedStudents);
       setLoading(false);
-    } else if (studentsData.length > 0) {
-      setLoading(false);
-    } else if (studentsData.length === 0 && !loading) {
-      // Keep loading as false if we finished fetching and it's empty
-      setLoading(false);
-    } else if (user && user.role === 'guardian' && (user.studentIds || []).length === 0) {
+    } catch (error) {
+      console.error('Error fetching guardian dashboard:', error);
       setLoading(false);
     }
-  }, [studentsData, selectedStudentId, loading, user]);
-  
-  // Fetch real weekly activity for the selected student
-  const weeklyActivity = useLiveQuery(async () => {
-    if (!selectedStudentId) return new Array(7).fill(false) as boolean[];
-    
-    const now = new Date();
-    // Set to last Sunday at 00:00:00
-    const startOfWeek = new Date(now);
-    startOfWeek.setDate(now.getDate() - now.getDay()); 
-    startOfWeek.setHours(0, 0, 0, 0);
+  };
 
-    // Fetch all possible activity markers
-    const [activities, diary, duels, achievements, missions, progress, notices] = await Promise.all([
-      db.studentActivityResults.where('studentId').equals(selectedStudentId).toArray(),
-      db.diaryEntries.where('studentId').equals(selectedStudentId).toArray(),
-      db.duels.where('challengerId').equals(selectedStudentId).or('challengedId').equals(selectedStudentId).toArray(),
-      db.studentAchievements.where('studentId').equals(selectedStudentId).toArray(),
-      db.studentMissions.where('studentId').equals(selectedStudentId).toArray(),
-      db.studentProgress.where('studentId').equals(selectedStudentId).toArray(),
-      db.notifications.where('userId').equals(selectedStudentId).toArray()
-    ]);
+  useEffect(() => {
+    fetchDashboardData();
+    const ch = supabase.channel('guardian_dash')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'gamification_stats' }, fetchDashboardData)
+      .subscribe();
+    return () => { supabase.removeChannel(ch); };
+  }, [user?.id]);
 
-    const activeDays = new Array(7).fill(false);
-    
-    const checkDate = (dateStr: string | undefined) => {
-      if (!dateStr) return;
-      const d = new Date(dateStr);
-      // Only count if it's within the current Sun-Sat week
-      if (d >= startOfWeek) {
-        const dayIndex = d.getDay();
-        if (dayIndex >= 0 && dayIndex < 7) {
-          activeDays[dayIndex] = true;
+  const fetchWeeklyActivity = async (studentId: string) => {
+    if (!studentId) return;
+    try {
+      const now = new Date();
+      const startOfWeek = new Date(now);
+      startOfWeek.setDate(now.getDate() - now.getDay()); 
+      startOfWeek.setHours(0, 0, 0, 0);
+
+      const isoStart = startOfWeek.toISOString();
+
+      const [
+        { data: activities },
+        { data: diary },
+        { data: challengerDuels },
+        { data: challengedDuels },
+        { data: achievements },
+        { data: missions },
+        { data: progress },
+        { data: notices }
+      ] = await Promise.all([
+        supabase.from('student_activity_results').select('completedAt').eq('studentId', studentId).gte('completedAt', isoStart),
+        supabase.from('diary_entries').select('createdAt').eq('studentId', studentId).gte('createdAt', isoStart),
+        supabase.from('duels').select('completedAt').eq('challengerId', studentId).gte('completedAt', isoStart),
+        supabase.from('duels').select('completedAt').eq('challengedId', studentId).gte('completedAt', isoStart),
+        supabase.from('student_achievements').select('unlockedAt').eq('studentId', studentId).gte('unlockedAt', isoStart),
+        supabase.from('student_missions').select('completedAt').eq('studentId', studentId).gte('completedAt', isoStart),
+        supabase.from('student_progress').select('startedAt,completedAt').eq('studentId', studentId),
+        supabase.from('notifications').select('createdAt,type').eq('userId', studentId).gte('createdAt', isoStart).in('type', ['reward', 'success', 'system'])
+      ]);
+
+      const activeDays = new Array(7).fill(false);
+      
+      const checkDate = (dateStr: string | null | undefined) => {
+        if (!dateStr) return;
+        const d = new Date(dateStr);
+        if (d >= startOfWeek) {
+          const dayIndex = d.getDay();
+          if (dayIndex >= 0 && dayIndex < 7) {
+            activeDays[dayIndex] = true;
+          }
         }
-      }
-    };
+      };
 
-    activities.forEach(a => checkDate(a.completedAt));
-    diary.forEach(d => checkDate(d.createdAt));
-    duels.forEach(d => d.completedAt && checkDate(d.completedAt));
-    achievements.forEach(a => checkDate(a.unlockedAt));
-    missions.forEach(m => checkDate(m.completedAt));
-    progress.forEach(p => {
-      checkDate(p.startedAt);
-      checkDate(p.completedAt);
-    });
-    // Filter notifications to only those that represent a student action/reward
-    notices.forEach(n => {
-      if (['reward', 'success', 'system'].includes(n.type)) {
-        checkDate(n.createdAt);
-      }
-    });
+      activities?.forEach(a => checkDate(a.completedAt));
+      diary?.forEach(d => checkDate(d.createdAt));
+      challengerDuels?.forEach(d => checkDate(d.completedAt));
+      challengedDuels?.forEach(d => checkDate(d.completedAt));
+      achievements?.forEach(a => checkDate(a.unlockedAt));
+      missions?.forEach(m => checkDate(m.completedAt));
+      progress?.forEach(p => { checkDate(p.startedAt); checkDate(p.completedAt); });
+      notices?.forEach(n => checkDate(n.createdAt));
 
-    return activeDays;
-  }, [selectedStudentId]) || new Array(7).fill(false);
+      setWeeklyActivity(activeDays);
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  useEffect(() => {
+    if (selectedStudentId) {
+       fetchWeeklyActivity(selectedStudentId);
+    }
+  }, [selectedStudentId, studentsData]);
 
   if (loading && studentsData.length === 0) {
     return (
@@ -258,7 +308,6 @@ export const GuardianDashboard: React.FC = () => {
 
   const selected = studentsData.find(d => d.student.id === selectedStudentId);
   const alerts = getAlerts(studentsData);
-  const catalog = allCatalog;
 
   // Aggregate family stats
   const totalXP = studentsData.reduce((acc, d) => acc + (d.stats?.xp || 0), 0);

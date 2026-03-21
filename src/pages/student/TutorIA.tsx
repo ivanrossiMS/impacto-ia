@@ -7,8 +7,7 @@ import {
 } from 'lucide-react';
 import { useAuthStore } from '../../store/auth.store';
 import { motion, AnimatePresence } from 'framer-motion';
-import { db } from '../../lib/dexie';
-import { useLiveQuery } from 'dexie-react-hooks';
+import { supabase } from '../../lib/supabase';
 import { cn } from '../../lib/utils';
 import { incrementMissionProgress } from '../../lib/missionUtils';
 import { toast } from 'sonner';
@@ -38,12 +37,20 @@ export const TutorIA: React.FC = () => {
   const [showSidebar, setShowSidebar] = useState(true);
   const scrollRef = useRef<HTMLDivElement>(null);
 
-  const activePath = useLiveQuery(async () => {
-    if (!user) return null;
-    const progress = await db.studentProgress.where('studentId').equals(user.id).toArray();
-    const inProgress = progress.find(p => p.status === 'in_progress');
-    if (!inProgress) return null;
-    return db.learningPaths.get(inProgress.pathId);
+  const [activePath, setActivePath] = useState<any>(null);
+
+  useEffect(() => {
+    const fetchActivePath = async () => {
+      if (!user) return;
+      const { data: progress } = await supabase.from('student_progress').select('*').eq('studentId', user.id).eq('status', 'in_progress').single();
+      if (progress) {
+        const { data: path } = await supabase.from('learning_paths').select('*').eq('id', progress.pathId).single();
+        if (path) {
+          setActivePath(path);
+        }
+      }
+    };
+    fetchActivePath();
   }, [user]);
 
   const savedNotes = [

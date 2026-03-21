@@ -1,13 +1,12 @@
 import type { IAuthRepository } from '../repositories/contracts/auth.repository';
-import { LocalAuthRepository } from '../repositories/local/local-auth.repository';
+import { SupabaseAuthRepository } from '../repositories/supabase/supabase-auth.repository';
 import type { AppUser } from '../types/user';
 
 class AuthService {
   private repository: IAuthRepository;
 
   constructor() {
-    // Easily swappable for SupabaseAuthRepository in the future
-    this.repository = new LocalAuthRepository();
+    this.repository = new SupabaseAuthRepository();
   }
 
   async loginWithEmail(email: string, passwordHash: string): Promise<AppUser | null> {
@@ -27,7 +26,7 @@ class AuthService {
   }
 
   async getCurrentUserByRoleAndId(role: string, identifier: string): Promise<AppUser | null> {
-    return await (this.repository as LocalAuthRepository).getUserByRoleAndId(role, identifier);
+    return await this.repository.getUserByRoleAndId(role, identifier);
   }
 }
 

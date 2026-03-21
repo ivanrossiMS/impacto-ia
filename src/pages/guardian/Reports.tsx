@@ -1,12 +1,11 @@
 import React, { useEffect, useState } from 'react';
-import { db } from '../../lib/dexie';
+import { supabase } from '../../lib/supabase';
 import type { Student } from '../../types/user';
 import type { GamificationStats, StudentAchievement, Achievement, StudentMissionProgress, Mission, StudentActivityResult } from '../../types/gamification';
 import type { Activity } from '../../types/learning';
 import type { StudentAvatarProfile, AvatarCatalogItem } from '../../types/avatar';
 
 import { useAuthStore } from '../../store/auth.store';
-import { useLiveQuery } from 'dexie-react-hooks';
 import {
   TrendingUp,
   Trophy,
@@ -234,67 +233,131 @@ export const Reports: React.FC = () => {
   const [selectedStudentId, setSelectedStudentId] = useState<string>('');
   const [selectedResult, setSelectedResult] = useState<(StudentActivityResult & { detail?: Activity }) | null>(null);
 
-  const catalog = useLiveQuery(() => db.avatarCatalog.toArray()) || [];
-  const allAchievementDefs = useLiveQuery(() => db.achievements.toArray()) || [];
-  const allMissionDefs = useLiveQuery(() => db.missions.toArray()) || [];
-  const allActivityDefs = useLiveQuery(() => db.activities.toArray()) || [];
+  const [catalog, setCatalog] = useState<any[]>([]);
+  const [studentsData, setStudentsData] = useState<StudentFull[]>([]);
+  const [loading, setLoading] = useState(true);
 
-  const studentsData = useLiveQuery(async () => {
-    if (!user || user.role !== 'guardian') return [] as StudentFull[];
+  const fetchReportsData = async () => {
+    if (!user || user.role !== 'guardian') {
+      setLoading(false);
+      return;
+    }
 
-    const liveG = await db.users.get(user.id);
-    const sidList = (liveG && liveG.role === 'guardian') ? (liveG.studentIds || []) : [];
+    try {
+      const { data: liveG } = await supabase.from('users').select('*').eq('id', user.id).single();
+      const sidList = liveG?.studentIds || [];
 
-    const linkedByGuardian = await db.users.where('id').anyOf(sidList).toArray();
-    const linkedByStudent = await db.users.where('guardianIds').equals(user.id).toArray();
-    
-    const all = [...linkedByGuardian, ...linkedByStudent];
-    const uniqueIds = new Set();
-    const students = all.filter(s => {
-      if (s.role !== 'student' || uniqueIds.has(s.id)) return false;
-      uniqueIds.add(s.id);
-      return true;
-    }) as Student[];
+      let linkedByGuardian: any[] = [];
+      if (sidList.length > 0) {
+        const { data } = await supabase.from('users').select('*').in('id', sidList);
+        linkedByGuardian = data || [];
+      }
+      
+      const { data: linkedByStudent } = await supabase.from('users').select('*').contains('guardianIds', [user.id]);
+      
+      const all = [...linkedByGuardian, ...(linkedByStudent || [])];
+      const uniqueIds = new Set();
+      const students = all.filter(s => {
+        if (s.role !== 'student' || uniqueIds.has(s.id)) return false;
+        uniqueIds.add(s.id);
+        return true;
+      }) as Student[];
 
-    return Promise.all(students.map(async student => {
-      const stats = await db.gamificationStats.get(student.id) || null;
-      const profile = await db.studentAvatarProfiles.get(student.id) || null;
-
-      const rawAch = await db.studentAchievements.where('studentId').equals(student.id).toArray();
-      const achievements = rawAch.map((sa: StudentAchievement) => ({
-        ...sa,
-        detail: allAchievementDefs.find((a: Achievement) => a.id === sa.achievementId)
-      }));
-
-      const rawMissions = await db.studentMissions.where('studentId').equals(student.id).toArray();
-      const missions = rawMissions.map((sm: StudentMissionProgress) => ({
-        ...sm,
-        detail: allMissionDefs.find((m: Mission) => m.id === sm.missionId)
-      }));
-
-      let className: string | undefined;
-      if (student.classId) {
-        const cls = await db.classes.get(student.classId);
-        className = cls?.name;
+      if (students.length === 0) {
+        setStudentsData([]);
+        setLoading(false);
+        return;
       }
 
-      const rawResults = await db.studentActivityResults.where('studentId').equals(student.id).toArray();
-      const activityResults = rawResults.map((r: StudentActivityResult) => ({
-        ...r,
-        detail: allActivityDefs.find((a: Activity) => a.id === r.activityId)
-      }));
+      const [
+        { data: allAchievDefs },
+        { data: allMissionDefs },
+        { data: allActivityDefs },
+        { data: allCatalog }
+      ] = await Promise.all([
+        supabase.from('achievements').select('*'),
+        supabase.from('missions').select('*'),
+        supabase.from('activities').select('*'),
+        supabase.from('avatar_catalog').select('*')
+      ]);
 
-      return { student, stats, profile, achievements, missions, activityResults, className, grade: student.grade };
-    }));
-  }, [user?.id, allAchievementDefs.length, allMissionDefs.length, allActivityDefs.length]) || [];
+      setCatalog(allCatalog || []);
+
+      const studentIds = students.map(s => s.id);
+
+      const [
+        { data: statsData },
+        { data: profilesData },
+        { data: studentAchievsData },
+        { data: studentMissionsData },
+        { data: studentResultsData },
+        { data: classesData }
+      ] = await Promise.all([
+        supabase.from('gamification_stats').select('*').in('id', studentIds),
+        supabase.from('student_avatar_profiles').select('*').in('id', studentIds),
+        supabase.from('student_achievements').select('*').in('studentId', studentIds),
+        supabase.from('student_missions').select('*').in('studentId', studentIds),
+        supabase.from('student_activity_results').select('*').in('studentId', studentIds),
+        supabase.from('classes').select('*')
+      ]);
+
+      const enrichedStudents: StudentFull[] = students.map(student => {
+        const stats = statsData?.find(s => s.id === student.id) || null;
+        const profile = profilesData?.find(p => p.id === student.id) || null;
+        
+        const rawAch = studentAchievsData?.filter(a => a.studentId === student.id) || [];
+        const achievements = rawAch.map(sa => ({
+          ...sa,
+          detail: allAchievDefs?.find(a => a.id === sa.achievementId)
+        }));
+
+        const rawMissions = studentMissionsData?.filter(m => m.studentId === student.id) || [];
+        const missions = rawMissions.map(sm => ({
+          ...sm,
+          detail: allMissionDefs?.find(m => m.id === sm.missionId)
+        }));
+
+        const rawResults = studentResultsData?.filter(r => r.studentId === student.id) || [];
+        const activityResults = rawResults.map(r => ({
+          ...r,
+          detail: allActivityDefs?.find(a => a.id === r.activityId)
+        }));
+
+        const schoolClass = classesData?.find(c => c.id === student.classId) || null;
+
+        return { 
+          student, 
+          stats, 
+          profile, 
+          achievements, 
+          missions, 
+          activityResults, 
+          className: schoolClass?.name, 
+          grade: student.grade 
+        };
+      });
+
+      setStudentsData(enrichedStudents);
+      setLoading(false);
+    } catch (e) {
+      console.error(e);
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchReportsData();
+    const ch = supabase.channel('guardian_reports')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'student_activity_results' }, fetchReportsData)
+      .subscribe();
+    return () => { supabase.removeChannel(ch); };
+  }, [user?.id]);
 
   useEffect(() => {
     if (studentsData.length > 0 && !selectedStudentId) {
       setSelectedStudentId(studentsData[0].student.id);
     }
   }, [studentsData, selectedStudentId]);
-
-  const loading = !user || (studentsData.length > 0 && !selectedStudentId);
 
   if (loading) {
     return (

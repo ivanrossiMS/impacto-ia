@@ -1,11 +1,11 @@
 import { create } from 'zustand';
-import { db } from '../lib/dexie';
+import { supabase } from '../lib/supabase';
 import type { 
   AvatarCatalogItem, 
   StudentOwnedAvatarItem, 
   StudentAvatarProfile 
 } from '../types/avatar';
-import { ensureDefaultItems } from '../lib/seed';
+
 import { updateGamificationStats } from '../lib/gamificationUtils';
 
 interface AvatarState {
@@ -37,9 +37,9 @@ export const useAvatarStore = create<AvatarState>((set) => ({
   fetchCatalog: async () => {
     set({ isLoading: true });
     try {
-      await ensureDefaultItems();
-      const items = await db.avatarCatalog.where('isActive').equals(1).toArray();
-      set({ catalog: items });
+      const { data: items, error } = await supabase.from('avatar_catalog').select('*').eq('isActive', 1);
+      if (error) throw error;
+      set({ catalog: items || [] });
     } catch (error) {
       console.error('Error fetching catalog:', error);
     } finally {
@@ -49,8 +49,9 @@ export const useAvatarStore = create<AvatarState>((set) => ({
 
   fetchOwnedItems: async (studentId) => {
     try {
-      const items = await db.studentOwnedAvatars.where('studentId').equals(studentId).toArray();
-      set({ ownedItems: items });
+      const { data: items, error } = await supabase.from('student_owned_avatars').select('*').eq('studentId', studentId);
+      if (error) throw error;
+      set({ ownedItems: items || [] });
     } catch (error) {
       console.error('Error fetching owned items:', error);
     }
@@ -59,7 +60,10 @@ export const useAvatarStore = create<AvatarState>((set) => ({
   fetchProfile: async (studentId) => {
     set({ isLoading: true });
     try {
-      let profile = await db.studentAvatarProfiles.get(studentId);
+      let { data: profile, error } = await supabase.from('student_avatar_profiles').select('*').eq('studentId', studentId).single();
+      
+      if (error && error.code !== 'PGRST116') throw error; // PGRST116 means no rows
+
       if (!profile) {
         // Create a default profile with the student capybara
         profile = {
@@ -70,11 +74,11 @@ export const useAvatarStore = create<AvatarState>((set) => ({
           equippedStickerIds: [],
           updatedAt: new Date().toISOString(),
         };
-        await db.studentAvatarProfiles.put(profile);
+        await supabase.from('student_avatar_profiles').insert(profile);
       } else if (!profile.selectedAvatarId) {
         // Migration for existing students without avatar
         profile.selectedAvatarId = 'default-student';
-        await db.studentAvatarProfiles.update(studentId, { selectedAvatarId: 'default-student' });
+        await supabase.from('student_avatar_profiles').update({ selectedAvatarId: 'default-student' }).eq('studentId', studentId);
       }
       set({ profile });
     } catch (error) {
@@ -96,7 +100,7 @@ export const useAvatarStore = create<AvatarState>((set) => ({
   },
 
   buyItem: async (studentId, item) => {
-    const stats = await db.gamificationStats.get(studentId);
+    const { data: stats } = await supabase.from('gamification_stats').select('coins').eq('id', studentId).single();
     if (!stats || stats.coins < item.priceCoins) {
       throw new Error('Moedas insuficientes!');
     }
@@ -113,7 +117,8 @@ export const useAvatarStore = create<AvatarState>((set) => ({
       acquisitionType: 'purchase'
     };
 
-    await db.studentOwnedAvatars.add(newItem);
+    const { error } = await supabase.from('student_owned_avatars').insert(newItem);
+    if (error) throw error;
     
     // Update local state
     set((state) => ({
@@ -128,27 +133,27 @@ export const useAvatarStore = create<AvatarState>((set) => ({
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString()
     };
-    await db.avatarCatalog.add(newItem);
+    await supabase.from('avatar_catalog').insert(newItem);
     set((state) => ({ catalog: [...state.catalog, newItem] }));
   },
 
   updateCatalogItem: async (id, updates) => {
     const updatedAt = new Date().toISOString();
-    await db.avatarCatalog.update(id, { ...updates, updatedAt });
+    await supabase.from('avatar_catalog').update({ ...updates, updatedAt }).eq('id', id);
     set((state) => ({
       catalog: state.catalog.map(item => item.id === id ? { ...item, ...updates, updatedAt } : item)
     }));
   },
 
   deleteCatalogItem: async (id) => {
-    await db.avatarCatalog.delete(id);
+    await supabase.from('avatar_catalog').delete().eq('id', id);
     set((state) => ({
       catalog: state.catalog.filter(item => item.id !== id)
     }));
   },
 
   updateProfile: async (profile) => {
-    await db.studentAvatarProfiles.put(profile);
+    await supabase.from('student_avatar_profiles').upsert(profile, { onConflict: 'studentId' });
     set({ profile });
   }
 }));

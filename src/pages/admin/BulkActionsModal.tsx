@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { X, Trash2, RefreshCw, Users, BookOpen, AlertCircle, ShieldAlert } from 'lucide-react';
 import { db } from '../../lib/dexie';
+import { supabase } from '../../lib/supabase';
 import { Button } from '../../components/ui/Button';
 import { toast } from 'sonner';
 import { cn } from '../../lib/utils';
@@ -44,12 +45,15 @@ export const BulkActionsModal: React.FC<BulkActionsModalProps> = ({ onClose, sch
       let count = 0;
       switch (type) {
         case 'delete_students': {
-          const query = db.users.where('role').equals('student');
-          const students = selectedSchoolId === 'all' ? await query.toArray() : await query.filter(u => u.schoolId === selectedSchoolId).toArray();
-          const ids = students.map(s => s.id);
+          const { data: students } = selectedSchoolId === 'all' 
+             ? await supabase.from('users').select('id').eq('role', 'student')
+             : await supabase.from('users').select('id').eq('role', 'student').eq('schoolId', selectedSchoolId);
+          if (!students || students.length === 0) break;
+          const ids = students.map((s: any) => s.id);
           count = ids.length;
-          await db.users.bulkDelete(ids);
-          await db.gamificationStats.bulkDelete(ids);
+          await supabase.from('users').delete().in('id', ids);
+          await supabase.from('gamification_stats').delete().in('id', ids);
+          
           await db.studentOwnedAvatars.where('studentId').anyOf(ids).delete();
           await db.studentAvatarProfiles.where('studentId').anyOf(ids).delete();
           await db.studentAchievements.where('studentId').anyOf(ids).delete();
@@ -61,55 +65,76 @@ export const BulkActionsModal: React.FC<BulkActionsModalProps> = ({ onClose, sch
         }
 
         case 'delete_guardians': {
-          const query = db.users.where('role').equals('guardian');
-          const guardians = selectedSchoolId === 'all' ? await query.toArray() : await query.filter(u => u.schoolId === selectedSchoolId).toArray();
-          const ids = guardians.map(g => g.id);
+          const { data: guardians } = selectedSchoolId === 'all' 
+             ? await supabase.from('users').select('id').eq('role', 'guardian')
+             : await supabase.from('users').select('id').eq('role', 'guardian').eq('schoolId', selectedSchoolId);
+          if (!guardians || guardians.length === 0) break;
+          const ids = guardians.map((g: any) => g.id);
           count = ids.length;
-          await db.users.bulkDelete(ids);
-          // Clear guardian links in students
-          await db.users.where('role').equals('student').modify((s: any) => {
-            if (s.guardianIds) {
-              s.guardianIds = s.guardianIds.filter((id: string) => !ids.includes(id));
+          await supabase.from('users').delete().in('id', ids);
+          const { data: qstudents } = await supabase.from('users').select('id, guardianIds').eq('role', 'student');
+          if (qstudents) {
+            for (const s of qstudents) {
+              if (s.guardianIds && s.guardianIds.some((gid: string) => ids.includes(gid))) {
+                const newIds = s.guardianIds.filter((gid: string) => !ids.includes(gid));
+                await supabase.from('users').update({ guardianIds: newIds }).eq('id', s.id);
+              }
             }
-          });
+          }
           break;
         }
 
         case 'delete_classes': {
-          const query = db.classes;
-          const targetClasses = selectedSchoolId === 'all' ? await query.toArray() : await query.where('schoolId').equals(selectedSchoolId).toArray();
-          const ids = targetClasses.map(c => c.id);
+          const { data: targetClasses } = selectedSchoolId === 'all'
+             ? await supabase.from('classes').select('id')
+             : await supabase.from('classes').select('id').eq('schoolId', selectedSchoolId);
+          if (!targetClasses || targetClasses.length === 0) break;
+          const ids = targetClasses.map((c: any) => c.id);
           count = ids.length;
-          await db.classes.bulkDelete(ids);
-          // Dissociate from users
-          await db.users.toCollection().modify((u: any) => {
-            if (u.classId && ids.includes(u.classId)) u.classId = undefined;
-            if (u.classIds) u.classIds = u.classIds.filter((id: string) => !ids.includes(id));
-          });
+          await supabase.from('classes').delete().in('id', ids);
+          const { data: usersWithClass } = await supabase.from('users').select('id, classId, classIds');
+          if (usersWithClass) {
+            for (const u of usersWithClass) {
+               let needsUpdate = false;
+               let upd: any = {};
+               if (u.classId && ids.includes(u.classId)) { upd.classId = null; needsUpdate = true; }
+               if (u.classIds && u.classIds.some((cid: string) => ids.includes(cid))) { upd.classIds = u.classIds.filter((cid: string) => !ids.includes(cid)); needsUpdate = true; }
+               if (needsUpdate) await supabase.from('users').update(upd).eq('id', u.id);
+            }
+          }
           break;
         }
 
         case 'clear_student_classes': {
-          const query = db.users.where('role').equals('student');
-          const students = selectedSchoolId === 'all' ? await query.toArray() : await query.filter(u => u.schoolId === selectedSchoolId).toArray();
-          count = students.length;
-          await db.users.where('id').anyOf(students.map(s => s.id)).modify({ classId: undefined, classIds: [] } as any);
+          const { data: cstudents } = selectedSchoolId === 'all' 
+             ? await supabase.from('users').select('id').eq('role', 'student')
+             : await supabase.from('users').select('id').eq('role', 'student').eq('schoolId', selectedSchoolId);
+          if (!cstudents || cstudents.length === 0) break;
+          const ids = cstudents.map((s: any) => s.id);
+          count = ids.length;
+          await supabase.from('users').update({ classId: null, classIds: [] }).in('id', ids);
           break;
         }
 
         case 'reset_student_access': {
-          const query = db.users.where('role').equals('student');
-          const students = selectedSchoolId === 'all' ? await query.toArray() : await query.filter(u => u.schoolId === selectedSchoolId).toArray();
-          count = students.length;
-          await db.users.where('id').anyOf(students.map(s => s.id)).modify({ isRegistered: false, passwordHash: undefined, updatedAt: now } as any);
+          const { data: rstudents } = selectedSchoolId === 'all' 
+             ? await supabase.from('users').select('id').eq('role', 'student')
+             : await supabase.from('users').select('id').eq('role', 'student').eq('schoolId', selectedSchoolId);
+          if (!rstudents || rstudents.length === 0) break;
+          const ids = rstudents.map((s: any) => s.id);
+          count = ids.length;
+          await supabase.from('users').update({ isRegistered: false, passwordHash: null, updatedAt: now }).in('id', ids);
           break;
         }
 
         case 'reset_guardian_access': {
-          const query = db.users.where('role').equals('guardian');
-          const guardians = selectedSchoolId === 'all' ? await query.toArray() : await query.filter(u => u.schoolId === selectedSchoolId).toArray();
-          count = guardians.length;
-          await db.users.where('id').anyOf(guardians.map(g => g.id)).modify({ isRegistered: false, passwordHash: undefined, updatedAt: now } as any);
+          const { data: rguardians } = selectedSchoolId === 'all' 
+             ? await supabase.from('users').select('id').eq('role', 'guardian')
+             : await supabase.from('users').select('id').eq('role', 'guardian').eq('schoolId', selectedSchoolId);
+          if (!rguardians || rguardians.length === 0) break;
+          const ids = rguardians.map((g: any) => g.id);
+          count = ids.length;
+          await supabase.from('users').update({ isRegistered: false, passwordHash: null, updatedAt: now }).in('id', ids);
           break;
         }
       }

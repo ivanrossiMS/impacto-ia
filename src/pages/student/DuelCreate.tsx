@@ -1,8 +1,8 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuthStore } from '../../store/auth.store';
-import { db } from '../../lib/dexie';
-import { useLiveQuery } from 'dexie-react-hooks';
+import { useEffect } from 'react';
+import { supabase } from '../../lib/supabase';
 import { 
   User, 
   HelpCircle,
@@ -25,34 +25,25 @@ export const DuelCreate: React.FC = () => {
   const [questionCount, setQuestionCount] = useState<5 | 8 | 10>(5);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  // Get classmates
-  const students = useLiveQuery(async () => {
-    if (!user) return [];
-    if (user.role !== 'student') return [];
-    
-    // 1. Try to find class via studentIds index
-    let myClass = await db.classes.where('studentIds').equals(user.id).first();
-    
-    // 2. Fallback to user's classId if available
-    if (!myClass && (user as any).classId) {
-      myClass = await db.classes.get((user as any).classId);
-    }
-    
-    // 3. Last resort: scan all classes (current logic)
-    if (!myClass) {
-      const allClasses = await db.classes.toArray();
-      myClass = allClasses.find(c => c.studentIds?.includes(user.id));
-    }
+  const [students, setStudents] = useState<any[]>([]);
 
-    if (!myClass || !myClass.studentIds) return [];
-
-    // Get all students in this class except current user
-    return db.users
-      .where('id')
-      .anyOf(myClass.studentIds)
-      .filter(u => u.id !== user.id)
-      .toArray();
-  }, [user?.id]) || [];
+  useEffect(() => {
+    const fetchClassmates = async () => {
+      if (!user) return;
+      if (user.role !== 'student') return;
+      
+      try {
+        const { data: userData } = await supabase.from('users').select('classId').eq('id', user.id).single();
+        if (userData?.classId) {
+          const { data: classmates } = await supabase.from('users').select('*').eq('classId', userData.classId).neq('id', user.id);
+          setStudents(classmates || []);
+        }
+      } catch (e) {
+        console.error('Error fetching classmates:', e);
+      }
+    };
+    fetchClassmates();
+  }, [user?.id]);
 
   const themes: { id: DuelTheme; label: string; icon: string }[] = [
     { id: 'historia', label: 'História', icon: '📜' },

@@ -9,8 +9,7 @@ import {
   ChevronRight,
   Globe
 } from 'lucide-react';
-import { db } from '../../lib/dexie';
-import { useLiveQuery } from 'dexie-react-hooks';
+import { supabase } from '../../lib/supabase';
 import { cn } from '../../lib/utils';
 import { Card } from '../../components/ui/Card';
 import { Badge } from '../../components/ui/Badge';
@@ -27,46 +26,84 @@ export const AdminRanking: React.FC = () => {
   const [searchTerm, setSearchTerm] = useState('');
   const [activeTab, setActiveTab] = useState<'students' | 'schools'>('students');
 
-  const schools = useLiveQuery(() => db.schools.toArray()) || [];
+  const [schools, setSchools] = useState<any[]>([]);
+  const [studentsRanking, setStudentsRanking] = useState<any[]>([]);
+  const [schoolsRanking, setSchoolsRanking] = useState<any[]>([]);
 
-  const studentsRanking = useLiveQuery(async () => {
-    const allUsers = await db.users.where('role').equals('student').toArray();
-    const allStats = await db.gamificationStats.toArray();
-    const allSchools = await db.schools.toArray();
-    const allClasses = await db.classes.toArray();
-
-    let students = allUsers;
-
-    if (selectedSchoolId !== 'all') {
-      students = students.filter(s => s.schoolId === selectedSchoolId);
-    }
-
-    if (searchTerm) {
-      students = students.filter(s => s.name.toLowerCase().includes(searchTerm.toLowerCase()));
-    }
-
-    const studentsWithStats = students.map((s): Student & { xp: number; coins: number; level: number; schoolName: string; className: string } => {
-      const stats = allStats.find(st => st.id === s.id);
-      const school = allSchools.find(sch => sch.id === s.schoolId);
-      const studentClass = allClasses.find(c => c.id === (s as any).classId);
+  const fetchData = async () => {
+    // 1. Schools
+    const { data: allSchools } = await supabase.from('schools').select('*');
+    if (allSchools) {
+      setSchools(allSchools);
+      // For Demo purposes, calculating globalScore on the fly if not present in DB.
+      // Usually you'd use a derived value or calculate it here based on users' XP.
+      // Easiest is to attach a dummy score or compute securely. In the DB some schools had "globalScore" field.
+      // Let's compute it.
+      const { data: allStudentsData } = await supabase.from('users').select('id, schoolId').eq('role', 'student');
+      const { data: allStatsData } = await supabase.from('gamification_stats').select('id, xp');
       
-      return { 
-        ...s as Student, 
-        xp: stats?.xp || 0, 
-        coins: stats?.coins || 0, 
-        level: stats?.level || 1,
-        schoolName: school?.name || 'Sem Escola',
-        className: studentClass?.name || (s as Student).grade || 'S/ Turma'
-      };
-    });
+      let schoolsRanked = [...allSchools];
+      if (allStudentsData && allStatsData) {
+         schoolsRanked = schoolsRanked.map(sch => {
+            const schStudents = allStudentsData.filter(u => u.schoolId === sch.id);
+            const studentIds = schStudents.map(s => s.id);
+            const schStats = allStatsData.filter(st => studentIds.includes(st.id));
+            const totalXp = schStats.reduce((sum, s) => sum + (s.xp || 0), 0);
+            return {
+               ...sch,
+               globalScore: Math.floor(totalXp / 5) + (schStudents.length * 10),
+               usersCount: schStudents.length
+            };
+         });
+      }
+      setSchoolsRanking(schoolsRanked.sort((a, b) => (b.globalScore || 0) - (a.globalScore || 0)));
+    }
 
-    return studentsWithStats.sort((a, b) => b.xp - a.xp);
+    // 2. Students
+    let query = supabase.from('users').select('*').eq('role', 'student');
+    if (selectedSchoolId !== 'all') {
+      query = query.eq('schoolId', selectedSchoolId);
+    }
+    const { data: usersData } = await query;
+    const { data: statsData } = await supabase.from('gamification_stats').select('*');
+    const { data: classesData } = await supabase.from('classes').select('*');
+
+    if (usersData && statsData && allSchools && classesData) {
+      let filteredStudents = usersData;
+      if (searchTerm) {
+        filteredStudents = filteredStudents.filter(s => s.name.toLowerCase().includes(searchTerm.toLowerCase()));
+      }
+
+      const studentsWithStats = filteredStudents.map((s): Student & { xp: number; coins: number; level: number; schoolName: string; className: string } => {
+        const stats = statsData.find(st => st.id === s.id);
+        const school = allSchools.find(sch => sch.id === s.schoolId);
+        const studentClass = classesData.find(c => c.id === s.classId);
+        
+        return { 
+          ...s as Student, 
+          xp: stats?.xp || 0, 
+          coins: stats?.coins || 0, 
+          level: stats?.level || 1,
+          schoolName: school?.name || 'Sem Escola',
+          className: studentClass?.name || (s as any).grade || 'S/ Turma'
+        };
+      });
+
+      setStudentsRanking(studentsWithStats.sort((a, b) => b.xp - a.xp));
+    }
+  };
+
+  React.useEffect(() => {
+    fetchData();
   }, [selectedSchoolId, searchTerm]);
 
-  const schoolsRanking = useLiveQuery(async () => {
-    const allSchools = await db.schools.toArray();
-    return allSchools.sort((a, b) => (b.globalScore || 0) - (a.globalScore || 0));
-  }, []);
+  React.useEffect(() => {
+     // Subscribe to real-time events that would shift rankings
+     const ch = supabase.channel('admin_ranking')
+       .on('postgres_changes', { event: '*', schema: 'public', table: 'gamification_stats' }, fetchData)
+       .subscribe();
+     return () => { supabase.removeChannel(ch); };
+  }, [selectedSchoolId, searchTerm]);
 
   return (
     <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">

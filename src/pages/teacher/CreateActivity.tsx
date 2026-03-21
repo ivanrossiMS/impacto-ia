@@ -8,8 +8,8 @@ import {
 import { motion, AnimatePresence } from 'framer-motion';
 import { toast } from 'sonner';
 import { cn } from '../../lib/utils';
-import { db } from '../../lib/dexie';
-import { useLiveQuery } from 'dexie-react-hooks';
+import { supabase } from '../../lib/supabase';
+import { useSupabaseQuery } from '../../hooks/useSupabase';
 import { useAuthStore } from '../../store/auth.store';
 import { saveActivityToStorage } from '../../lib/activityStorage';
 import { createBulkNotifications } from '../../lib/notificationUtils';
@@ -343,12 +343,12 @@ export const CreateActivity: React.FC = () => {
   const [showAddPanel, setShowAddPanel] = useState(false);
   const [showQuestionsPanel, setShowQuestionsPanel] = useState(true);
 
-  const teacherUser = useLiveQuery(async () => user ? db.users.get(user.id) : null, [user?.id]);
-  const teacherClassIds: string[] = (teacherUser as any)?.classIds || [];
-  const myClasses = useLiveQuery(async () => {
-    const all = await db.classes.toArray();
-    return all.filter(c => teacherClassIds.includes(c.id));
-  }, [teacherClassIds.join(',')]) || [];
+  const teacherUsersData = useSupabaseQuery<any>('users');
+  const teacherUser = teacherUsersData?.find((u: any) => u.id === user?.id);
+  const teacherClassIds: string[] = teacherUser?.classIds || [];
+  
+  const allClassesData = useSupabaseQuery<any>('classes');
+  const myClasses = (allClassesData || []).filter((c: any) => teacherClassIds.includes(c.id));
 
   const generationSteps = [
     { label: 'Analisando Tópico e Série', icon: Brain },
@@ -403,17 +403,20 @@ export const CreateActivity: React.FC = () => {
     const studentIds: string[] = [];
     
     // Fetch fresh class data to ensure we have all student IDs
-    if (classId) {
-      const freshClass = await db.classes.get(classId);
-      if (freshClass?.studentIds) {
-        studentIds.push(...freshClass.studentIds);
-      }
-    } else {
-      // Send to all my classes - fetch fresh data for each
-      for (const c of myClasses) {
-        const freshClass = await db.classes.get(c.id);
+    const { data: freshClasses, error } = await supabase.from('classes').select('*');
+    if (!error && freshClasses) {
+      if (classId) {
+        const freshClass = freshClasses.find(c => c.id === classId);
         if (freshClass?.studentIds) {
           studentIds.push(...freshClass.studentIds);
+        }
+      } else {
+        // Send to all my classes
+        for (const c of myClasses) {
+          const freshClass = freshClasses.find(fc => fc.id === c.id);
+          if (freshClass?.studentIds) {
+            studentIds.push(...freshClass.studentIds);
+          }
         }
       }
     }

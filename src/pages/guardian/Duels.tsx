@@ -1,7 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useAuthStore } from '../../store/auth.store';
-import { db } from '../../lib/dexie';
-import { useLiveQuery } from 'dexie-react-hooks';
+import { supabase } from '../../lib/supabase';
 import { 
   Sword, 
   CheckCircle2, 
@@ -22,57 +21,85 @@ export const Duels: React.FC = () => {
   const [selectedStudentId, setSelectedStudentId] = useState<string>('');
   const [selectedDuelId, setSelectedDuelId] = useState<string | null>(null);
 
-  // Fetch guardian's students with robust logic
-  const students = useLiveQuery(async () => {
-    if (!user || user.role !== 'guardian') return [] as Student[];
-    
-    const liveGuardian = await db.users.get(user.id);
-    const sidList = (liveGuardian && liveGuardian.role === 'guardian') ? (liveGuardian.studentIds || []) : [];
+  const [students, setStudents] = useState<Student[]>([]);
+  const [duels, setDuels] = useState<Duel[]>([]);
+  const [duelQuestions, setDuelQuestions] = useState<DuelQuestion[]>([]);
+  const [opponents, setOpponents] = useState<Record<string, string>>({});
 
-    const linkedByGuardian = await db.users.where('id').anyOf(sidList).toArray();
-    const linkedByStudent = await db.users.where('guardianIds').equals(user.id).toArray();
-    
-    const all = [...linkedByGuardian, ...linkedByStudent];
-    const uniqueIds = new Set();
-    return all.filter(s => {
-      if (s.role !== 'student' || uniqueIds.has(s.id)) return false;
-      uniqueIds.add(s.id);
-      return true;
-    }) as Student[];
-  }, [user?.id]) || [];
-
-  // Initial selection
+  // Fetch guardian's students
   useEffect(() => {
-    if (students.length > 0 && !selectedStudentId) {
-      setSelectedStudentId(students[0].id);
-    }
-  }, [students]);
+    const fetchStudents = async () => {
+      if (!user || user.role !== 'guardian') return;
+      const { data: liveG } = await supabase.from('users').select('*').eq('id', user.id).single();
+      const sidList = liveG?.studentIds || [];
+      
+      let linkedByGuardian: any[] = [];
+      if (sidList.length > 0) {
+        const { data } = await supabase.from('users').select('*').in('id', sidList);
+        linkedByGuardian = data || [];
+      }
+      
+      const { data: linkedByStudent } = await supabase.from('users').select('*').contains('guardianIds', [user.id]);
+      const all = [...linkedByGuardian, ...(linkedByStudent || [])];
+      
+      const uniqueIds = new Set();
+      const sortedStudents = all.filter(s => {
+        if (s.role !== 'student' || uniqueIds.has(s.id)) return false;
+        uniqueIds.add(s.id);
+        return true;
+      }) as Student[];
+      
+      setStudents(sortedStudents);
+      if (sortedStudents.length > 0 && !selectedStudentId) {
+        setSelectedStudentId(sortedStudents[0].id);
+      }
+    };
+    fetchStudents();
+  }, [user?.id]);
 
   // Fetch duels for selected student
-  const duels = useLiveQuery(async () => {
-    if (!selectedStudentId) return [] as Duel[];
-    return await db.duels
-      .where('challengerId').equals(selectedStudentId)
-      .or('challengedId').equals(selectedStudentId)
-      .reverse()
-      .sortBy('createdAt');
-  }, [selectedStudentId]) || [];
+  useEffect(() => {
+    const fetchDuels = async () => {
+      if (!selectedStudentId) {
+        setDuels([]);
+        return;
+      }
+      const { data } = await supabase.from('duels')
+        .select('*')
+        .or(`challengerId.eq.${selectedStudentId},challengedId.eq.${selectedStudentId}`)
+        .order('createdAt', { ascending: false });
+        
+      setDuels(data || []);
+      
+      if (data && data.length > 0) {
+        const opIds = Array.from(new Set(data.map(d => d.challengerId === selectedStudentId ? d.challengedId : d.challengerId)));
+        if (opIds.length > 0) {
+           const { data: opData } = await supabase.from('users').select('id, name').in('id', opIds);
+           if (opData) {
+             setOpponents(opData.reduce((acc, curr) => ({ ...acc, [curr.id]: curr.name }), {} as Record<string, string>));
+           }
+        }
+      }
+    };
+    fetchDuels();
+  }, [selectedStudentId]);
 
   // Fetch questions for selected duel
-  const duelQuestions = useLiveQuery(async () => {
-    if (!selectedDuelId) return [] as DuelQuestion[];
-    return await db.duelQuestions
-      .where('duelId').equals(selectedDuelId)
-      .toArray();
-  }, [selectedDuelId]) || [];
-
-  // Fetch opponent data for each duel to show names
-  const opponents = useLiveQuery(async () => {
-    if (duels.length === 0) return {};
-    const opIds = Array.from(new Set(duels.map(d => d.challengerId === selectedStudentId ? d.challengedId : d.challengerId)));
-    const opData = await db.users.where('id').anyOf(opIds).toArray();
-    return opData.reduce((acc, curr) => ({ ...acc, [curr.id]: curr.name }), {} as Record<string, string>);
-  }, [duels, selectedStudentId]) || {};
+  useEffect(() => {
+    const fetchQuestions = async () => {
+      if (!selectedDuelId) {
+        setDuelQuestions([]);
+        return;
+      }
+      const { data } = await supabase.from('duel_questions').select('*').eq('duelId', selectedDuelId);
+      // Since options is JSONB we can parse it if it's string, else use as is
+      setDuelQuestions((data || []).map(q => ({
+         ...q,
+         options: typeof q.options === 'string' ? JSON.parse(q.options) : q.options
+      })));
+    };
+    fetchQuestions();
+  }, [selectedDuelId]);
 
   const selectedDuel = duels.find(d => d.id === selectedDuelId);
   const selectedStudent = students.find(s => s.id === selectedStudentId);

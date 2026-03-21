@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuthStore } from '../../store/auth.store';
-import { db } from '../../lib/dexie';
+import { supabase } from '../../lib/supabase';
 import type { GamificationStats, Mission, StudentMissionProgress } from '../../types/gamification';
 import {
   Target,
@@ -43,15 +43,18 @@ export const Missions: React.FC = () => {
 
   const loadAll = async () => {
     if (!user) return;
-    const s = await db.gamificationStats.get(user.id);
-    setStats(s || null);
+    
+    // Fetch stats
+    const { data: s } = await supabase.from('gamification_stats').select('*').eq('id', user.id).single();
+    if (s) setStats(s as GamificationStats);
 
-    const allMissions = await db.missions.toArray();
-    const studentMissions = await db.studentMissions.where('studentId').equals(user.id).toArray();
+    // Fetch missions
+    const { data: allMissions } = await supabase.from('missions').select('*');
+    const { data: studentMissions } = await supabase.from('student_missions').select('*').eq('studentId', user.id);
 
-    const enriched: MissionWithProgress[] = allMissions.map(mission => ({
+    const enriched: MissionWithProgress[] = (allMissions || []).map(mission => ({
       ...mission,
-      progress: studentMissions.find(sm => sm.missionId === mission.id) || null
+      progress: (studentMissions || []).find(sm => sm.missionId === mission.id) || null
     }));
 
     setMissions(enriched);
@@ -63,25 +66,20 @@ export const Missions: React.FC = () => {
     
     const now = new Date().toISOString();
     try {
-      const result = await updateGamificationStats(user.id, {
+      await updateGamificationStats(user.id, {
         xpToAdd: mission.rewardXp || 0,
         coinsToAdd: mission.rewardCoins || 0
       });
 
       // Mark as claimed
-      await db.studentMissions.update(mission.progress.id, {
+      await supabase.from('student_missions').update({
         claimedAt: now
-      });
+      }).eq('id', mission.progress.id);
       
       // Update local state
-      if (result) {
-        setStats(prev => prev ? { 
-          ...prev, 
-          coins: prev.coins + (mission.rewardCoins || 0), 
-          xp: prev.xp + (mission.rewardXp || 0), 
-          level: result.newLevel,
-          lastStudyDate: now
-        } : null);
+      const { data: updatedStats } = await supabase.from('gamification_stats').select('*').eq('id', user.id).single();
+      if (updatedStats) {
+        setStats(updatedStats);
       }
 
       setMissions(prev => prev.map(m => 

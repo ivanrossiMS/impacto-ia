@@ -10,8 +10,8 @@ import { Card } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
 import { cn } from '../../lib/utils';
 import { toast } from 'sonner';
-import { db } from '../../lib/dexie';
-import { useLiveQuery } from 'dexie-react-hooks';
+import { supabase } from '../../lib/supabase';
+import { useSupabaseQuery } from '../../hooks/useSupabase';
 import { useAuthStore } from '../../store/auth.store';
 import { motion, AnimatePresence } from 'framer-motion';
 import type { LibraryItem } from '../../types/learning';
@@ -381,33 +381,32 @@ export const Library: React.FC = () => {
   const [isUploadOpen, setIsUploadOpen] = useState(false);
   const [previewItem, setPreviewItem] = useState<LibraryItem | null>(null);
   const [editItem, setEditItem] = useState<LibraryItem | null>(null);
-  const myItems = useLiveQuery(() => 
-    db.libraryItems
-      .where('teacherId')
-      .equals(user?.id || '')
-      .toArray()
-  ) || [];
+  const allLibraryItemsData = useSupabaseQuery<any>('library_items');
+  const myItems = (allLibraryItemsData || []).filter((item: any) => item.teacherId === user?.id);
 
   const seedBaseItems = async () => {
-    const existing = await db.libraryItems.count();
-    if (existing > 0) return;
+    const { count, error } = await supabase.from('library_items').select('*', { count: 'exact', head: true });
+    if (error) { toast.error('Erro ao verificar itens base.'); return; }
+    if (count && count > 0) return;
 
     const itemsToSeed = BASE_ITEMS.map(item => ({
       ...item,
+      id: crypto.randomUUID(),
       teacherId: user?.id || 'base-teacher',
       addedAt: new Date().toISOString()
     }));
     
-    await db.libraryItems.bulkAdd(itemsToSeed);
+    const { error: insertError } = await supabase.from('library_items').insert(itemsToSeed);
+    if (insertError) { toast.error('Erro ao inserir base'); return; }
     toast.success('Biblioteca inicial carregada!');
   };
 
-  const teacherUser = useLiveQuery(async () => user ? db.users.get(user.id) : null, [user?.id]);
-  const teacherClassIds: string[] = (teacherUser as any)?.classIds || [];
-  const teacherClasses = useLiveQuery(async () => {
-    const all = await db.classes.toArray();
-    return all.filter(c => teacherClassIds.includes(c.id));
-  }, [teacherClassIds.join(',')]) || [];
+  const teacherUsersData = useSupabaseQuery<any>('users');
+  const teacherUser = teacherUsersData?.find((u: any) => u.id === user?.id);
+  const teacherClassIds: string[] = teacherUser?.classIds || [];
+  
+  const allClassesData = useSupabaseQuery<any>('classes');
+  const teacherClasses = (allClassesData || []).filter((c: any) => teacherClassIds.includes(c.id));
 
   const allItems = myItems; // We merge base items during seeding now for simplicity, or we can keep BASE_ITEMS in memory 
   // Let's actually merge them in memory for display but only save custom ones to DB? 
@@ -432,7 +431,8 @@ export const Library: React.FC = () => {
   });
 
   const handleDelete = async (id: string) => {
-    await db.libraryItems.delete(id);
+    const { error } = await supabase.from('library_items').delete().eq('id', id);
+    if (error) { toast.error('Erro ao remover material.'); return; }
     toast.success('Material removido da biblioteca.');
   };
 
@@ -442,18 +442,26 @@ export const Library: React.FC = () => {
       teacherId: user?.id || '',
       isOwn: true // Ensure everything the teacher adds/seeds is marked as their own for this session
     };
-    await db.libraryItems.add(newItem);
+    
+    const { error: insertError } = await supabase.from('library_items').insert(newItem);
+    if (insertError) { toast.error('Erro ao adicionar material.'); return; }
 
     // Send notifications to students
     const studentIds: string[] = [];
-    if (item.classId) {
-      const cls = await db.classes.get(item.classId);
-      if (cls?.studentIds) studentIds.push(...cls.studentIds);
-    } else if (item.grade) {
-      // Notify all students in this grade across all teacher's classes
-      for (const c of teacherClasses) {
-        if (c.grade === item.grade && c.studentIds) {
-          studentIds.push(...c.studentIds);
+    
+    // Fetch fresh class data to ensure we have all student IDs
+    const { data: freshClasses, error } = await supabase.from('classes').select('*');
+    if (!error && freshClasses) {
+      if (item.classId) {
+        const cls = freshClasses.find(c => c.id === item.classId);
+        if (cls?.studentIds) studentIds.push(...cls.studentIds);
+      } else if (item.grade) {
+        // Notify all students in this grade across all teacher's classes
+        const tClasses = freshClasses.filter((c: any) => teacherClasses.some((tc: any) => tc.id === c.id));
+        for (const c of tClasses) {
+          if (c.grade === item.grade && c.studentIds) {
+            studentIds.push(...c.studentIds);
+          }
         }
       }
     }
@@ -476,7 +484,8 @@ export const Library: React.FC = () => {
   };
 
   const handleSaveEdit = async (updated: LibraryItem) => {
-    await db.libraryItems.put(updated);
+    const { error } = await supabase.from('library_items').update(updated).eq('id', updated.id);
+    if (error) { toast.error('Erro ao editar material.'); return; }
   };
 
   const handleShare = (item: LibraryItem) => {
@@ -618,7 +627,7 @@ export const Library: React.FC = () => {
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
               {filtered.map(item => {
-                const config = TYPE_CONFIG[item.type];
+                const config = TYPE_CONFIG[item.type as keyof typeof TYPE_CONFIG];
                 const Icon = config.icon;
                 return (
                   <Card key={item.id} className="p-0 overflow-hidden border-slate-100 group hover:border-primary-100 hover:shadow-xl transition-all duration-300 cursor-pointer">

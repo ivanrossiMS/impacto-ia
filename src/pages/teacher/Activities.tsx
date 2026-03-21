@@ -7,8 +7,8 @@ import {
   X, FileText, Target, CheckSquare, AlignLeft, Trash2, GraduationCap,
   Edit2, Eye, Save, Zap, Gamepad2, Check, TrendingUp, Star
 } from 'lucide-react';
-import { db } from '../../lib/dexie';
-import { useLiveQuery } from 'dexie-react-hooks';
+import { useSupabaseQuery } from '../../hooks/useSupabase';
+import { supabase } from '../../lib/supabase';
 import { useAuthStore } from '../../store/auth.store';
 import { useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
@@ -198,18 +198,16 @@ export const ActivityProgressModal: React.FC<{
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedResult, setSelectedResult] = useState<StudentActivityResult | null>(null);
 
-  // Load class and students directly from db.users using classId
-  const cls = useLiveQuery(() => db.classes.get(classId), [classId]);
-  const students = useLiveQuery(async () => {
-    return db.users.where('classId').equals(classId)
-      .filter(u => u.role === 'student')
-      .toArray();
-  }, [classId]) || [];
+  // Load class and students directly from users using classId
+  const clsData = useSupabaseQuery<any>('classes');
+  const cls = (clsData || []).find((c: any) => c.id === classId);
+
+  const studentsData = useSupabaseQuery<any>('users');
+  const students = (studentsData || []).filter((u: any) => u.classId === classId && u.role === 'student');
 
   // Load results for this activity
-  const results = useLiveQuery(async () => {
-    return db.studentActivityResults.where('activityId').equals(activity.id).toArray();
-  }, [activity.id]) || [];
+  const resultsData = useSupabaseQuery<any>('student_activity_results');
+  const results = (resultsData || []).filter((r: any) => r.activityId === activity.id);
 
   const filteredStudents = students.filter(s =>
     s.name.toLowerCase().includes(searchTerm.toLowerCase())
@@ -692,7 +690,8 @@ const ActivityViewModal: React.FC<{ activity: any; onClose: () => void; onEdit: 
 
   const persistChanges = async (qs: Question[], dur: string) => {
     try {
-      await db.activities.update(activity.id, { questions: qs, duration: dur });
+      const { error } = await supabase.from('activities').update({ questions: qs, duration: dur }).eq('id', activity.id);
+      if (error) throw error;
       if (onExternalSave) onExternalSave({ ...activity, questions: qs, duration: dur });
       setHasUnsaved(false);
       toast.success('Atividade atualizada!');
@@ -907,7 +906,8 @@ const ActivityEditModal: React.FC<{
 
   const onSubmit = async (data: ActivityFormData) => {
     try {
-      await db.activities.update(activity.id, { ...data, updatedAt: new Date().toISOString() });
+      const { error } = await supabase.from('activities').update({ ...data, updatedAt: new Date().toISOString() }).eq('id', activity.id);
+      if (error) throw error;
       toast.success(`"${data.title}" atualizada!`);
       onSaved();
       onClose();
@@ -1014,10 +1014,8 @@ const CreateActivityModal: React.FC<{
   onClose: () => void;
   onCreated: () => void;
 }> = ({ teacherId, classIds, onClose, onCreated }) => {
-  const classes = useLiveQuery(async () => {
-    const all = await db.classes.toArray();
-    return all.filter(c => classIds.includes(c.id));
-  }, [classIds.join(',')]) || [];
+  const classesData = useSupabaseQuery<any>('classes');
+  const classes = (classesData || []).filter((c: any) => classIds.includes(c.id));
 
   const navigate = useNavigate();
 
@@ -1027,9 +1025,11 @@ const CreateActivityModal: React.FC<{
   });
 
   const onSubmit = async (data: ActivityFormData) => {
+    const selectedClass = classes.find((c: any) => c.id === data.classId);
+    const activityGrade = selectedClass?.grade || 'Todas as Séries';
     const now = new Date().toISOString();
     const newActivity = {
-      id: crypto.randomUUID(), ...data, questions: [], aiAssisted: false,
+      id: crypto.randomUUID(), ...data, grade: activityGrade, questions: [], aiAssisted: false,
       teacherId, createdAt: now,
     };
     await saveActivityToStorage(newActivity);
@@ -1120,7 +1120,7 @@ const CreateActivityModal: React.FC<{
             </label>
             <select {...register('classId')} className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 font-bold text-slate-800 outline-none focus:ring-2 focus:ring-indigo-300 appearance-none">
               <option value="">— Todas as turmas —</option>
-              {classes.map(c => <option key={c.id} value={c.id}>{c.name} ({c.grade})</option>)}
+              {classes.map((c: any) => <option key={c.id} value={c.id}>{c.name} ({c.grade})</option>)}
             </select>
           </div>
 
@@ -1155,21 +1155,18 @@ export const Activities: React.FC = () => {
   const [editActivity, setEditActivity] = useState<any | null>(null);
   const [progressActivity, setProgressActivity] = useState<any | null>(null);
 
-  const allActivities = useLiveQuery(() => db.activities.toArray()) || [];
+  const allActivitiesData = useSupabaseQuery<any>('activities');
+  const allActivities = allActivitiesData || [];
   const myActivities = allActivities.filter((a: any) => !a.teacherId || a.teacherId === user?.id);
 
-  const handleCreated = () => { /* useLiveQuery handles it */ };
+  const handleCreated = () => { /* useSupabaseQuery handles it */ };
 
-  const teacherUser = useLiveQuery(async () => {
-    if (!user) return null;
-    return db.users.get(user.id);
-  }, [user?.id]);
+  const teacherUsers = useSupabaseQuery<any>('users');
+  const teacherUser = (teacherUsers || []).find((u: any) => u.id === user?.id);
 
-  const classIds: string[] = (teacherUser as any)?.classIds || [];
-  const classes = useLiveQuery(async () => {
-    const all = await db.classes.toArray();
-    return all.filter(c => classIds.includes(c.id));
-  }, [classIds.join(',')]) || [];
+  const classIds: string[] = teacherUser?.classIds || [];
+  const classesData = useSupabaseQuery<any>('classes');
+  const classes = (classesData || []).filter((c: any) => classIds.includes(c.id));
 
   const filtered = myActivities.filter((a: any) => {
     const matchesType = filterType === 'all' || a.type === filterType;
@@ -1181,7 +1178,8 @@ export const Activities: React.FC = () => {
   });
 
   const handleDelete = async (id: string) => {
-    await db.activities.delete(id);
+    const { error } = await supabase.from('activities').delete().eq('id', id);
+    if (error) { toast.error('Erro ao excluir.'); console.error(error); return; }
     toast.success('Atividade removida.');
   };
 

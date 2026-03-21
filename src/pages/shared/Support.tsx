@@ -13,8 +13,7 @@ import { Card } from '../../components/ui/Card';
 import { Badge } from '../../components/ui/Badge';
 import { Button } from '../../components/ui/Button';
 import { cn } from '../../lib/utils';
-import { db } from '../../lib/dexie';
-import { useLiveQuery } from 'dexie-react-hooks';
+import { supabase } from '../../lib/supabase';
 import { toast } from 'sonner';
 import { format } from 'date-fns';
 import { useAuthStore } from '../../store/auth.store';
@@ -28,30 +27,51 @@ export const Support: React.FC = () => {
   const [replyText, setReplyText] = useState('');
   const [isLoading, setIsLoading] = useState(false);
 
-  const tickets = useLiveQuery(
-    async () => {
-      if (!user) return [];
-      return await db.supportTickets
-        .where('userId')
-        .equals(user.id)
-        .reverse()
-        .sortBy('updatedAt');
-    },
-    [user]
-  ) || [];
+  const [tickets, setTickets] = useState<any[]>([]);
+  const [messages, setMessages] = useState<any[]>([]);
+
+  const fetchTickets = async () => {
+    if (!user) return;
+    const { data } = await supabase
+      .from('support_tickets')
+      .select('*')
+      .eq('userId', user.id)
+      .order('updatedAt', { ascending: false });
+    setTickets(data || []);
+  };
+
+  const fetchMessages = async () => {
+    if (!selectedTicketId) {
+      setMessages([]);
+      return;
+    }
+    const { data } = await supabase
+      .from('ticket_messages')
+      .select('*')
+      .eq('ticketId', selectedTicketId)
+      .order('createdAt', { ascending: true });
+    setMessages(data || []);
+  };
+
+  React.useEffect(() => {
+    fetchTickets();
+    const ch = supabase.channel('support_tickets_changes')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'support_tickets', filter: `userId=eq.${user?.id}` }, fetchTickets)
+      .subscribe();
+    return () => { supabase.removeChannel(ch); };
+  }, [user]);
+
+  React.useEffect(() => {
+    fetchMessages();
+    if (selectedTicketId) {
+      const ch = supabase.channel(`ticket_msgs_${selectedTicketId}`)
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'ticket_messages', filter: `ticketId=eq.${selectedTicketId}` }, fetchMessages)
+        .subscribe();
+      return () => { supabase.removeChannel(ch); };
+    }
+  }, [selectedTicketId]);
 
   const selectedTicket = tickets.find(t => t.id === selectedTicketId);
-
-  const messages = useLiveQuery(
-    async () => {
-      if (!selectedTicketId) return [];
-      return await db.ticketMessages
-        .where('ticketId')
-        .equals(selectedTicketId)
-        .sortBy('createdAt');
-    },
-    [selectedTicketId]
-  ) || [];
 
   const handleCreateTicket = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -78,8 +98,8 @@ export const Support: React.FC = () => {
         isReadByAdmin: false
       };
 
-      await db.supportTickets.add(newTicket);
-      await db.ticketMessages.add({
+      await supabase.from('support_tickets').insert(newTicket);
+      await supabase.from('ticket_messages').insert({
         id: crypto.randomUUID(),
         ticketId,
         senderId: user.id,
@@ -116,14 +136,14 @@ export const Support: React.FC = () => {
         senderRole: user.role
       };
       
-      await db.ticketMessages.add(newMessage);
-      await db.supportTickets.update(selectedTicketId, { 
+      await supabase.from('ticket_messages').insert(newMessage);
+      await supabase.from('support_tickets').update({ 
         updatedAt: now,
         lastMessage: replyText,
         status: 'open', // Reopen/keep open when user sends message
         isReadByAdmin: false,
         isReadByParticipant: true
-      });
+      }).eq('id', selectedTicketId);
 
       setReplyText('');
     } catch (error) {
@@ -163,7 +183,7 @@ export const Support: React.FC = () => {
                   key={t.id}
                   onClick={() => {
                     setSelectedTicketId(t.id);
-                    db.supportTickets.update(t.id, { isReadByParticipant: true });
+                    supabase.from('support_tickets').update({ isReadByParticipant: true }).eq('id', t.id);
                   }}
                   className={cn(
                     "p-5 cursor-pointer hover:border-primary-300 hover:shadow-md transition-all border-slate-100 relative",

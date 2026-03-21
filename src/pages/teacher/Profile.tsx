@@ -7,8 +7,8 @@ import { Card } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
 import { User, Mail, Save, Camera, Lock, Award, Eye, EyeOff, Key, GraduationCap, BookOpen } from 'lucide-react';
 import { useAuthStore } from '../../store/auth.store';
-import { db } from '../../lib/dexie';
-import { useLiveQuery } from 'dexie-react-hooks';
+import { supabase } from '../../lib/supabase';
+import { useSupabaseQuery } from '../../hooks/useSupabase';
 import { cn } from '../../lib/utils';
 
 const profileSchema = z.object({
@@ -36,17 +36,12 @@ export const Profile: React.FC = () => {
   const [avatarPreview, setAvatarPreview] = React.useState<string | undefined>(user?.avatar);
 
   // Fetch teacher's linked classes from DB
-  const teacherUser = useLiveQuery(async () => {
-    if (!user) return null;
-    return db.users.get(user.id);
-  }, [user?.id]);
+  const teacherUsersData = useSupabaseQuery<any>('users');
+  const teacherUser = teacherUsersData?.find((u: any) => u.id === user?.id);
 
-  const classIds: string[] = (teacherUser as any)?.classIds || [];
-  const classes = useLiveQuery(async () => {
-    if (!classIds.length) return [];
-    const all = await db.classes.toArray();
-    return all.filter(c => classIds.includes(c.id));
-  }, [classIds.join(',')]) || [];
+  const classIds: string[] = teacherUser?.classIds || [];
+  const allClassesData = useSupabaseQuery<any>('classes');
+  const classes = (allClassesData || []).filter((c: any) => classIds.includes(c.id));
 
   const { register, handleSubmit, formState: { errors, isSubmitting } } = useForm<ProfileFormData>({
     resolver: zodResolver(profileSchema),
@@ -89,7 +84,8 @@ export const Profile: React.FC = () => {
         updateData.avatar = avatarPreview;
       }
 
-      await db.users.update(user.id, updateData);
+      const { error } = await supabase.from('users').update(updateData).eq('id', user.id);
+      if (error) throw error;
       login({ ...user, ...updateData } as any);
       toast.success('Perfil atualizado com sucesso!');
     } catch {
@@ -100,12 +96,16 @@ export const Profile: React.FC = () => {
   const onPasswordSubmit = async (data: PasswordFormData) => {
     if (!user) return;
     try {
-      const dbUser = await db.users.get(user.id);
-      if (!dbUser || (dbUser as any).passwordHash !== data.currentPassword) {
+      const { data: dbUserList, error: getUserError } = await supabase.from('users').select('*').eq('id', user.id);
+      if (getUserError) throw getUserError;
+      const dbUser = dbUserList?.[0];
+      
+      if (!dbUser || dbUser.passwordHash !== data.currentPassword) {
         toast.error('Senha atual incorreta.');
         return;
       }
-      await db.users.update(user.id, { passwordHash: data.newPassword, updatedAt: new Date().toISOString() } as any);
+      const { error: updateError } = await supabase.from('users').update({ passwordHash: data.newPassword, updatedAt: new Date().toISOString() }).eq('id', user.id);
+      if (updateError) throw updateError;
       toast.success('Senha alterada com sucesso!');
       resetPwd();
     } catch {

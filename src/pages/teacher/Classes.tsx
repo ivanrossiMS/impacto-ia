@@ -3,32 +3,26 @@ import { Users, ChevronRight, Search, BookOpen, TrendingUp } from 'lucide-react'
 import { useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import { useAuthStore } from '../../store/auth.store';
-import { db } from '../../lib/dexie';
-import { useLiveQuery } from 'dexie-react-hooks';
+import { useSupabaseQuery } from '../../hooks/useSupabase';
 
 export const Classes: React.FC = () => {
   const navigate = useNavigate();
   const { user } = useAuthStore();
   const [searchTerm, setSearchTerm] = useState('');
 
-  // Fetch only the classes assigned to this teacher by the admin
-  const teacherUser = useLiveQuery(async () => {
-    if (!user) return null;
-    return db.users.get(user.id);
-  }, [user?.id]);
+  // Fetch teacher's assigned classes
+  const allUsersHere = useSupabaseQuery<any>('users');
+  const teacherUser = (allUsersHere || []).find((u: any) => u.id === user?.id);
+  const teacherClassIds: string[] = teacherUser?.classIds || [];
 
-  const teacherClassIds: string[] = (teacherUser as any)?.classIds || [];
+  const allClassesData = useSupabaseQuery<any>('classes');
+  const allClasses = (allClassesData || []).filter((c: any) => teacherClassIds.includes(c.id));
 
-  const allClasses = useLiveQuery(async () => {
-    const all = await db.classes.toArray();
-    return all.filter(c => teacherClassIds.includes(c.id));
-  }, [teacherClassIds.join(',')]) || [];
-
-  const allUsers = useLiveQuery(() => db.users.toArray()) || [];
-  const allActivityResults = useLiveQuery(() => db.studentActivityResults.toArray()) || [];
-  const allActivities = useLiveQuery(() => db.activities.toArray()) || [];
-  const allAvatarProfiles = useLiveQuery(() => db.studentAvatarProfiles.toArray()) || [];
-  const allCatalogItems = useLiveQuery(() => db.avatarCatalog.toArray()) || [];
+  const allUsers = useSupabaseQuery<any>('users');
+  const allActivityResults = useSupabaseQuery<any>('student_activity_results');
+  const allActivities = useSupabaseQuery<any>('activities');
+  const allAvatarProfiles = useSupabaseQuery<any>('student_avatar_profiles');
+  const allCatalogItems = useSupabaseQuery<any>('avatar_catalog');
 
   const filteredClasses = allClasses.filter(cls =>
     cls.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -89,13 +83,13 @@ export const Classes: React.FC = () => {
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-8">
           {filteredClasses.map((cls, idx) => {
-            const classStudents = allUsers.filter(u => u.role === 'student' && (u as any).classId === cls.id);
+            const classStudents = (allUsers || []).filter((u: any) => u.role === 'student' && u.classId === cls.id);
             const studentCount = classStudents.length;
-            const classResults = allActivityResults.filter(r => classStudents.some(s => s.id === r.studentId));
-            const activitiesCount = allActivities.filter(a => a.classId === cls.id).length;
+            const classResults = (allActivityResults || []).filter((r: any) => classStudents.some((s: any) => s.id === r.studentId));
+            const activitiesCount = (allActivities || []).filter((a: any) => a.classId === cls.id).length;
             
             const avgPerformance = classResults.length > 0 
-              ? Math.round((classResults.reduce((acc, r) => acc + (r.score / (r.totalQuestions || 1)), 0) / classResults.length) * 100) 
+              ? Math.round((classResults.reduce((acc: number, r: any) => acc + (r.score / (r.totalQuestions || 1)), 0) / classResults.length) * 100) 
               : 0;
 
             const accent = getAccentColor(idx);
@@ -122,9 +116,9 @@ export const Classes: React.FC = () => {
                         {cls.grade}
                       </div>
                       <div className="flex -space-x-3">
-                        {classStudents.slice(0, 4).map((s, i) => {
-                          const profile = allAvatarProfiles.find(p => p.studentId === s.id);
-                          const avatarItem = allCatalogItems.find(item => item.id === profile?.selectedAvatarId);
+                        {classStudents.slice(0, 4).map((s: any, i: number) => {
+                          const profile = (allAvatarProfiles || []).find((p: any) => p.studentId === s.id);
+                          const avatarItem = (allCatalogItems || []).find((item: any) => item.id === profile?.selectedAvatarId);
                           const assetUrl = avatarItem?.assetUrl;
 
                           return (

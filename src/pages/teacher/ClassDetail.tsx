@@ -10,8 +10,7 @@ import { ActivityProgressModal, ActivityReviewModal } from './Activities';
 import type { StudentActivityResult } from '../../types/gamification';
 import { useNavigate, useParams } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
-import { db } from '../../lib/dexie';
-import { useLiveQuery } from 'dexie-react-hooks';
+import { useSupabaseQuery } from '../../hooks/useSupabase';
 import { cn } from '../../lib/utils';
 import { toast } from 'sonner';
 
@@ -190,38 +189,33 @@ export const ClassDetail: React.FC = () => {
   const [reviewData, setReviewData] = useState<{ result: StudentActivityResult; activity: any } | null>(null);
 
   // ── Load auxiliary data ───────────────────────────────────────────────────
-  const allResults = useLiveQuery(() => db.studentActivityResults.toArray()) || [];
-  const allAvatarProfiles = useLiveQuery(() => db.studentAvatarProfiles.toArray()) || [];
-  const allCatalogItems = useLiveQuery(() => db.avatarCatalog.toArray()) || [];
-  const allActivities = useLiveQuery(() => db.activities.toArray()) || [];
+  const allResultsData = useSupabaseQuery<any>('student_activity_results');
+  const allResults = allResultsData || [];
+  
+  const allAvatarProfilesData = useSupabaseQuery<any>('student_avatar_profiles');
+  const allAvatarProfiles = allAvatarProfilesData || [];
+
+  const allCatalogItemsData = useSupabaseQuery<any>('avatar_catalog');
+  const allCatalogItems = allCatalogItemsData || [];
+  
+  const allActivitiesData = useSupabaseQuery<any>('activities');
+  const allActivities = allActivitiesData || [];
 
   // ── Load real class from DB ────────────────────────────────────────────────
-  const cls = useLiveQuery(async () => {
-    if (!classId) return null;
-    return db.classes.get(classId);
-  }, [classId]);
+  const clsData = useSupabaseQuery<any>('classes');
+  const cls = (clsData || []).find((c: any) => c.id === classId);
 
-  const teacher = useLiveQuery(async () => {
-    if (!cls?.teacherId) return null;
-    return db.users.get(cls.teacherId);
-  }, [cls?.teacherId]);
+  const teacherData = useSupabaseQuery<any>('users');
+  const teacher = (teacherData || []).find((u: any) => u.id === cls?.teacherId);
 
   // ── Load real students linked to this class ────────────────────────────────
-  const students = useLiveQuery(async () => {
-    if (!cls) return [];
-    return db.users
-      .where('classId')
-      .equals(cls.id)
-      .and(u => u.role === 'student')
-      .toArray();
-  }, [cls?.id]) || [];
+  const students = (teacherData || []).filter((u: any) => u.classId === cls?.id && u.role === 'student');
 
   // ── Load gamification stats for all students ───────────────────────────────
-  const allStats = useLiveQuery(async () => {
-    return db.gamificationStats.toArray();
-  }, []) || [];
+  const allStatsData = useSupabaseQuery<any>('gamification_stats');
+  const allStats = allStatsData || [];
 
-  // ── Load activities for this class from Dexie ──────────────────────
+  // ── Load activities for this class ──────────────────────
   const classActivities = React.useMemo(() => {
     return allActivities.filter((a: any) => !a.classId || a.classId === classId);
   }, [allActivities, classId]);
@@ -421,8 +415,8 @@ export const ClassDetail: React.FC = () => {
                         <td className="p-6">
                           <div className="flex items-center gap-4">
                             {(() => {
-                              const profile = allAvatarProfiles.find(p => p.studentId === student.id);
-                              const avatarItem = allCatalogItems.find(item => item.id === profile?.selectedAvatarId);
+                              const profile = allAvatarProfiles.find((p: any) => p.studentId === student.id);
+                              const avatarItem = allCatalogItems.find((item: any) => item.id === profile?.selectedAvatarId);
                               const avatarUrl = avatarItem?.assetUrl;
 
                               return (
@@ -619,14 +613,14 @@ export const ClassDetail: React.FC = () => {
             student={{
               ...selectedStudent.student,
               avatarUrl: (() => {
-                const profile = allAvatarProfiles.find(p => p.studentId === selectedStudent.student.id);
-                const avatarItem = allCatalogItems.find(item => item.id === profile?.selectedAvatarId);
+                const profile = allAvatarProfiles.find((p: any) => p.studentId === selectedStudent.student.id);
+                const avatarItem = allCatalogItems.find((item: any) => item.id === profile?.selectedAvatarId);
                 return avatarItem?.assetUrl;
               })()
             }}
             score={selectedStudent.score}
             onClose={() => setSelectedStudent(null)}
-            studentResults={allResults.filter(r => r.studentId === selectedStudent.student.id)}
+            studentResults={allResults.filter((r: any) => r.studentId === selectedStudent.student.id)}
             allActivities={allActivities}
             onViewReview={(result, activity) => setReviewData({ result, activity })}
           />
