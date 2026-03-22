@@ -4,7 +4,7 @@ import type { LearningPath, StudentProgress } from '../../types/learning';
 import { useAuthStore } from '../../store/auth.store';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { Star, ChevronRight, Lock, CheckCircle2 } from 'lucide-react';
-import { toast } from 'sonner';
+
 
 import { cn } from '../../lib/utils';
 

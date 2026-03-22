@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import {
   Search, Plus, X, Edit2, Trash2, CheckCircle, XCircle,
   Users as UsersIcon, User, GraduationCap, Shield, Filter, School as SchoolIcon,
-  Coins, BookOpen, UserCheck, Download
+  Coins, UserCheck, Download
 } from 'lucide-react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db } from '../../lib/dexie';

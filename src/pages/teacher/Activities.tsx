@@ -1257,15 +1257,7 @@ export const Activities: React.FC = () => {
     { key: 'prova_bimestral', label: 'Provas Bimestrais' },
   ];
 
-  // ── Gradient map per activity type ─────────────────────────────────────────
-  const TYPE_GRADIENT: Record<string, string> = {
-    objetiva:       'from-blue-600 to-indigo-700',
-    dissertativa:   'from-violet-600 to-purple-700',
-    simulado:       'from-orange-500 to-amber-600',
-    prova_bimestral:'from-rose-600 to-red-700',
-    quiz_divertido: 'from-pink-500 to-fuchsia-600',
-    prova_mensal:   'from-cyan-500 to-teal-600',
-  };
+  // (type gradients removed — now using accent colors for the top border)
   const TYPE_EMOJI: Record<string, string> = {
     objetiva:'📝', dissertativa:'✍️', simulado:'🎯',
     prova_bimestral:'📋', quiz_divertido:'🎮', prova_mensal:'📅',
@@ -1442,18 +1434,7 @@ export const Activities: React.FC = () => {
               prova_bimestral: '#10b981', prova_mensal: '#ef4444',
             };
             const accent = accentColors[act.type] || '#6366f1';
-            const lightBg: Record<string, string> = {
-              objetiva: 'bg-indigo-50', dissertativa: 'bg-violet-50',
-              simulado: 'bg-sky-50', quiz_divertido: 'bg-amber-50',
-              prova_bimestral: 'bg-emerald-50', prova_mensal: 'bg-red-50',
-            };
-            const iconBg = lightBg[act.type] || 'bg-indigo-50';
-            const labelColor: Record<string, string> = {
-              objetiva: 'text-indigo-600', dissertativa: 'text-violet-600',
-              simulado: 'text-sky-600', quiz_divertido: 'text-amber-600',
-              prova_bimestral: 'text-emerald-600', prova_mensal: 'text-red-600',
-            };
-            const subjectColor = labelColor[act.type] || 'text-indigo-600';
+
 
             return (
               <motion.div

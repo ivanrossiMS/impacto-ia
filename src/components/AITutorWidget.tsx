@@ -44,7 +44,6 @@ export const AITutorWidget: React.FC = () => {
       const response = await callTutorChat({
         message: userText,
         userName: user?.name || 'Estudante',
-        level: 'advanced',
         userId: user?.id,
       });
 
