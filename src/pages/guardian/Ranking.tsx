@@ -65,13 +65,21 @@ export const Ranking: React.FC = () => {
       let studentsToRank: AppUser[] = [];
 
       if (activeTab === 'class') {
-        const { data: studentClass } = selectedStudent.classId ? await supabase.from('classes').select('*').eq('id', selectedStudent.classId).single() : { data: null };
-        if (studentClass && studentClass.studentIds?.length) {
-          const { data: stRank } = await supabase.from('users').select('*').in('id', studentClass.studentIds);
-          studentsToRank = stRank || [];
+        if (selectedStudent.classId) {
+          // Query directly by classId — reliable, doesn't depend on class.studentIds[]
+          const { data } = await supabase
+            .from('users')
+            .select('*')
+            .eq('classId', selectedStudent.classId)
+            .eq('role', 'student');
+          studentsToRank = data || [];
         } else {
-          // Fallback to all students in school if no class
-          const { data } = await supabase.from('users').select('*').eq('schoolId', selectedStudent.schoolId || '').eq('role', 'student');
+          // Student has no class — fallback to school
+          const { data } = await supabase
+            .from('users')
+            .select('*')
+            .eq('schoolId', selectedStudent.schoolId || '')
+            .eq('role', 'student');
           studentsToRank = data || [];
         }
       } else if (activeTab === 'school') {
@@ -92,9 +100,18 @@ export const Ranking: React.FC = () => {
          }
       }
 
+      // --- Fetch class names for each student ---
+      const classIds = [...new Set(studentsToRank.map(s => (s as any).classId).filter(Boolean))];
+      const classNameMap: Record<string, string> = {};
+      if (classIds.length > 0) {
+        const { data: classData } = await supabase.from('classes').select('id, name').in('id', classIds);
+        (classData || []).forEach((c: any) => { classNameMap[c.id] = c.name; });
+      }
+
       const entries = studentsToRank.map(s => ({
         user: s,
         stats: statsMap.get(s.id) || null,
+        className: classNameMap[(s as any).classId || ''] || '',
         isMyChild: (guardian as Guardian)?.studentIds?.includes(s.id) || (s as Student).guardianIds?.includes(guardian?.id || '') || false
       }));
 
@@ -209,7 +226,8 @@ export const Ranking: React.FC = () => {
                          </div>
                       </div>
                       <div className="text-center mb-4">
-                         <div className="text-xs font-black text-slate-700 truncate max-w-[80px]">{top3[1].user.name.split(' ')[0]}</div>
+                         <div className="text-xs font-black text-slate-700 truncate max-w-[90px]">{top3[1].user.name.split(' ').slice(0,2).join(' ')}</div>
+                       {top3[1].className && <div className="text-[9px] font-bold text-primary-500 uppercase tracking-wider">{top3[1].className}</div>}
                          <div className="text-[10px] font-bold text-slate-400">{top3[1].stats?.xp || 0} XP</div>
                       </div>
                       <div className="w-full h-24 bg-slate-100/50 rounded-t-[2rem] border-x-2 border-t-2 border-slate-200 flex items-end justify-center pb-4">
@@ -234,7 +252,8 @@ export const Ranking: React.FC = () => {
                          </div>
                       </div>
                       <div className="text-center mb-6">
-                         <div className="text-lg font-black text-slate-900 truncate max-w-[120px]">{top3[0].user.name.split(' ')[0]}</div>
+                         <div className="text-lg font-black text-slate-900 truncate max-w-[130px]">{top3[0].user.name.split(' ').slice(0,2).join(' ')}</div>
+                         {top3[0].className && <div className="text-[9px] font-bold text-primary-500 uppercase tracking-wider mb-1">{top3[0].className}</div>}
                          <div className="text-xs font-bold text-amber-600 flex items-center gap-1 justify-center">
                             <Star size={14} fill="currentColor" /> {top3[0].stats?.xp || 0} XP
                          </div>
@@ -261,7 +280,8 @@ export const Ranking: React.FC = () => {
                          </div>
                       </div>
                       <div className="text-center mb-4">
-                         <div className="text-xs font-black text-slate-700 truncate max-w-[80px]">{top3[2].user.name.split(' ')[0]}</div>
+                         <div className="text-xs font-black text-slate-700 truncate max-w-[90px]">{top3[2].user.name.split(' ').slice(0,2).join(' ')}</div>
+                       {top3[2].className && <div className="text-[9px] font-bold text-primary-500 uppercase tracking-wider">{top3[2].className}</div>}
                          <div className="text-[10px] font-bold text-slate-400">{top3[2].stats?.xp || 0} XP</div>
                       </div>
                       <div className="w-full h-20 bg-orange-50/30 rounded-t-[2.5rem] border-x-2 border-t-2 border-orange-100 flex items-end justify-center pb-4">
@@ -307,10 +327,16 @@ export const Ranking: React.FC = () => {
                           {entry.user.name}
                           {entry.isMyChild && <Badge variant="primary" className="ml-2 py-0 h-5 text-[8px] uppercase tracking-widest shadow-sm">Meu Filho</Badge>}
                         </h4>
-                        <div className="flex items-center gap-3 mt-1 text-[10px] font-black uppercase tracking-widest text-slate-400">
+                        <div className="flex items-center gap-3 mt-1 text-[10px] font-black uppercase tracking-widest text-slate-400 flex-wrap">
                            <span className="flex items-center gap-1.5"><Target size={12} className="text-primary-500" /> Nível {entry.stats ? calculateLevel(entry.stats.xp) : 1}</span>
                            <span className="w-1 h-1 bg-slate-200 rounded-full" />
                            <span className="flex items-center gap-1.5 text-orange-500"><Flame size={12} /> {entry.stats?.streak || 0} dias</span>
+                            {entry.className && (
+                              <>
+                                <span className="w-1 h-1 bg-slate-200 rounded-full" />
+                                <span className="text-primary-500 font-black">{entry.className}</span>
+                              </>
+                            )}
                         </div>
                       </div>
                    </div>
@@ -347,7 +373,7 @@ export const Ranking: React.FC = () => {
                         {myChildEntry.rank}º
                       </div>
                       <div>
-                        <h3 className="text-xl font-black">{selectedStudent?.name.split(' ')[0]}</h3>
+                        <h3 className="text-xl font-black">{selectedStudent?.name.split(' ').slice(0,2).join(' ')}</h3>
                         <div className="text-[10px] font-black text-primary-400 uppercase tracking-widest">Estatísticas Reais</div>
                       </div>
                    </div>

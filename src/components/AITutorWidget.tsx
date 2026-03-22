@@ -1,19 +1,29 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Bot, Send, Sparkles, Minimize2 } from 'lucide-react';
-
 import { cn } from '../lib/utils';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Card } from './ui/Card';
 import { Button } from './ui/Button';
+import { callTutorChat } from '../ai/client';
+import { useAuthStore } from '../store/auth.store';
+import { toast } from 'sonner';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
+
+// ============================================================
+// AITutorWidget — "Capivara IA" floating chat button
+// Now powered by real Gemini via the secure backend proxy.
+// ============================================================
 
 export const AITutorWidget: React.FC = () => {
+  const { user } = useAuthStore();
   const [isOpen, setIsOpen] = useState(false);
   const [message, setMessage] = useState('');
   const [isTyping, setIsTyping] = useState(false);
-  const [chat, setChat] = useState<{role: 'ai' | 'user', text: string}[]>([
-    { role: 'ai', text: 'Olá! Sou seu tutor Capivara IA. Estou aqui para te ajudar a superar qualquer desafio! O que vamos aprender hoje? 💡' }
+  const [chat, setChat] = useState<{ role: 'ai' | 'user'; text: string }[]>([
+    { role: 'ai', text: `Olá! Sou o Capy, seu Tutor IA! 🦫💡 Estou aqui para te ajudar a superar qualquer desafio. O que vamos aprender hoje?` }
   ]);
-  
+
   const scrollRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -22,25 +32,36 @@ export const AITutorWidget: React.FC = () => {
     }
   }, [chat, isTyping]);
 
-  const handleSend = () => {
-    if (!message.trim()) return;
-    const userMsg = message;
-    setChat(prev => [...prev, { role: 'user', text: userMsg }]);
+  const handleSend = async () => {
+    if (!message.trim() || isTyping) return;
+
+    const userText = message.trim();
+    setChat(prev => [...prev, { role: 'user', text: userText }]);
     setMessage('');
     setIsTyping(true);
-    
-    // Simulate AI response
-    setTimeout(() => {
+
+    try {
+      const response = await callTutorChat({
+        message: userText,
+        userName: user?.name || 'Estudante',
+        level: 'advanced',
+        userId: user?.id,
+      });
+
+      setChat(prev => [...prev, { role: 'ai', text: response }]);
+    } catch (err: any) {
+      toast.error('Capy está com problemas. Tente novamente! 🦫');
+      setMessage(userText);
+    } finally {
       setIsTyping(false);
-      setChat(prev => [...prev, { role: 'ai', text: 'Essa é uma ótima pergunta! Vamos pensar juntos: como você abordaria isso se estivéssemos em uma aventura na floresta? 🤔' }]);
-    }, 2000);
+    }
   };
 
   return (
     <div className="fixed bottom-8 right-8 z-50">
       <AnimatePresence>
         {!isOpen ? (
-          <motion.button 
+          <motion.button
             initial={{ scale: 0, rotate: -20 }}
             animate={{ scale: 1, rotate: 0 }}
             exit={{ scale: 0, rotate: 20 }}
@@ -54,7 +75,7 @@ export const AITutorWidget: React.FC = () => {
               <Sparkles size={10} />
             </div>
             <div className="absolute right-full mr-4 bg-slate-900 text-white px-4 py-2 rounded-xl text-xs font-bold opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none">
-              Dúvidas? Chame a IA!
+              Dúvidas? Chame o Capy IA!
             </div>
           </motion.button>
         ) : (
@@ -72,46 +93,53 @@ export const AITutorWidget: React.FC = () => {
                     <Bot size={28} />
                   </div>
                   <div>
-                    <h3 className="font-black text-white leading-none mb-1">Capivara IA</h3>
+                    <h3 className="font-black text-white leading-none mb-1">Capy — Tutor IA</h3>
                     <div className="flex items-center gap-1.5">
                       <div className="w-2 h-2 bg-green-400 rounded-full animate-pulse" />
-                      <span className="text-[10px] font-bold text-special-100 uppercase tracking-widest">Tutor Online</span>
+                      <span className="text-[10px] font-bold text-special-100 uppercase tracking-widest">Gemini Online</span>
                     </div>
                   </div>
                 </div>
-                <div className="flex gap-2">
-                  <button onClick={() => setIsOpen(false)} className="hover:bg-white/10 p-2 rounded-xl transition-colors text-white">
-                    <Minimize2 size={20} />
-                  </button>
-                </div>
+                <button onClick={() => setIsOpen(false)} className="hover:bg-white/10 p-2 rounded-xl transition-colors text-white">
+                  <Minimize2 size={20} />
+                </button>
               </div>
 
               {/* Chat Area */}
-              <div 
-                ref={scrollRef}
-                className="flex-1 overflow-y-auto p-6 space-y-6 scroll-smooth no-scrollbar"
-              >
+              <div ref={scrollRef} className="flex-1 overflow-y-auto p-6 space-y-6 scroll-smooth no-scrollbar">
                 {chat.map((msg, idx) => (
-                  <motion.div 
+                  <motion.div
                     initial={{ opacity: 0, x: msg.role === 'user' ? 20 : -20 }}
                     animate={{ opacity: 1, x: 0 }}
-                    key={idx} 
+                    key={idx}
                     className={cn("flex", msg.role === 'user' ? "justify-end" : "justify-start")}
                   >
                     <div className={cn(
                       "max-w-[85%] rounded-[2rem] p-5 text-sm font-medium shadow-sm",
-                      msg.role === 'user' 
-                        ? "bg-primary-600 text-white rounded-tr-none" 
+                      msg.role === 'user'
+                        ? "bg-primary-600 text-white rounded-tr-none"
                         : "bg-white border border-slate-100 text-slate-700 rounded-tl-none"
                     )}>
-                      {msg.text}
+                      {msg.role === 'ai' ? (
+                        <div className="prose prose-sm prose-slate max-w-none
+                          prose-headings:font-black prose-headings:mt-2 prose-headings:mb-1
+                          prose-strong:font-black prose-strong:text-slate-800
+                          prose-li:my-0 prose-code:bg-slate-100 prose-code:text-special-700
+                          prose-code:px-1.5 prose-code:py-0.5 prose-code:rounded prose-code:font-mono prose-code:text-xs
+                          prose-p:my-1 prose-ol:my-1 prose-ul:my-1">
+                          <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.text}</ReactMarkdown>
+                        </div>
+                      ) : (
+                        <span>{msg.text}</span>
+                      )}
                     </div>
                   </motion.div>
                 ))}
-                
+
                 {isTyping && (
                   <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="flex justify-start">
-                    <div className="bg-white border border-slate-100 rounded-[2rem] rounded-tl-none p-4 flex gap-1.5">
+                    <div className="bg-white border border-slate-100 rounded-[2rem] rounded-tl-none p-4 flex gap-1.5 items-center">
+                      <span className="text-xs text-slate-400 font-bold mr-1">Capy está pensando</span>
                       <div className="w-1.5 h-1.5 bg-special-400 rounded-full animate-bounce" />
                       <div className="w-1.5 h-1.5 bg-special-400 rounded-full animate-bounce [animation-delay:0.2s]" />
                       <div className="w-1.5 h-1.5 bg-special-400 rounded-full animate-bounce [animation-delay:0.4s]" />
@@ -123,24 +151,26 @@ export const AITutorWidget: React.FC = () => {
               {/* Footer */}
               <div className="p-6 bg-slate-50/50 border-t border-slate-100 mt-auto">
                 <div className="flex gap-3">
-                  <input 
-                    type="text" 
+                  <input
+                    type="text"
                     value={message}
                     onChange={e => setMessage(e.target.value)}
-                    onKeyDown={e => e.key === 'Enter' && handleSend()}
+                    onKeyDown={e => e.key === 'Enter' && !isTyping && handleSend()}
                     placeholder="Sua dúvida aqui..."
-                    className="flex-1 bg-white border-2 border-slate-200 rounded-2xl px-5 py-3 text-sm font-bold focus:outline-none focus:border-special-500 transition-colors shadow-inner"
+                    disabled={isTyping}
+                    className="flex-1 bg-white border-2 border-slate-200 rounded-2xl px-5 py-3 text-sm font-bold focus:outline-none focus:border-special-500 transition-colors shadow-inner disabled:opacity-60"
                   />
-                  <Button 
+                  <Button
                     variant="ai"
                     onClick={handleSend}
+                    disabled={isTyping || !message.trim()}
                     className="aspect-square p-0 w-12 rounded-2xl"
                   >
                     <Send size={20} />
                   </Button>
                 </div>
                 <p className="text-[10px] text-center text-slate-400 mt-4 font-bold uppercase tracking-widest">
-                  IA Generativa para Educação
+                  🦫 Powered by Google Gemini
                 </p>
               </div>
             </Card>

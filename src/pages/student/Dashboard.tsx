@@ -143,7 +143,12 @@ export const StudentDashboard: React.FC = () => {
       
       const recent = await Promise.all(allDuels.slice(0, 3).map(async (d: any) => {
         const opponentId = d.challengerId === user.id ? d.challengedId : d.challengerId;
-        const { data: opponent } = await supabase.from('users').select('name').eq('id', opponentId).single();
+        const { data: opp } = await supabase.from('users').select('name, classId').eq('id', opponentId).single();
+        let opponentClass = '';
+        if (opp?.classId) {
+          const { data: cls } = await supabase.from('classes').select('name').eq('id', opp.classId).single();
+          opponentClass = cls?.name || '';
+        }
         
         let outcome = 'Pendente';
         if (d.status === 'completed') {
@@ -156,7 +161,8 @@ export const StudentDashboard: React.FC = () => {
 
         return { 
           ...d, 
-          opponentName: opponent?.name?.split(' ')[0] || 'Oponente',
+          opponentName: opp?.name?.split(' ').slice(0, 2).join(' ') || 'Oponente',
+          opponentClass,
           outcome, myScore, opScore
         };
       }));
@@ -327,7 +333,7 @@ export const StudentDashboard: React.FC = () => {
           <div className="absolute inset-0 opacity-[0.03]" style={{ backgroundImage: 'radial-gradient(circle, white 1px, transparent 1px)', backgroundSize: '32px 32px' }} />
         </div>
 
-        <div className="relative z-10 p-6 md:p-10 flex flex-col lg:flex-row items-center justify-between gap-8 md:gap-16">
+        <div className="relative z-10 p-6 md:p-10 flex flex-col lg:flex-row items-center justify-between gap-6 md:gap-16">
           
           {/* Left Side: Welcome & Compact Stats */}
           <div className="flex-1 min-w-0 space-y-6 w-full">
@@ -359,8 +365,8 @@ export const StudentDashboard: React.FC = () => {
               </div>
             </div>
 
-            {/* High Tech Stats Row */}
-            <div className="flex flex-wrap items-center gap-4 animate-in zoom-in-95 duration-700 delay-300">
+            {/* High Tech Stats Row — on mobile: streak+coins side by side, level below */}
+            <div className="flex flex-wrap items-center gap-3 animate-in zoom-in-95 duration-700 delay-300">
                {/* Ofensiva */}
                <div className="bg-white/5 backdrop-blur-xl border border-white/10 pl-3 pr-7 py-3 rounded-[2rem] flex items-center gap-3 transition-all duration-300 cursor-default shadow-[0_0_20px_rgba(251,146,60,0.1)] hover:-translate-y-1 hover:bg-white/10 hover:shadow-[0_0_30px_rgba(251,146,60,0.2)] group/stat">
                   <div className="w-10 h-10 rounded-xl flex items-center justify-center text-orange-400 bg-orange-400/10 group-hover/stat:scale-110 group-hover/stat:rotate-12 transition-all">
@@ -372,8 +378,19 @@ export const StudentDashboard: React.FC = () => {
                   </div>
                </div>
 
-               {/* Nível com Barra de Progresso */}
-               <div className="bg-white/5 backdrop-blur-xl border border-white/10 pl-3 pr-7 py-3 rounded-[2rem] flex items-center gap-4 transition-all duration-300 cursor-default min-w-[220px] shadow-[0_0_20px_rgba(252,211,77,0.1)] hover:-translate-y-1 hover:bg-white/10 hover:shadow-[0_0_30px_rgba(252,211,77,0.2)] group/level">
+               {/* Moedas — next to streak on mobile */}
+               <div className="bg-white/5 backdrop-blur-xl border border-white/10 pl-3 pr-7 py-3 rounded-[2rem] flex items-center gap-3 transition-all duration-300 cursor-default shadow-[0_0_20px_rgba(251,191,36,0.1)] hover:-translate-y-1 hover:bg-white/10 hover:shadow-[0_0_30px_rgba(251,191,36,0.2)] group/coins">
+                  <div className="w-10 h-10 rounded-xl flex items-center justify-center text-yellow-400 bg-yellow-400/10 group-hover/coins:scale-110 group-hover/coins:rotate-12 transition-all">
+                     <Coins size={20} />
+                  </div>
+                  <div>
+                    <div className="text-xl font-black text-white leading-none tracking-tight">{safeStats.coins.toLocaleString('pt-BR')}</div>
+                    <div className="text-[8px] font-black uppercase tracking-widest text-white/40 group-hover/coins:text-yellow-300/60 transition-colors">Moedas</div>
+                  </div>
+               </div>
+
+               {/* Nível com Barra de Progresso — full width on mobile */}
+               <div className="bg-white/5 backdrop-blur-xl border border-white/10 pl-3 pr-7 py-3 rounded-[2rem] flex items-center gap-4 transition-all duration-300 cursor-default w-full md:w-auto md:min-w-[220px] shadow-[0_0_20px_rgba(252,211,77,0.1)] hover:-translate-y-1 hover:bg-white/10 hover:shadow-[0_0_30px_rgba(252,211,77,0.2)] group/level">
                   <div className="w-10 h-10 rounded-xl flex items-center justify-center text-amber-300 bg-amber-300/10 group-hover/level:scale-110 group-hover/level:rotate-12 transition-all">
                      <Trophy size={20} />
                   </div>
@@ -388,17 +405,6 @@ export const StudentDashboard: React.FC = () => {
                         style={{ width: `${levelProgress.percentage}%` }}
                       />
                     </div>
-                  </div>
-               </div>
-
-               {/* Moedas */}
-               <div className="bg-white/5 backdrop-blur-xl border border-white/10 pl-3 pr-7 py-3 rounded-[2rem] flex items-center gap-3 transition-all duration-300 cursor-default shadow-[0_0_20px_rgba(251,191,36,0.1)] hover:-translate-y-1 hover:bg-white/10 hover:shadow-[0_0_30px_rgba(251,191,36,0.2)] group/coins">
-                  <div className="w-10 h-10 rounded-xl flex items-center justify-center text-yellow-400 bg-yellow-400/10 group-hover/coins:scale-110 group-hover/coins:rotate-12 transition-all">
-                     <Coins size={20} />
-                  </div>
-                  <div>
-                    <div className="text-xl font-black text-white leading-none tracking-tight">{safeStats.coins.toLocaleString('pt-BR')}</div>
-                    <div className="text-[8px] font-black uppercase tracking-widest text-white/40 group-hover/coins:text-yellow-300/60 transition-colors">Moedas</div>
                   </div>
                </div>
             </div>
@@ -433,8 +439,8 @@ export const StudentDashboard: React.FC = () => {
             </div>
           </div>
 
-          {/* Right Side: Avatar Showcase - Floating & Sleek */}
-          <div className="flex flex-col items-center gap-6">
+          {/* Right Side: Avatar Showcase — moves to TOP on mobile */}
+          <div className="flex flex-col items-center gap-4 order-first lg:order-last w-full lg:w-auto">
             <div className="relative group/avatar">
               {/* Outer Glow */}
               <div className="absolute inset-0 bg-primary-400/30 rounded-[3rem] blur-3xl animate-pulse opacity-0 group-hover:opacity-100 transition-opacity" />
@@ -455,13 +461,13 @@ export const StudentDashboard: React.FC = () => {
                 </div>
               </div>
             </div>
-            
+
             <div className="flex flex-row items-center gap-2">
               <Button
                 variant="secondary"
                 size="sm"
                 onClick={() => navigate('/student/avatar')}
-                className="bg-white/5 border border-white/10 text-white hover:bg-white/10 rounded-xl text-[10px] font-black h-9 px-6 uppercase tracking-widest transition-all"
+                className="bg-white/5 border border-white/10 text-white hover:bg-white/10 rounded-xl text-[10px] font-black h-9 px-4 md:px-6 uppercase tracking-widest transition-all"
               >
                 Customizar
               </Button>
@@ -469,7 +475,7 @@ export const StudentDashboard: React.FC = () => {
                 variant="secondary"
                 size="sm"
                 onClick={() => navigate('/student/store')}
-                className="bg-primary-100 border border-primary-200 text-primary-900 font-black hover:bg-primary-200 rounded-xl text-[10px] h-9 px-6 uppercase tracking-widest transition-all shadow-lg shadow-primary-500/10"
+                className="bg-primary-100 border border-primary-200 text-primary-900 font-black hover:bg-primary-200 rounded-xl text-[10px] h-9 px-4 md:px-6 uppercase tracking-widest transition-all shadow-lg shadow-primary-500/10"
               >
                 Loja 🪙
               </Button>
@@ -581,8 +587,10 @@ export const StudentDashboard: React.FC = () => {
                         {duel.outcome}
                       </span>
                     </div>
-                    <div className="text-[10px] font-bold text-slate-400">
-                      {duel.myScore} acertos • {duel.questionCount - duel.myScore} erros
+                    <div className="text-[10px] font-bold text-slate-400 flex items-center gap-1.5">
+                      {duel.opponentClass && <span className="text-primary-500 font-black">{duel.opponentClass}</span>}
+                      {duel.opponentClass && <span>·</span>}
+                      <span>{duel.myScore} acertos • {duel.questionCount - duel.myScore} erros</span>
                     </div>
                   </div>
                   <div className="text-right">

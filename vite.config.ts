@@ -11,4 +11,15 @@ export default defineConfig({
   optimizeDeps: {
     include: ['recharts', 'react-is'],
   },
+  server: {
+    proxy: {
+      // Forward /.netlify/functions/* to the Netlify Functions server
+      // Run: netlify functions:serve  (starts on port 9999 by default)
+      // Then: npm run dev  (starts Vite on port 5173)
+      '/.netlify/functions': {
+        target: 'http://localhost:9999',
+        changeOrigin: true,
+      },
+    },
+  },
 });

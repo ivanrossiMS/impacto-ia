@@ -1,6 +1,6 @@
 export type DuelStatus = 'pending' | 'active' | 'completed' | 'expired';
 
-export type DuelTheme = 'historia' | 'geografia' | 'arte' | 'esportes' | 'ciencias' | 'entretenimento' | 'aleatorio';
+export type DuelTheme = 'historia' | 'geografia' | 'arte' | 'esportes' | 'ciencias' | 'entretenimento' | 'aleatorio' | 'quem_sou_eu' | 'logica';
 
 export type DuelDifficulty = 'easy' | 'medium' | 'hard';
 

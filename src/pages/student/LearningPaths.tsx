@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { supabase } from '../../lib/supabase';
 import type { LearningPath, StudentProgress } from '../../types/learning';
 import { useAuthStore } from '../../store/auth.store';
+import { useNavigate, useLocation } from 'react-router-dom';
 import { Star, ChevronRight, Lock, CheckCircle2 } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -9,10 +10,14 @@ import { cn } from '../../lib/utils';
 
 export const LearningPaths: React.FC = () => {
   const user = useAuthStore(state => state.user);
+  const navigate = useNavigate();
+  const location = useLocation();
   const [paths, setPaths] = useState<LearningPath[]>([]);
   const [progress, setProgress] = useState<Record<string, StudentProgress>>({});
   const [loading, setLoading] = useState(true);
   const [selectedPath, setSelectedPath] = useState<LearningPath | null>(null);
+  const [filterStatus, setFilterStatus] = useState('');
+  const [filterSubject, setFilterSubject] = useState('');
 
   useEffect(() => {
     const loadPaths = async () => {
@@ -71,7 +76,7 @@ export const LearningPaths: React.FC = () => {
     };
 
     loadPaths();
-  }, [user]);
+  }, [user, location.key]); // re-fetch when navigating back
 
   if (loading) {
     return (
@@ -103,6 +108,49 @@ export const LearningPaths: React.FC = () => {
     );
   }
 
+  // ─── Subject icon/color map ───────────────────────────────────────────────
+  const SUBJECT_ICON: Record<string, { emoji: string; bg: string; badge: string }> = {
+    'Matemática':      { emoji: '🧮', bg: 'bg-primary-50',   badge: 'text-primary-600 bg-primary-50 border-primary-100' },
+    'Português':       { emoji: '📝', bg: 'bg-rose-50',      badge: 'text-rose-600 bg-rose-50 border-rose-100' },
+    'Portugues':       { emoji: '📝', bg: 'bg-rose-50',      badge: 'text-rose-600 bg-rose-50 border-rose-100' },
+    'Ciências':        { emoji: '🔬', bg: 'bg-emerald-50',   badge: 'text-emerald-600 bg-emerald-50 border-emerald-100' },
+    'Ciencias':        { emoji: '🔬', bg: 'bg-emerald-50',   badge: 'text-emerald-600 bg-emerald-50 border-emerald-100' },
+    'História':        { emoji: '📜', bg: 'bg-amber-50',     badge: 'text-amber-600 bg-amber-50 border-amber-100' },
+    'Historia':        { emoji: '📜', bg: 'bg-amber-50',     badge: 'text-amber-600 bg-amber-50 border-amber-100' },
+    'Geografia':       { emoji: '🌍', bg: 'bg-teal-50',      badge: 'text-teal-600 bg-teal-50 border-teal-100' },
+    'Física':          { emoji: '⚛️', bg: 'bg-indigo-50',    badge: 'text-indigo-600 bg-indigo-50 border-indigo-100' },
+    'Fisica':          { emoji: '⚛️', bg: 'bg-indigo-50',    badge: 'text-indigo-600 bg-indigo-50 border-indigo-100' },
+    'Química':         { emoji: '🧪', bg: 'bg-purple-50',    badge: 'text-purple-600 bg-purple-50 border-purple-100' },
+    'Quimica':         { emoji: '🧪', bg: 'bg-purple-50',    badge: 'text-purple-600 bg-purple-50 border-purple-100' },
+    'Biologia':        { emoji: '🧬', bg: 'bg-green-50',     badge: 'text-green-600 bg-green-50 border-green-100' },
+    'Artes':           { emoji: '🎨', bg: 'bg-pink-50',      badge: 'text-pink-600 bg-pink-50 border-pink-100' },
+    'Arte':            { emoji: '🎨', bg: 'bg-pink-50',      badge: 'text-pink-600 bg-pink-50 border-pink-100' },
+    'Inglês':          { emoji: '🇬🇧', bg: 'bg-sky-50',      badge: 'text-sky-600 bg-sky-50 border-sky-100' },
+    'Ingles':          { emoji: '🇬🇧', bg: 'bg-sky-50',      badge: 'text-sky-600 bg-sky-50 border-sky-100' },
+    'Ed. Física':      { emoji: '⚽', bg: 'bg-orange-50',    badge: 'text-orange-600 bg-orange-50 border-orange-100' },
+    'Educação Física': { emoji: '⚽', bg: 'bg-orange-50',    badge: 'text-orange-600 bg-orange-50 border-orange-100' },
+    'Filosofia':       { emoji: '🏛️', bg: 'bg-slate-50',     badge: 'text-slate-600 bg-slate-50 border-slate-200' },
+    'Sociologia':      { emoji: '🌐', bg: 'bg-cyan-50',      badge: 'text-cyan-600 bg-cyan-50 border-cyan-100' },
+    'Redação':         { emoji: '✍️', bg: 'bg-violet-50',    badge: 'text-violet-600 bg-violet-50 border-violet-100' },
+    'Redacao':         { emoji: '✍️', bg: 'bg-violet-50',    badge: 'text-violet-600 bg-violet-50 border-violet-100' },
+  };
+  const getSubject = (s: string | undefined) =>
+    SUBJECT_ICON[s || ''] || { emoji: '📚', bg: 'bg-special-50', badge: 'text-special-600 bg-special-50 border-special-100' };
+
+  // Derive subject options dynamically
+  const subjectOptions = Array.from(new Set(paths.map(p => p.subject).filter(Boolean))).sort();
+
+  // Apply filters
+  const filteredPaths = paths.filter(path => {
+    const pp = progress[path.id];
+    const status = pp?.status || 'not_started';
+    if (filterStatus === 'completed' && status !== 'completed') return false;
+    if (filterStatus === 'in_progress' && status !== 'in_progress') return false;
+    if (filterStatus === 'not_started' && pp != null) return false;
+    if (filterSubject && (path.subject || '') !== filterSubject) return false;
+    return true;
+  });
+
   return (
     <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
       <header className="flex flex-col md:flex-row md:items-center justify-between gap-6 bg-slate-900 p-8 rounded-[2.5rem] text-white shadow-2xl relative overflow-hidden">
@@ -120,12 +168,44 @@ export const LearningPaths: React.FC = () => {
         </div>
       </header>
 
+      {/* Filter bar */}
+      <div className="flex flex-wrap items-center gap-3 bg-white border border-slate-100 rounded-[2rem] p-4 shadow-sm">
+        <select
+          value={filterStatus} onChange={e => setFilterStatus(e.target.value)}
+          className="bg-slate-50 border border-slate-200 rounded-2xl px-4 py-2.5 text-sm font-bold text-slate-700 outline-none cursor-pointer hover:border-primary-300 transition-colors"
+        >
+          <option value="">Todos os status</option>
+          <option value="not_started">🔵 Não iniciadas</option>
+          <option value="in_progress">🟡 Em progresso</option>
+          <option value="completed">✅ Concluídas</option>
+        </select>
+        <select
+          value={filterSubject} onChange={e => setFilterSubject(e.target.value)}
+          className="bg-slate-50 border border-slate-200 rounded-2xl px-4 py-2.5 text-sm font-bold text-slate-700 outline-none cursor-pointer hover:border-primary-300 transition-colors"
+        >
+          <option value="">Todas as matérias</option>
+          {subjectOptions.map(s => <option key={s} value={s}>{s}</option>)}
+        </select>
+        {(filterStatus || filterSubject) && (
+          <button
+            onClick={() => { setFilterStatus(''); setFilterSubject(''); }}
+            className="px-4 py-2.5 bg-red-50 text-red-500 border border-red-100 rounded-2xl text-sm font-black hover:bg-red-100 transition-colors"
+          >
+            Limpar
+          </button>
+        )}
+        <span className="ml-auto text-[10px] font-black uppercase text-slate-400 tracking-widest">
+          {filteredPaths.length}/{paths.length} trilha{paths.length !== 1 ? 's' : ''}
+        </span>
+      </div>
+
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
-        {paths.map((path, index) => {
+        {filteredPaths.map((path) => {
           const pathProgress = progress[path.id];
           const isCompleted = pathProgress?.status === 'completed';
           const isInProgress = pathProgress?.status === 'in_progress';
-          const isLocked = index > 0 && !progress[paths[index - 1].id]?.status && !isCompleted && !isInProgress;
+          // All trails are always unlocked
+          const isLocked = false;
 
           return (
             <div 
@@ -141,9 +221,9 @@ export const LearningPaths: React.FC = () => {
               <div className="flex justify-between items-start mb-6">
                 <div className={cn(
                   "w-16 h-16 rounded-[1.5rem] flex items-center justify-center text-4xl shadow-inner transform group-hover:scale-110 transition-transform duration-500",
-                  path.subject === 'Matemática' ? "bg-primary-50" : "bg-special-50"
+                  getSubject(path.subject).bg
                 )}>
-                  {path.subject === 'Matemática' ? '📐' : '🧬'}
+                  {getSubject(path.subject).emoji}
                 </div>
                 {isCompleted ? (
                   <div className="bg-success-100 text-success-600 p-2.5 rounded-2xl shadow-sm animate-in zoom-in">
@@ -164,7 +244,7 @@ export const LearningPaths: React.FC = () => {
                 <div className="flex items-center gap-2">
                   <span className={cn(
                     "text-[10px] font-black uppercase tracking-[0.2em] px-3 py-1.5 rounded-full border",
-                    path.subject === 'Matemática' ? "text-primary-600 bg-primary-50 border-primary-100" : "text-special-600 bg-special-50 border-special-100"
+                    getSubject(path.subject).badge
                   )}>
                     {path.subject}
                   </span>
@@ -203,8 +283,13 @@ export const LearningPaths: React.FC = () => {
                   </div>
                   
                   <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-2 font-black text-sm text-warning-600 bg-warning-50 px-4 py-2 rounded-2xl">
-                      <span className="text-lg">🪙</span> {path.rewardCoins}
+                    <div className="flex items-center gap-2">
+                      <div className="flex items-center gap-1.5 font-black text-sm text-warning-600 bg-warning-50 px-3 py-2 rounded-2xl">
+                        <span>🪙</span> {isCompleted ? 0 : path.rewardCoins}
+                      </div>
+                      <div className="flex items-center gap-1.5 font-black text-sm text-primary-600 bg-primary-50 px-3 py-2 rounded-2xl">
+                        <span>⚡</span> {isCompleted ? 0 : path.rewardXp} XP
+                      </div>
                     </div>
                     <div className="text-primary-500 opacity-0 group-hover:opacity-100 translate-x-4 group-hover:translate-x-0 transition-all duration-500">
                       <ChevronRight size={28} />
@@ -213,11 +298,7 @@ export const LearningPaths: React.FC = () => {
                 </div>
               )}
 
-              {isLocked && (
-                <div className="mt-8 pt-6 border-t border-slate-100 text-center text-[10px] font-black uppercase tracking-widest text-slate-400">
-                  Bloqueado • Conclua o anterior
-                </div>
-              )}
+
             </div>
           );
         })}
@@ -252,7 +333,7 @@ export const LearningPaths: React.FC = () => {
               <div className="p-10 space-y-8">
                  <div className="grid grid-cols-3 gap-6">
                     {[
-                      { label: 'Recompensa', val: `${selectedPath.rewardCoins} Moedas`, icon: '🪙' },
+                      { label: 'Recompensa', val: progress[selectedPath.id]?.status === 'completed' ? '0 Moedas' : `${selectedPath.rewardCoins} Moedas`, icon: '🪙' },
                       { label: 'Dificuldade', val: 'Mix Nível', icon: '🔥' },
                       { label: 'Tutor IA', val: 'Ativo', icon: '🤖' },
                     ].map((m, i) => (
@@ -283,12 +364,11 @@ export const LearningPaths: React.FC = () => {
                     <button 
                        className="flex-[2] py-5 rounded-[1.5rem] font-black text-white bg-slate-900 shadow-xl shadow-slate-900/20 hover:shadow-2xl hover:scale-[1.02] transition-all flex items-center justify-center gap-3"
                        onClick={() => {
-                          toast.success(`Iniciando ${selectedPath.title}...`);
-                          setSelectedPath(null);
-                          // In a real app, this would navigate to the first lesson
+                          navigate(`/student/paths/${selectedPath.id}`);
+                           setSelectedPath(null);
                        }}
                     >
-                       Explorar Trilha agora <ChevronRight size={20} />
+                       {progress[selectedPath.id]?.status === 'completed' ? 'Rever Trilha' : 'Explorar Trilha agora'} <ChevronRight size={20} />
                     </button>
                  </div>
               </div>

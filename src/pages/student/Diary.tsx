@@ -4,7 +4,7 @@ import { supabase } from '../../lib/supabase';
 import {
   BookOpen, Plus, Search,
   Sparkles, Trash2, Lock, Hash, Star as StarIcon,
-  X, BrainCircuit, CheckCircle2
+  X, BrainCircuit, CheckCircle2, Share2, Edit2
 } from 'lucide-react';
 import { Card } from '../../components/ui/Card';
 import { Badge } from '../../components/ui/Badge';
@@ -12,6 +12,8 @@ import { Button } from '../../components/ui/Button';
 import { cn } from '../../lib/utils';
 import { toast } from 'sonner';
 import { incrementMissionProgress } from '../../lib/missionUtils';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 
 // Redefining DiaryEntry as we removed it from Dexie types
 export interface DiaryEntry {
@@ -38,6 +40,9 @@ export const Diary: React.FC = () => {
   const [formMood, setFormMood] = useState('😊');
   const [formTags, setFormTags] = useState('');
   const [saving, setSaving] = useState(false);
+  const [editingEntry, setEditingEntry] = useState<DiaryEntry | null>(null);
+  const [currentPage, setCurrentPage] = useState(1);
+  const ENTRIES_PER_PAGE = 10;
 
   const moods = ['😊', '🤩', '😎', '🤔', '😅', '💪', '🔭', '🎉', '😴', '🌟'];
 
@@ -56,42 +61,74 @@ export const Diary: React.FC = () => {
     setLoading(false);
   };
 
-  const handleNewEntry = async () => {
+  const handleSaveEntry = async () => {
     if (!user || !formTitle.trim() || !formContent.trim()) {
       toast.error('Preencha o título e o conteúdo!');
       return;
     }
     setSaving(true);
     try {
-      const entry: DiaryEntry = {
-        id: crypto.randomUUID(),
-        studentId: user.id,
+      const isEditing = !!editingEntry;
+      const entryId = isEditing ? editingEntry!.id : crypto.randomUUID();
+      
+      const entryData: Partial<DiaryEntry> = {
         title: formTitle.trim(),
         content: formContent.trim(),
         mood: formMood,
         tags: formTags.split(',').map(t => t.trim()).filter(Boolean),
-        isAIGenerated: false,
-        createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
       };
-      const { error } = await supabase.from('diary_entries').insert(entry);
-      if (error) throw error;
-      setEntries(prev => [entry, ...prev]);
-      setShowModal(false);
-      setFormTitle('');
-      setFormContent('');
-      setFormMood('😊');
-      setFormTags('');
-      toast.success('Anotação salva! 📝');
-      
-      // Update Mission Progress
-      await incrementMissionProgress(user.id, 'diary_entry', 1);
-    } catch (error) {
 
+      if (!isEditing) {
+        (entryData as DiaryEntry).id = entryId;
+        (entryData as DiaryEntry).studentId = user.id;
+        (entryData as DiaryEntry).isAIGenerated = false;
+        (entryData as DiaryEntry).createdAt = new Date().toISOString();
+        
+        const { error } = await supabase.from('diary_entries').insert(entryData);
+        if (error) throw error;
+        
+        setEntries(prev => [entryData as DiaryEntry, ...prev]);
+        toast.success('Anotação salva! 📝');
+        await incrementMissionProgress(user.id, 'diary_entry', 1);
+      } else {
+        const { error } = await supabase.from('diary_entries').update(entryData).eq('id', entryId);
+        if (error) throw error;
+        
+        setEntries(prev => prev.map(e => e.id === entryId ? { ...e, ...entryData } : e));
+        toast.success('Anotação atualizada! ✨');
+      }
+
+      setShowModal(false);
+      resetForm();
+    } catch (error) {
       toast.error('Erro ao salvar anotação.');
     } finally {
       setSaving(false);
     }
+  };
+
+  const resetForm = () => {
+    setFormTitle('');
+    setFormContent('');
+    setFormMood('😊');
+    setFormTags('');
+    setEditingEntry(null);
+  };
+
+  const handleEdit = (entry: DiaryEntry) => {
+    setEditingEntry(entry);
+    setFormTitle(entry.title);
+    setFormContent(entry.content);
+    setFormMood(entry.mood);
+    setFormTags(entry.tags.join(', '));
+    setShowModal(true);
+  };
+
+  const handleShareWhatsApp = (entry: DiaryEntry) => {
+    const text = `*Minha Anotação no Diário - Impacto IA*%0A%0A*Título:* ${entry.title}%0A*Data:* ${new Date(entry.createdAt).toLocaleDateString('pt-BR')}%0A%0A${entry.content}`;
+    window.open(`https://wa.me/?text=${text}`, '_blank');
+    toast.success('Abrindo WhatsApp...');
   };
 
   const handleDelete = async (id: string) => {
@@ -106,6 +143,16 @@ export const Diary: React.FC = () => {
     e.content.toLowerCase().includes(searchTerm.toLowerCase()) ||
     e.tags.some((t: string) => t.toLowerCase().includes(searchTerm.toLowerCase()))
   );
+
+  const totalPages = Math.max(1, Math.ceil(filtered.length / ENTRIES_PER_PAGE));
+  const paginatedEntries = filtered.slice((currentPage - 1) * ENTRIES_PER_PAGE, currentPage * ENTRIES_PER_PAGE);
+  const hasActiveFilter = !!searchTerm;
+
+  // Reset to page 1 when filter changes
+  const handleSetSearch = (term: string) => {
+    setSearchTerm(term);
+    setCurrentPage(1);
+  };
 
   const allTags = [...new Set(entries.flatMap(e => e.tags))];
 
@@ -183,16 +230,29 @@ export const Diary: React.FC = () => {
           {allTags.length > 0 && (
             <div className="space-y-4">
               <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Tags Recentes</label>
-              <div className="flex flex-wrap gap-2">
+            <div className="flex flex-wrap gap-2">
                 {allTags.slice(0, 8).map(t => (
                   <button
                     key={t}
-                    onClick={() => setSearchTerm(t)}
-                    className="px-4 py-2 bg-white border border-slate-100 rounded-xl text-[10px] font-black uppercase text-slate-500 hover:border-primary-200 hover:text-primary-600 cursor-pointer transition-colors"
+                    onClick={() => handleSetSearch(searchTerm === t ? '' : t)}
+                    className={cn(
+                      'px-4 py-2 border rounded-xl text-[10px] font-black uppercase cursor-pointer transition-colors',
+                      searchTerm === t
+                        ? 'bg-primary-500 border-primary-500 text-white'
+                        : 'bg-white border-slate-100 text-slate-500 hover:border-primary-200 hover:text-primary-600'
+                    )}
                   >
                     #{t}
                   </button>
                 ))}
+                {hasActiveFilter && (
+                  <button
+                    onClick={() => handleSetSearch('')}
+                    className="px-4 py-2 bg-red-50 border border-red-100 rounded-xl text-[10px] font-black uppercase text-red-500 hover:bg-red-100 transition-colors flex items-center gap-1"
+                  >
+                    <X size={10} /> Limpar
+                  </button>
+                )}
               </div>
             </div>
           )}
@@ -207,19 +267,40 @@ export const Diary: React.FC = () => {
                 type="text"
                 placeholder="Pesquisar nas minhas anotações..."
                 value={searchTerm}
-                onChange={e => setSearchTerm(e.target.value)}
+                onChange={e => handleSetSearch(e.target.value)}
                 className="w-full pl-14 pr-6 py-4 bg-white border border-slate-200 rounded-[2rem] text-sm font-bold focus:outline-none focus:border-primary-400 shadow-sm transition-all"
               />
               {searchTerm && (
-                <button onClick={() => setSearchTerm('')} className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-300 hover:text-slate-600">
+                <button onClick={() => handleSetSearch('')} className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-300 hover:text-slate-600">
                   <X size={18} />
                 </button>
               )}
             </div>
+            {hasActiveFilter && (
+              <button
+                onClick={() => handleSetSearch('')}
+                className="flex items-center gap-2 px-5 py-4 bg-white border border-slate-200 rounded-[2rem] text-xs font-black text-slate-500 hover:border-red-200 hover:text-red-500 transition-all shadow-sm whitespace-nowrap"
+              >
+                <X size={14} /> Limpar Filtros
+              </button>
+            )}
           </div>
 
           <div className="space-y-6">
-            {filtered.length === 0 ? (
+            {/* Results count */}
+            {filtered.length > 0 && (
+              <div className="flex items-center justify-between">
+                <p className="text-xs font-bold text-slate-400">
+                  {filtered.length} anota{filtered.length !== 1 ? 'ções' : 'ção'} encontrada{filtered.length !== 1 ? 's' : ''}
+                  {hasActiveFilter ? ` para "${searchTerm}"` : ''}
+                </p>
+                <p className="text-xs font-bold text-slate-400">
+                  Página {currentPage} de {totalPages}
+                </p>
+              </div>
+            )}
+
+            {paginatedEntries.length === 0 ? (
               <div className="text-center py-20 bg-white rounded-[2.5rem] border-2 border-dashed border-slate-100">
                 <div className="text-6xl mb-4">📝</div>
                 <h3 className="text-xl font-black text-slate-600 mb-2">
@@ -237,7 +318,7 @@ export const Diary: React.FC = () => {
                 )}
               </div>
             ) : (
-              filtered.map(entry => (
+              paginatedEntries.map(entry => (
                 <Card key={entry.id} className="p-0 overflow-hidden border-slate-100 group hover:border-primary-100 hover:shadow-floating transition-all duration-500">
                   {entry.isAIGenerated && (
                     <div className="bg-gradient-to-r from-special-50 to-primary-50 border-b border-special-100/50 px-8 py-3 flex items-center gap-2">
@@ -278,7 +359,9 @@ export const Diary: React.FC = () => {
                       </div>
                     </div>
 
-                    <p className="text-slate-600 font-medium leading-relaxed text-lg">{entry.content}</p>
+                    <div className="text-slate-600 font-medium leading-relaxed text-lg prose prose-slate max-w-none prose-strong:text-slate-800 prose-strong:font-black">
+                      <ReactMarkdown remarkPlugins={[remarkGfm]}>{entry.content}</ReactMarkdown>
+                    </div>
 
                     {entry.tags.length > 0 && (
                       <div className="flex flex-wrap gap-2 pt-2">
@@ -292,14 +375,68 @@ export const Diary: React.FC = () => {
                   </div>
 
                   <div className="px-8 py-5 bg-slate-50/50 border-t border-slate-50 flex items-center justify-between">
-                    <div className="flex items-center gap-4">
+                    <div className="flex items-center gap-6">
                       <button className="flex items-center gap-2 text-slate-400 hover:text-warning-500 transition-colors text-xs font-black uppercase tracking-widest">
                         <StarIcon size={16} /> Favoritar
                       </button>
+                      
+                      <button 
+                        onClick={() => handleShareWhatsApp(entry)}
+                        className="flex items-center gap-2 text-slate-400 hover:text-green-500 transition-colors text-xs font-black uppercase tracking-widest"
+                      >
+                        <Share2 size={16} /> WhatsApp
+                      </button>
+
+                      {!entry.isAIGenerated && (
+                        <button 
+                          onClick={() => handleEdit(entry)}
+                          className="flex items-center gap-2 text-slate-400 hover:text-primary-500 transition-colors text-xs font-black uppercase tracking-widest"
+                        >
+                          <Edit2 size={16} /> Editar
+                        </button>
+                      )}
                     </div>
                   </div>
                 </Card>
               ))
+            )}
+
+            {/* Pagination navigation */}
+            {totalPages > 1 && (
+              <div className="flex items-center justify-center gap-3 pt-4">
+                <button
+                  onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+                  disabled={currentPage === 1}
+                  className="flex items-center gap-2 px-6 py-3 bg-white border border-slate-200 rounded-2xl text-sm font-black text-slate-600 hover:border-primary-300 hover:text-primary-600 disabled:opacity-30 disabled:cursor-not-allowed transition-all shadow-sm"
+                >
+                  ← Anterior
+                </button>
+
+                <div className="flex items-center gap-1">
+                  {Array.from({ length: totalPages }, (_, i) => i + 1).map(page => (
+                    <button
+                      key={page}
+                      onClick={() => setCurrentPage(page)}
+                      className={cn(
+                        'w-10 h-10 rounded-xl text-sm font-black transition-all',
+                        page === currentPage
+                          ? 'bg-primary-500 text-white shadow-lg shadow-primary-500/30'
+                          : 'bg-white border border-slate-200 text-slate-500 hover:border-primary-300 hover:text-primary-600'
+                      )}
+                    >
+                      {page}
+                    </button>
+                  ))}
+                </div>
+
+                <button
+                  onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+                  disabled={currentPage === totalPages}
+                  className="flex items-center gap-2 px-6 py-3 bg-white border border-slate-200 rounded-2xl text-sm font-black text-slate-600 hover:border-primary-300 hover:text-primary-600 disabled:opacity-30 disabled:cursor-not-allowed transition-all shadow-sm"
+                >
+                  Próxima →
+                </button>
+              </div>
             )}
           </div>
         </div>
@@ -311,10 +448,14 @@ export const Diary: React.FC = () => {
           <div className="bg-white rounded-[3rem] shadow-2xl w-full max-w-xl animate-in zoom-in-95 duration-300 overflow-hidden">
             <div className="bg-gradient-to-br from-primary-600 to-special-700 p-8 text-white flex items-center justify-between">
               <div>
-                <div className="text-[10px] font-black uppercase tracking-widest opacity-70 mb-1">Nova Anotação</div>
-                <h2 className="text-2xl font-black">O que você aprendeu?</h2>
+                <div className="text-[10px] font-black uppercase tracking-widest opacity-70 mb-1">
+                  {editingEntry ? 'Editar Anotação' : 'Nova Anotação'}
+                </div>
+                <h2 className="text-2xl font-black">
+                  {editingEntry ? 'Atualizar seu registro' : 'O que você aprendeu?'}
+                </h2>
               </div>
-              <button onClick={() => setShowModal(false)} className="p-3 bg-white/10 hover:bg-white/20 rounded-2xl transition-all">
+              <button onClick={() => { setShowModal(false); resetForm(); }} className="p-3 bg-white/10 hover:bg-white/20 rounded-2xl transition-all">
                 <X size={20} />
               </button>
             </div>
@@ -376,17 +517,17 @@ export const Diary: React.FC = () => {
               </div>
 
               <div className="flex gap-3">
-                <Button variant="secondary" className="flex-1 rounded-2xl h-14" onClick={() => setShowModal(false)}>
+                <Button variant="secondary" className="flex-1 rounded-2xl h-14" onClick={() => { setShowModal(false); resetForm(); }}>
                   Cancelar
                 </Button>
                 <Button
                   variant="primary"
                   className="flex-[2] rounded-2xl h-14 gap-2 font-black"
-                  onClick={handleNewEntry}
+                  onClick={handleSaveEntry}
                   disabled={saving || !formTitle.trim() || !formContent.trim()}
                 >
                   {saving ? <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" /> : <CheckCircle2 size={20} />}
-                  Salvar Anotação
+                  {editingEntry ? 'Atualizar' : 'Salvar Anotação'}
                 </Button>
               </div>
             </div>

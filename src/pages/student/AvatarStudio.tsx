@@ -98,7 +98,7 @@ export const AvatarStudio: React.FC = () => {
       <motion.div 
         initial={{ opacity: 0, x: -50 }}
         animate={{ opacity: 1, x: 0 }}
-        className="lg:w-1/2 flex flex-col h-full bg-slate-50/50 backdrop-blur-3xl rounded-[3rem] p-4 border border-slate-200/60 shadow-inner overflow-hidden relative"
+      className="lg:w-1/2 flex flex-col h-full bg-slate-50/50 backdrop-blur-3xl rounded-[3rem] p-4 border border-slate-200/60 shadow-inner overflow-hidden relative"
       >
         <div className="flex-1 flex flex-col items-center justify-center relative overflow-hidden bg-white rounded-[2.5rem] shadow-[0_30px_60px_-12px_rgba(0,0,0,0.08)] group border border-slate-100">
           
@@ -116,8 +116,8 @@ export const AvatarStudio: React.FC = () => {
 
           <div className="absolute top-0 left-0 w-full h-full bg-[radial-gradient(circle_at_50%_50%,rgba(255,255,255,0)_0%,rgba(255,255,255,1)_100%)] opacity-40" />
 
-          {/* User Name Header */}
-          <div className="absolute top-12 left-0 w-full px-10 z-20 text-center">
+          {/* User Name Header — visible only on desktop (absolute position) */}
+          <div className="hidden md:block absolute top-12 left-0 w-full px-10 z-20 text-center">
             <motion.div
               initial={{ y: -20, opacity: 0 }}
               animate={{ y: 0, opacity: 1 }}
@@ -130,16 +130,15 @@ export const AvatarStudio: React.FC = () => {
             </motion.div>
           </div>
           
+          {/* ── DESKTOP avatar preview (size 3xl, studio style) ── */}
           <motion.div 
             key={profile.selectedAvatarId + profile.selectedBackgroundId}
             initial={{ scale: 0.9, opacity: 0, y: 20 }}
             animate={{ scale: 1, opacity: 1, y: 0 }}
             transition={{ type: 'spring', damping: 15, stiffness: 100 }}
-            className="relative z-10 pt-24 scale-95 sm:scale-100"
+            className="hidden md:block relative z-10 pt-24"
           >
-             {/* Subtle Glow Behind Avatar */}
              <div className="absolute -inset-20 bg-primary-500/5 rounded-full blur-[80px]" />
-             
              <div className="relative group/avatar">
                 <AvatarComposer 
                     avatarUrl={activeAvatar?.assetUrl || '/avatars/default-impacto.png'}
@@ -152,8 +151,36 @@ export const AvatarStudio: React.FC = () => {
              </div>
           </motion.div>
 
-          {/* Bottom Bar: Modern Light Theme */}
-          <div className="absolute bottom-10 flex flex-col items-center gap-6 z-20 w-full px-10">
+          {/* ── MOBILE avatar preview — idêntico ao Dashboard ── */}
+          <motion.div
+            key={'mob-' + profile.selectedAvatarId + profile.selectedBackgroundId}
+            initial={{ scale: 0.9, opacity: 0, y: 20 }}
+            animate={{ scale: 1, opacity: 1, y: 0 }}
+            transition={{ type: 'spring', damping: 15, stiffness: 100 }}
+            className="md:hidden relative z-10"
+          >
+            <div className="relative group/avatar">
+              {/* Outer Glow — igual ao Dashboard */}
+              <div className="absolute inset-0 bg-primary-400/30 rounded-[3rem] blur-3xl animate-pulse opacity-0 group-hover:opacity-100 transition-opacity" />
+              {/* Main Container — branco grosso igual ao Dashboard */}
+              <div className="relative z-10 p-1.5 bg-white rounded-[3rem] shadow-[0_20px_50px_rgba(0,0,0,0.3)] border-2 border-white/20">
+                <div className="relative rounded-[2.5rem] bg-[#F8FAFF] overflow-hidden p-2">
+                  <AvatarComposer
+                    avatarUrl={activeAvatar?.assetUrl || '/avatars/default-impacto.png'}
+                    backgroundUrl={activeBg?.assetUrl}
+                    borderUrl={activeBorder?.assetUrl}
+                    stickerUrls={activeStickers}
+                    size="xl"
+                    className="relative z-10"
+                    isFloating={true}
+                  />
+                </div>
+              </div>
+            </div>
+          </motion.div>
+
+          {/* Bottom Bar: Desktop stays absolute; Mobile rendered below avatar in flow */}
+          <div className="hidden md:flex absolute bottom-10 flex-col items-center gap-6 z-20 w-full px-10">
             {/* Dark Badge for High Contrast */}
             <motion.div 
               whileHover={{ scale: 1.05, y: -2 }}
@@ -168,7 +195,6 @@ export const AvatarStudio: React.FC = () => {
                 </div>
             </motion.div>
 
-            {/* AI Action Button */}
             <Button 
               variant="ai" 
               size="xl" 
@@ -185,6 +211,23 @@ export const AvatarStudio: React.FC = () => {
           <div className="absolute top-10 right-10 w-4 h-4 border-r-2 border-t-2 border-slate-200 rounded-tr-lg" />
           <div className="absolute bottom-10 left-10 w-4 h-4 border-l-2 border-b-2 border-slate-200 rounded-bl-lg" />
           <div className="absolute bottom-10 right-10 w-4 h-4 border-r-2 border-b-2 border-slate-200 rounded-br-lg" />
+        </div>
+
+        {/* Mobile: Name + Save Button below avatar (only visible on mobile) */}
+        <div className="md:hidden flex flex-col items-center gap-4 px-2 pb-2">
+          <div className="text-center">
+            <h2 className="text-2xl font-[900] text-slate-800 tracking-tighter uppercase leading-tight">{user?.name}</h2>
+            <div className="w-12 h-1 bg-primary-500 mx-auto rounded-full mt-1 shadow-[0_2px_10px_rgba(99,102,241,0.3)]" />
+          </div>
+          <Button
+            variant="ai"
+            size="lg"
+            className="w-full shadow-lg gap-2 rounded-2xl py-4 text-base font-black group/save"
+            onClick={handleSave}
+          >
+            <Save size={20} className="group-hover/save:rotate-12 transition-transform" />
+            <span>Salvar Novo Visual</span>
+          </Button>
         </div>
       </motion.div>
 

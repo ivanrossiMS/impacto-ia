@@ -9,16 +9,16 @@ import { AITutorWidget } from '../components/AITutorWidget';
 import { cn } from '../lib/utils';
 import { useAvatarStore } from '../store/avatar.store';
 import { AvatarComposer } from '../features/avatar/components/AvatarComposer';
-import { useStudentData } from '../hooks/useStudentData';
+import { useGamificationStore } from '../store/gamification.store';
 
 export const StudentLayout: React.FC = () => {
   const { user, logout } = useAuthStore();
   const { isSidebarOpen, setSidebarOpen } = useUIStore();
   const navigate = useNavigate();
 
-  // ✅ OPTIMIZED: useStudentData replaces the old fetchLayoutData + 3 separate channels.
-  // It uses parallel queries (Promise.all) and a 300ms debounce for real-time events.
-  const { stats, unreadCount, unreadSupportCount } = useStudentData(user?.id);
+  // ✅ Zustand store — single source of truth for top bar indicators
+  // updateGamificationStats() pushes here instantly from any page
+  const { stats, unreadCount, unreadSupportCount, fetchStats } = useGamificationStore();
 
   const [className, setClassName] = React.useState('');
   const [schoolLogo, setSchoolLogo] = React.useState<string | null>(null);
@@ -26,29 +26,26 @@ export const StudentLayout: React.FC = () => {
   const { profile, catalog, fetchProfile, fetchCatalog } = useAvatarStore();
 
   React.useEffect(() => {
-    if (!user) return;
-    
-    // Fetch static layout data (class name + school logo) once on mount
+    if (!user?.id) return;
+    fetchStats(user.id);
+
+    // Fetch static layout data (class and school logo) once on mount
     const fetchStaticData = async () => {
-      const [userResult, schoolResult] = await Promise.all([
-        user.role === 'student'
-          ? supabase.from('users').select('classId').eq('id', user.id).single()
-          : Promise.resolve({ data: null }),
-        user.schoolId
-          ? supabase.from('schools').select('logo').eq('id', user.schoolId).single()
-          : Promise.resolve({ data: null }),
-      ]);
-
-      if (userResult.data?.classId) {
-        const { data: cls } = await supabase.from('classes').select('name').eq('id', userResult.data.classId).single();
-        if (cls) setClassName(cls.name);
+      if (user.role === 'student') {
+        const { data: u } = await supabase.from('users').select('classId').eq('id', user.id).single();
+        if (u?.classId) {
+          const { data: cls } = await supabase.from('classes').select('name').eq('id', u.classId).single();
+          if (cls) setClassName(cls.name);
+        }
       }
-
-      if (schoolResult.data?.logo) setSchoolLogo(schoolResult.data.logo);
+      if (user.schoolId) {
+        const { data: school } = await supabase.from('schools').select('logo').eq('id', user.schoolId).single();
+        if (school?.logo) setSchoolLogo(school.logo);
+      }
     };
-
     fetchStaticData();
-  }, [user]);
+  }, [user?.id, fetchStats]);
+
 
   React.useEffect(() => {
     if (user && user.role === 'student') {
@@ -189,8 +186,8 @@ export const StudentLayout: React.FC = () => {
             <Menu size={24} />
           </button>
           
-          {/* School Logo + Student name + class */}
-          <div className="flex items-center gap-3 ml-1">
+          {/* School Logo + Student name + class — hidden on mobile */}
+          <div className="hidden md:flex items-center gap-3 ml-1">
             {schoolLogo && (
               <div className="w-12 h-12 bg-white rounded-2xl border border-slate-100 flex items-center justify-center overflow-hidden shadow-sm p-1.5">
                 <img src={schoolLogo} alt="School Logo" className="w-full h-full object-contain" />
@@ -209,22 +206,23 @@ export const StudentLayout: React.FC = () => {
           <div className="flex-1" />
           
           {/* Topbar indicators */}
-          <div className="flex items-center gap-2 sm:gap-3">
+          <div className="flex items-center gap-1.5 sm:gap-3">
             {/* XP */}
-            <div className="bg-primary-50 border border-primary-200 text-primary-700 font-extrabold px-3 py-2 rounded-full flex items-center gap-1.5 shadow-sm hover:scale-105 transition-transform cursor-default text-sm">
-              <Zap size={14} className="text-primary-500 fill-primary-400" />
+            <div className="bg-primary-50 border border-primary-200 text-primary-700 font-extrabold px-2 py-1.5 md:px-3 md:py-2 rounded-full flex items-center gap-1 md:gap-1.5 shadow-sm hover:scale-105 transition-transform cursor-default text-xs md:text-sm">
+              <Zap size={12} className="text-primary-500 fill-primary-400 md:hidden" />
+              <Zap size={14} className="text-primary-500 fill-primary-400 hidden md:block" />
               <span>{stats?.xp ?? '—'}</span>
-              <span className="text-[10px] font-black text-primary-400 uppercase">XP</span>
+              <span className="hidden md:inline text-[10px] font-black text-primary-400 uppercase">XP</span>
             </div>
 
             {/* Streak */}
-            <div className="bg-energy-50 border border-energy-200 text-energy-700 font-extrabold px-3 py-2 rounded-full flex items-center gap-1.5 shadow-sm hover:scale-105 transition-transform cursor-default text-sm">
+            <div className="bg-energy-50 border border-energy-200 text-energy-700 font-extrabold px-2 py-1.5 md:px-3 md:py-2 rounded-full flex items-center gap-1 md:gap-1.5 shadow-sm hover:scale-105 transition-transform cursor-default text-xs md:text-sm">
               <span>🔥</span>
               <span>{stats?.streak ?? '—'}</span>
             </div>
 
             {/* Coins */}
-            <div className="bg-warning-50 border border-warning-200 text-warning-700 font-extrabold px-3 py-2 rounded-full flex items-center gap-1.5 shadow-sm hover:scale-105 transition-transform cursor-default text-sm">
+            <div className="bg-warning-50 border border-warning-200 text-warning-700 font-extrabold px-2 py-1.5 md:px-3 md:py-2 rounded-full flex items-center gap-1 md:gap-1.5 shadow-sm hover:scale-105 transition-transform cursor-default text-xs md:text-sm">
               <span>🪙</span>
               <span>{stats?.coins ?? '—'}</span>
             </div>

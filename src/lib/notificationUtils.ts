@@ -122,7 +122,7 @@ export async function createBulkNotificationsForGuardians(
   // 1. Get all students to find their guardian links and names from Supabase
   const { data: students, error: studentError } = await supabase
     .from('users')
-    .select('id, name, guardianIds, guardianId')
+    .select('id, name, guardianIds')
     .in('id', studentIds);
 
   if (studentError || !students) return;
@@ -155,10 +155,6 @@ export async function createBulkNotificationsForGuardians(
       }
     }
 
-    // 2. Fallback for singular guardianId (legacy/compatibility)
-    if (student.guardianId && typeof student.guardianId === 'string') {
-      guardianIds.add(student.guardianId);
-    }
 
     if (guardianIds.size > 0) {
       const message = messageGenerator(student.name);

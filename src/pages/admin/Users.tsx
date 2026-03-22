@@ -4,8 +4,9 @@ import {
   Users as UsersIcon, User, GraduationCap, Shield, Filter, School as SchoolIcon,
   Coins, BookOpen, UserCheck, Download
 } from 'lucide-react';
+import { useLiveQuery } from 'dexie-react-hooks';
+import { db } from '../../lib/dexie';
 import { supabase } from '../../lib/supabase';
-import { useSupabaseQuery } from '../../hooks/useSupabase';
 import { Button } from '../../components/ui/Button';
 import { Card } from '../../components/ui/Card';
 import { Badge } from '../../components/ui/Badge';
@@ -52,8 +53,8 @@ const RoleBadge: React.FC<{ role: string }> = ({ role }) => {
 };
 
 const SchoolCell: React.FC<{ schoolId?: string }> = ({ schoolId }) => {
-  const schools = useSupabaseQuery<any>('schools');
-  const school = schools.find(s => s.id === schoolId);
+  const school = useLiveQuery(() => schoolId ? db.schools.get(schoolId) : undefined, [schoolId]);
+  
   if (!schoolId || !school) return <span className="text-slate-300 text-[10px] font-black uppercase tracking-widest">—</span>;
   return (
     <div className="flex items-center gap-2 text-xs font-bold text-slate-600">
@@ -92,7 +93,7 @@ const UserModal: React.FC<UserModalProps> = ({ editUser, onClose, schools, isAdm
       classIds: editUser.classIds || (editUser.classId ? [editUser.classId] : []),
       guardianIds: editUser.guardianIds || (editUser.guardianId ? [editUser.guardianId] : []),
       studentIds: editUser.studentIds || []
-    } : { role: 'admin', schoolId: isAdminMaster ? '' : userSchoolId, initialCoins: 100, classIds: [], guardianIds: [], studentIds: [] }
+    } : { role: 'student', schoolId: isAdminMaster ? '' : userSchoolId, initialCoins: 100, classId: '', classIds: [], guardianIds: [], studentIds: [] }
   });
 
   // Load existing coins if editing a student
@@ -131,102 +132,10 @@ const UserModal: React.FC<UserModalProps> = ({ editUser, onClose, schools, isAdm
     try {
       const targetUserId = isEdit ? editUser.id : crypto.randomUUID();
 
-      // --- MULTI-GUARDIAN SYNC LOGIC ---
-      if (data.role === 'student') {
-        const newGuardianIds = data.guardianIds || [];
-        const oldGuardianIds = editUser?.guardianIds || (editUser?.guardianId ? [editUser.guardianId] : []);
-        
-        // Guardians to remove student from
-        const removed = oldGuardianIds.filter((id: string) => !newGuardianIds.includes(id));
-        for (const gid of removed) {
-          const { data: g } = await supabase.from('users').select('*').eq('id', gid).single();
-          if (g && g.role === 'guardian') {
-            const newIds = (g.studentIds || []).filter((id: string) => id !== targetUserId);
-            await supabase.from('users').update({ studentIds: newIds }).eq('id', gid);
-          }
-        }
-        
-        // Guardians to add student to
-        for (const gid of newGuardianIds) {
-          const { data: g } = await supabase.from('users').select('*').eq('id', gid).single();
-          if (g && g.role === 'guardian') {
-            const newIds = Array.from(new Set([...(g.studentIds || []), targetUserId]));
-            await supabase.from('users').update({ studentIds: newIds }).eq('id', gid);
-          }
-        }
-      }
-
-      // --- CLASS SYNC LOGIC (STUDENT) ---
-      if (data.role === 'student') {
-        const newClassId = data.classId;
-        const oldClassId = editUser?.classId;
-        if (newClassId !== oldClassId) {
-          if (oldClassId) {
-            const { data: oldC } = await supabase.from('classes').select('*').eq('id', oldClassId).single();
-            if (oldC) {
-              const newIds = (oldC.studentIds || []).filter((id: string) => id !== targetUserId);
-              await supabase.from('classes').update({ studentIds: newIds }).eq('id', oldClassId);
-            }
-          }
-          if (newClassId) {
-            const { data: newC } = await supabase.from('classes').select('*').eq('id', newClassId).single();
-            if (newC) {
-              const newIds = Array.from(new Set([...(newC.studentIds || []), targetUserId]));
-              await supabase.from('classes').update({ studentIds: newIds }).eq('id', newClassId);
-            }
-          }
-        }
-      } 
-      
-      // --- CLASS SYNC LOGIC (TEACHER) ---
-      else if (data.role === 'teacher') {
-        const newIds = data.classIds || [];
-        const oldIds = editUser?.classIds || (editUser?.classId ? [editUser.classId] : []);
-        
-        // Classes to remove teacher from
-        const removed = oldIds.filter((id: string) => !newIds.includes(id));
-        for (const cid of removed) {
-          const { data: c } = await supabase.from('classes').select('*').eq('id', cid).single();
-          if (c && c.teacherId === targetUserId) {
-            await supabase.from('classes').update({ teacherId: null }).eq('id', cid);
-          }
-        }
-        
-        // Classes to add teacher to
-        for (const cid of newIds) {
-          await supabase.from('classes').update({ teacherId: targetUserId }).eq('id', cid);
-        }
-      }
-
-      // --- MULTI-STUDENT SYNC LOGIC (GUARDIAN) ---
-      if (data.role === 'guardian') {
-        const newStudentIds = data.studentIds || [];
-        const oldStudentIds = editUser?.studentIds || [];
-        
-        // Students to remove guardian from
-        const removed = oldStudentIds.filter((id: string) => !newStudentIds.includes(id));
-        for (const sid of removed) {
-          const { data: s } = await supabase.from('users').select('*').eq('id', sid).single();
-          if (s && s.role === 'student') {
-            const newGIds = (s.guardianIds || []).filter((id: string) => id !== targetUserId);
-            await supabase.from('users').update({ guardianIds: newGIds }).eq('id', sid);
-          }
-        }
-        
-        // Students to add guardian to
-        for (const sid of newStudentIds) {
-          const { data: s } = await supabase.from('users').select('*').eq('id', sid).single();
-          if (s && s.role === 'student') {
-            const newGIds = Array.from(new Set([...(s.guardianIds || []), targetUserId]));
-            await supabase.from('users').update({ guardianIds: newGIds }).eq('id', sid);
-          }
-        }
-      }
-
-      // Fetch class grade if student
+      // --- CALCULATE UPDATE OBJECT ---
       let classGrade = undefined;
       if (data.role === 'student' && data.classId) {
-        const { data: cls } = await supabase.from('classes').select('grade').eq('id', data.classId).single();
+        const cls = allClasses.find(c => c.id === data.classId);
         if (cls) classGrade = cls.grade;
       }
 
@@ -263,43 +172,87 @@ const UserModal: React.FC<UserModalProps> = ({ editUser, onClose, schools, isAdm
           userUpdate.studentCode = null;
       }
 
-      if (isEdit) {
-        await supabase.from('users').update(userUpdate).eq('id', editUser.id);
-        
-        if (data.role === 'student') {
-          const { data: stats } = await supabase.from('gamification_stats').select('*').eq('id', editUser.id).single();
-          if (stats) {
-            await supabase.from('gamification_stats').update({ coins: data.initialCoins || 0 }).eq('id', editUser.id);
-          } else {
-            await supabase.from('gamification_stats').insert({ 
-              id: editUser.id, level: 1, xp: 0, coins: data.initialCoins || 100, streak: 0, lastStudyDate: now 
+      // --- BACKEND UPDATES ---
+      // We now await the critical backend updates to ensure the user is actually created in Supabase
+      // before closing the modal. This prevents "phantom" users that only exist locally.
+      try {
+        if (isEdit) {
+          const { error: updateError } = await supabase.from('users').update(userUpdate).eq('id', editUser.id);
+          if (updateError) throw updateError;
+          
+          if (data.role === 'student') {
+            const { error: statsError } = await supabase.from('gamification_stats').upsert({ id: editUser.id, coins: data.initialCoins || 0 });
+            if (statsError) throw statsError;
+          }
+
+          // Local update for immediate UI refresh
+          await db.users.update(editUser.id, userUpdate);
+          if (data.role === 'student') {
+            await db.gamificationStats.update(editUser.id, { coins: data.initialCoins || 0 });
+          }
+          toast.success('Usuário atualizado com sucesso!');
+        } else {
+          const newUserObj = { 
+            ...userUpdate, 
+            id: targetUserId, 
+            isRegistered: !!data.password, 
+            createdAt: now, 
+            avatar: data.role === 'student' ? '/avatars/default-impacto.png' : null,
+            status: 'active'
+          };
+          const { error: insertError } = await supabase.from('users').insert(newUserObj);
+          if (insertError) {
+            if (insertError.message?.includes('unique_violation') || insertError.code === '23505') {
+              throw new Error('Este Login/E-mail já está em uso por outro usuário.');
+            }
+            throw insertError;
+          }
+          
+          if (data.role === 'student') {
+            const { error: statsError } = await supabase.from('gamification_stats').insert({ 
+              id: targetUserId, level: 1, xp: 0, coins: data.initialCoins || 100, streak: 0, lastStudyDate: now 
+            });
+            if (statsError) throw statsError;
+          }
+
+          // Local update for immediate UI refresh
+          await db.users.add(newUserObj);
+          if (data.role === 'student') {
+            await db.gamificationStats.add({ 
+              id: targetUserId, level: 1, xp: 0, coins: data.initialCoins || 100, streak: 0, lastStudyDate: now 
             });
           }
+          toast.success('Usuário cadastrado com sucesso!');
         }
-        toast.success('Usuário atualizado!');
-      } else {
-        const newUser: any = { 
-          ...userUpdate,
-          id: targetUserId,
-          isRegistered: !!data.password,
-          createdAt: now, 
-          avatar: data.role === 'student' ? '/avatars/default-impacto.png' : null,
-          studentIds: data.role === 'guardian' ? data.studentIds : []
-        };
+
+        // Only close and show local success if backend worked
+        onClose();
+      } catch (backendError: any) {
+        console.error("Backend sync failed:", backendError);
+        let errorMsg = backendError.message || 'Verifique sua conexão.';
         
-        await supabase.from('users').insert(newUser);
-        
-        if (data.role === 'student') {
-          await supabase.from('gamification_stats').insert({ 
-            id: targetUserId, level: 1, xp: 0, coins: data.initialCoins || 100, streak: 0, lastStudyDate: now 
-          });
+        // Detailed parsing for Supabase unique constraint violations
+        if (backendError.code === '23505') {
+          const detail = backendError.details || '';
+          if (detail.includes('email')) errorMsg = 'Este E-mail já está em uso por outro usuário.';
+          else if (detail.includes('studentCode') || detail.includes('loginCode')) errorMsg = 'Este Código de Login já está em uso.';
+          else if (detail.includes('guardianCode')) errorMsg = 'Este Código de Responsável já está em uso.';
+          else errorMsg = 'Já existe um registro com estes dados únicos (E-mail ou Código).';
+        } else if (backendError.code === '23503') {
+          const message = backendError.message || '';
+          if (message.includes('classId')) {
+            errorMsg = 'A turma selecionada não está salva no servidor. Por favor, vá em "Turmas", exclua-a e crie novamente.';
+          } else {
+            errorMsg = 'Erro de relacionamento: Instituição ou Turma inválida.';
+          }
         }
-        toast.success('Usuário cadastrado!');
+
+        toast.error(`Erro ao salvar no servidor: ${errorMsg}`);
+        // We do NOT call onClose() here so the admin can fix the data
       }
-      onClose();
     } catch (e: any) { 
-        console.error("Save error:", e);
-        toast.error('Erro ao salvar. Verifique se o login já existe.'); 
+        console.error("Local save error:", e);
+        toast.error('Erro ao salvar localmente. Verifique os dados.'); 
     }
   };
 
@@ -520,11 +473,14 @@ export const Users: React.FC = () => {
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
   const [isBulkActionsOpen, setIsBulkActionsOpen] = useState(false);
   const [editingUser, setEditingUser] = useState<any | null>(null);
+  const [page, setPage] = useState(0);
+  const pageSize = 15;
 
-  const users = useSupabaseQuery<any>('users') || [];
-  const schools = useSupabaseQuery<any>('schools') || [];
-  const classes = useSupabaseQuery<any>('classes') || [];
-  const stats = useSupabaseQuery<any>('gamification_stats') || [];
+  // READ FROM DEXIE (Instant & Reactive)
+  const users = useLiveQuery(() => db.users.toArray()) || [];
+  const schools = useLiveQuery(() => db.schools.toArray()) || [];
+  const classes = useLiveQuery(() => db.classes.toArray()) || [];
+  const stats = useLiveQuery(() => db.gamificationStats.toArray()) || [];
 
   const filteredUsers = users.filter(u => {
     const matchesRole = activeRole === 'all' || u.role === activeRole;
@@ -534,15 +490,40 @@ export const Users: React.FC = () => {
     return matchesRole && matchesSchool && matchesAccess && matchesSearch;
   });
 
+  const totalPages = Math.ceil(filteredUsers.length / pageSize);
+  const paginatedUsers = filteredUsers.slice(page * pageSize, (page + 1) * pageSize);
+
   const handleToggleStatus = async (user: any) => {
-    await supabase.from('users').update({ status: user.status === 'active' ? 'inactive' : 'active', updatedAt: new Date().toISOString() }).eq('id', user.id);
+    const newStatus = user.status === 'active' ? 'inactive' : 'active';
+    const now = new Date().toISOString();
+    
+    // OPTIMISTIC UPDATE in Dexie
+    await db.users.update(user.id, { status: newStatus, updatedAt: now });
+    
+    // BACKEND SYNC in background
+    supabase.from('users').update({ status: newStatus, updatedAt: now }).eq('id', user.id)
+      .then(({ error }) => {
+        if (error) {
+          toast.error('Erro ao sincronizar com servidor');
+          db.users.update(user.id, { status: user.status }); // Rollback
+        }
+      });
+      
     toast.success('Status atualizado!');
   };
 
   const handleDelete = async (user: any) => {
     if (!window.confirm(`Excluir ${user.name}?`)) return;
-    await supabase.from('users').delete().eq('id', user.id);
-    if (user.role === 'student') await supabase.from('gamification_stats').delete().eq('id', user.id);
+    
+    // OPTIMISTIC DELETE
+    await db.users.delete(user.id);
+    if (user.role === 'student') await db.gamificationStats.delete(user.id);
+
+    // BACKEND SYNC
+    supabase.from('users').delete().eq('id', user.id).then(({ error }) => {
+       if (error) toast.error('Erro ao deletar no servidor');
+    });
+    
     toast.success('Usuário removido.');
   };
 
@@ -635,7 +616,7 @@ export const Users: React.FC = () => {
                   </tr>
                </thead>
                <tbody className="divide-y divide-slate-50">
-                  {filteredUsers.map(u => (
+                  {paginatedUsers.map(u => (
                     <tr key={u.id} className="hover:bg-slate-50/50 transition-all group">
                        <td className="p-8">
                           <div className="flex items-center gap-5">
@@ -650,41 +631,16 @@ export const Users: React.FC = () => {
                                    </div>
                                    
                                    {(() => {
-                                     const cids = u.role === 'teacher' ? (u as any).classIds || [] : [(u as any).classId || (u as any).classIds?.[0]].filter(Boolean);
-                                     if (cids.length === 0) return null;
-                                     
-                                     if (u.role === 'teacher') {
-                                       return (
-                                         <div className="space-y-1 mt-1">
-                                            <div className="text-[9px] font-black text-slate-300 uppercase tracking-widest">Turmas:</div>
-                                            <div className="flex flex-wrap gap-1">
-                                               {cids.map((cid: string) => {
-                                                 const c = classes.find((cl: any) => cl.id === cid);
-                                                 return c ? (
-                                                   <span key={cid} className="text-[9px] font-black bg-indigo-50 text-indigo-600 px-2 py-0.5 rounded-md border border-indigo-100/50">
-                                                      {c.name}
-                                                   </span>
-                                                 ) : null;
-                                               })}
-                                            </div>
-                                         </div>
-                                       );
-                                     }
-
-                                     const clsName = classes.find((c: any) => c.id === cids[0])?.name || 'N/A';
-                                     return (
-                                       <div className="text-[10px] font-black text-primary-500/70 flex items-center gap-1 uppercase tracking-tight">
-                                          <BookOpen size={10} /> Turma: {clsName}
-                                       </div>
-                                     );
+                                     // Moved Turma to its own column
+                                     return null;
                                    })()}
 
                                    {u.role === 'student' && (
                                      <div className="text-[10px] font-black text-slate-400 flex items-center gap-1 uppercase tracking-tight">
                                         <UserCheck size={10} /> Responsaveis: {
                                           users
-                                            .filter(g => g.role === 'guardian' && ((g.studentIds || []).includes(u.id)))
-                                            .map(g => g.name.split(' ')[0])
+                                            .filter(g => g.role === 'guardian' && ((u as any).guardianIds || []).includes(g.id))
+                                            .map(g => g.name.split(' ').slice(0, 2).join(' '))
                                             .join(', ') || 'Nenhum'
                                         }
                                      </div>
@@ -695,7 +651,7 @@ export const Users: React.FC = () => {
                                         <UsersIcon size={10} /> Alunos: {
                                           users
                                             .filter(s => s.role === 'student' && ((s as any).guardianIds?.includes(u.id)))
-                                            .map(s => s.name.split(' ')[0])
+                                            .map(s => s.name.split(' ').slice(0, 2).join(' '))
                                             .join(', ') || 'Nenhum'
                                         }
                                      </div>
@@ -703,6 +659,34 @@ export const Users: React.FC = () => {
                                 </div>
                              </div>
                           </div>
+                       </td>
+                       <td className="p-8">
+                          {(() => {
+                            const cids = u.role === 'teacher' ? (u as any).classIds || [] : [(u as any).classId || (u as any).classIds?.[0]].filter(Boolean);
+                            if (cids.length === 0) return <span className="text-slate-300 font-bold text-xs">—</span>;
+                            
+                            if (u.role === 'teacher') {
+                              return (
+                                <div className="flex flex-wrap gap-1 max-w-[120px]">
+                                   {cids.map((cid: string) => {
+                                     const c = classes.find((cl: any) => cl.id === cid);
+                                     return c ? (
+                                       <span key={cid} className="text-[9px] font-black bg-indigo-50 text-indigo-600 px-2 py-0.5 rounded-md border border-indigo-100/50 whitespace-nowrap">
+                                          {c.name}
+                                       </span>
+                                     ) : null;
+                                   })}
+                                </div>
+                              );
+                            }
+
+                            const clsName = classes.find((c: any) => c.id === cids[0])?.name || 'N/A';
+                            return (
+                              <span className="text-[10px] font-black text-slate-700 bg-slate-100 px-3 py-1.5 rounded-xl border border-slate-200 uppercase tracking-tight whitespace-nowrap">
+                                 {clsName}
+                              </span>
+                            );
+                          })()}
                        </td>
                        <td className="p-8">
                           {u.role === 'student' ? (
@@ -751,10 +735,24 @@ export const Users: React.FC = () => {
             )}
          </div>
          <div className="p-8 bg-slate-50/50 border-t border-slate-100 flex justify-between items-center">
-            <span className="text-xs font-black text-slate-400 uppercase tracking-widest">{filteredUsers.length} Registros Encontrados</span>
+            <span className="text-xs font-black text-slate-400 uppercase tracking-widest">{filteredUsers.length} Registros Encontrados (Página {page + 1} de {Math.max(1, totalPages)})</span>
             <div className="flex gap-2">
-               <Button variant="outline" size="sm" className="rounded-xl px-4 py-2 text-[10px] font-black uppercase tracking-widest">Anterior</Button>
-               <Button variant="outline" size="sm" className="rounded-xl px-4 py-2 text-[10px] font-black uppercase tracking-widest">Próximo</Button>
+               <Button 
+                variant="outline" size="sm" 
+                className="rounded-xl px-4 py-2 text-[10px] font-black uppercase tracking-widest disabled:opacity-30"
+                disabled={page === 0}
+                onClick={() => setPage(p => p - 1)}
+               >
+                 Anterior
+               </Button>
+               <Button 
+                variant="outline" size="sm" 
+                className="rounded-xl px-4 py-2 text-[10px] font-black uppercase tracking-widest disabled:opacity-30"
+                disabled={page >= totalPages - 1}
+                onClick={() => setPage(p => p + 1)}
+               >
+                 Próximo
+               </Button>
             </div>
          </div>
       </div>

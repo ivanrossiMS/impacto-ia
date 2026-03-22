@@ -16,91 +16,45 @@ import { Badge } from '../../components/ui/Badge';
 import { cn } from '../../lib/utils';
 import { toast } from 'sonner';
 
+import { callParentTips, callParentQA } from '../../ai/client';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 
-const GEMINI_API_KEY = import.meta.env.VITE_GEMINI_API_KEY;
 const ARTICLE_STORAGE_KEY = 'guardian_ai_article';
 const ARTICLE_DATE_KEY = 'guardian_ai_article_date';
 const FIVE_DAYS_MS = 5 * 24 * 60 * 60 * 1000;
 
-const FALLBACK_ARTICLES = [
+interface StaticArticle {
+  category: string;
+  title: string;
+  content: string;
+  readTime: string;
+  emoji: string;
+}
+
+const STATIC_ARTICLES: StaticArticle[] = [
   {
     category: 'Desenvolvimento',
     title: 'O poder da leitura compartilhada em família',
-    content: 'Ler juntos vai além de ensinar palavras. A leitura compartilhada fortalece o vínculo emocional entre pais e filhos, enriquece o vocabulário de forma lúdica e desperta a imaginação. Tente reservar pelo menos 15 minutos por noite antes de dormir para uma história. Deixe a criança escolher o livro, faça perguntas sobre os personagens e celebre cada descoberta. Pesquisas mostram que crianças cujos pais leram com elas regularmente têm desempenho escolar significativamente melhor e desenvolvem maior empatia.',
+    content: 'Ler juntos vai além de ensinar palavras. A leitura compartilhada fortalece o vínculo emocional entre pais e filhos, enriquece o vocabulário de forma lúdica e desperta a imaginação. Tente reservar pelo menos 15 minutos por noite antes de dormir para uma história. Deixe a criança escolher o livro, faça perguntas sobre os personagens e celebre cada descoberta.',
     readTime: '4 min',
     emoji: '📚'
   },
   {
     category: 'Rotina',
     title: 'Como criar uma rotina de estudos que seu filho vai adorar',
-    content: 'Uma rotina estável reduz a ansiedade infantil e aumenta a produtividade. O segredo não é rigidez, mas previsibilidade. Defina um horário fixo para estudos logo após um lanche saudável, quando o nível de energia está moderado. Use um temporizador visual (25 min de foco + 5 min de pausa — a técnica Pomodoro adaptada). Envolva seu filho na criação da rotina: quando a criança participa, ela se torna responsável pelo próprio aprendizado. Celebre conquistas com pequenas recompensas não-tela, como uma brincadeira especial.',
+    content: 'Uma rotina estável reduz a ansiedade infantil e aumenta a produtividade. O segredo não é rigidez, mas previsibilidade. Defina um horário fixo para estudos logo após um lanche saudável. Use um temporizador visual (25 min de foco + 5 min de pausa). Envolva seu filho na criação da rotina para que ele se torne responsável pelo próprio aprendizado.',
     readTime: '5 min',
     emoji: '⏰'
   },
   {
     category: 'Tecnologia',
     title: 'Tecnologia e aprendizagem: aliadas com limites claros',
-    content: 'A tecnologia educacional, usada com intenção, acelera o aprendizado. Plataformas gamificadas como o Impacto IA aproveitam a neurociência do prazer para motivar estudos. Porém, o equilíbrio é fundamental. Estabeleça "zonas sem tela" (mesa de jantar, quarto após 21h) e use a tecnologia como complemento, nunca substituto, da interação humana. Converse sobre o que seu filho aprendeu no Tutor IA — isso reforça o conteúdo e mostra que você se importa com a jornada deles.',
+    content: 'A tecnologia educacional, usada com intenção, acelera o aprendizado. Plataformas gamificadas como o Impacto IA aproveitam a neurociência do prazer para motivar estudos. Porém, o equilíbrio é fundamental. Estabeleça "zonas sem tela" e use a tecnologia como complemento, nunca substituto, da interação humana.',
     readTime: '4 min',
     emoji: '💻'
   },
 ];
-
-const callGeminiAPI = async (prompt: string): Promise<string> => {
-  if (!GEMINI_API_KEY) {
-    throw new Error('API key não configurada');
-  }
-
-  const response = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_API_KEY}`,
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        contents: [{ parts: [{ text: prompt }] }],
-        generationConfig: {
-          temperature: 0.8,
-          maxOutputTokens: 600,
-        }
-      })
-    }
-  );
-
-  if (!response.ok) throw new Error('Erro na API Gemini');
-  const data = await response.json();
-  return data.candidates?.[0]?.content?.parts?.[0]?.text || '';
-};
-
-const generateWeeklyArticle = async (): Promise<string> => {
-  const topics = [
-    'como incentivar a curiosidade intelectual em crianças',
-    'a importância do sono para o aprendizado infantil',
-    'como lidar com a frustração e o erro de forma positiva',
-    'jogos e brincadeiras que estimulam o raciocínio lógico',
-    'comunicação não-violenta com filhos adolescentes',
-    'atividade física e desempenho escolar: a conexão científica',
-    'como identificar e apoiar diferentes estilos de aprendizagem',
-  ];
-  const topic = topics[Math.floor(Math.random() * topics.length)];
-  
-  const prompt = `Você é um especialista em educação infantil e parentalidade positiva. Escreva um artigo curto e prático (máximo 200 palavras) sobre: "${topic}". 
-  
-  Escreva de forma calorosa, acessível e encorajadora para pais brasileiros. Use linguagem simples. 
-  Não use markdown ou formatação especial - apenas texto corrido em parágrafos curtos.
-  Comece diretamente com o conteúdo, sem título.`;
-  
-  return callGeminiAPI(prompt);
-};
-
-const generateCustomContent = async (subject: string): Promise<string> => {
-  const prompt = `Você é um especialista em educação infantil e parentalidade. Um pai/mãe perguntou sobre: "${subject}".
-  
-  Escreva uma resposta prática e acolhedora (máximo 200 palavras) sobre este assunto relacionado à educação ou cuidados com filhos.
-  Use linguagem simples e encorajadora para pais brasileiros.
-  Não use markdown - apenas texto corrido. Comece diretamente respondendo.`;
-  
-  return callGeminiAPI(prompt);
-};
 
 interface AIArticle {
   content: string;
@@ -114,7 +68,7 @@ export const ParentTips: React.FC = () => {
   const [customSubject, setCustomSubject] = useState('');
   const [customContent, setCustomContent] = useState('');
   const [isLoadingCustom, setIsLoadingCustom] = useState(false);
-  const [selectedArticle, setSelectedArticle] = useState<typeof FALLBACK_ARTICLES[0] | null>(null);
+  const [selectedArticle, setSelectedArticle] = useState<StaticArticle | null>(null);
   const customRef = useRef<HTMLDivElement>(null);
 
   // Load or generate AI article
@@ -132,19 +86,27 @@ export const ParentTips: React.FC = () => {
         return;
       }
 
-      // Generate new article
+      // Generate via secure backend proxy
       setIsLoadingArticle(true);
+      const TOPICS = [
+        'como incentivar a curiosidade intelectual em crianças',
+        'a importância do sono para o aprendizado infantil',
+        'como lidar com a frustração e o erro de forma positiva',
+        'comunicação não-violenta com filhos adolescentes',
+        'atividade física e desempenho escolar: a conexão científica',
+      ];
       try {
-        const content = await generateWeeklyArticle();
+        const topic = TOPICS[Math.floor(Math.random() * TOPICS.length)];
+        const content = await callParentTips({ topic });
         localStorage.setItem(ARTICLE_STORAGE_KEY, content);
         localStorage.setItem(ARTICLE_DATE_KEY, now.toString());
         setAiArticle({ content, generatedAt: now.toString() });
       } catch {
-        // Use fallback content
-        const fallback = FALLBACK_ARTICLES[Math.floor(Math.random() * FALLBACK_ARTICLES.length)];
-        localStorage.setItem(ARTICLE_STORAGE_KEY, fallback.content);
+        // Use a generic fallback message if AI fails
+        const fallback = 'Ler juntos vai além de ensinar palavras. A leitura compartilhada fortalece o vínculo emocional entre pais e filhos, enriquece o vocabulário de forma lúdica e desperta a imaginação. Pesquisas mostram que crianças cujos pais leram com elas regularmente têm desempenho escolar significativamente melhor e desenvolvem maior empatia.';
+        localStorage.setItem(ARTICLE_STORAGE_KEY, fallback);
         localStorage.setItem(ARTICLE_DATE_KEY, now.toString());
-        setAiArticle({ content: fallback.content, generatedAt: now.toString() });
+        setAiArticle({ content: fallback, generatedAt: now.toString() });
       } finally {
         setIsLoadingArticle(false);
       }
@@ -155,13 +117,21 @@ export const ParentTips: React.FC = () => {
 
   const handleRefreshArticle = async () => {
     setIsLoadingArticle(true);
+    const TOPICS = [
+      'como incentivar a curiosidade intelectual em crianças',
+      'a importância do sono para o aprendizado infantil',
+      'como lidar com a frustração e o erro de forma positiva',
+      'comunicação não-violenta com filhos adolescentes',
+      'atividade física e desempenho escolar: a conexão científica',
+    ];
     try {
-      const content = await generateWeeklyArticle();
+      const topic = TOPICS[Math.floor(Math.random() * TOPICS.length)];
+      const content = await callParentTips({ topic });
       const now = Date.now();
       localStorage.setItem(ARTICLE_STORAGE_KEY, content);
       localStorage.setItem(ARTICLE_DATE_KEY, now.toString());
       setAiArticle({ content, generatedAt: now.toString() });
-      toast.success('Novo artigo gerado pela IA!');
+      toast.success('Novo artigo gerado pelo Gemini!');
     } catch {
       toast.error('Não foi possível gerar o artigo. Verifique a conexão.');
     } finally {
@@ -175,7 +145,7 @@ export const ParentTips: React.FC = () => {
     setCustomContent('');
     customRef.current?.scrollIntoView({ behavior: 'smooth' });
     try {
-      const content = await generateCustomContent(customSubject);
+      const content = await callParentQA({ question: customSubject });
       setCustomContent(content);
     } catch {
       setCustomContent('Desculpe, não foi possível gerar o conteúdo no momento. Tente novamente em instantes.');
@@ -186,9 +156,9 @@ export const ParentTips: React.FC = () => {
   };
 
   const categories = ['Todos', 'Desenvolvimento', 'Rotina', 'Tecnologia'];
-  const filteredArticles = activeCategory === 'Todos' 
-    ? FALLBACK_ARTICLES 
-    : FALLBACK_ARTICLES.filter(a => a.category === activeCategory);
+  const filteredArticles = activeCategory === 'Todos'
+    ? STATIC_ARTICLES
+    : STATIC_ARTICLES.filter((a: StaticArticle) => a.category === activeCategory);
 
   const daysUntilRefresh = aiArticle 
     ? Math.max(0, Math.ceil((FIVE_DAYS_MS - (Date.now() - parseInt(aiArticle.generatedAt))) / (24 * 60 * 60 * 1000)))
@@ -243,9 +213,18 @@ export const ParentTips: React.FC = () => {
                 <span className="font-medium">A IA está gerando um artigo personalizado para você...</span>
               </div>
             ) : (
-              <p className="text-white/90 text-base font-medium leading-relaxed">
-                {aiArticle?.content || ''}
-              </p>
+              <div className="
+                prose prose-invert prose-sm max-w-none
+                prose-p:text-white/90 prose-p:font-medium prose-p:leading-relaxed prose-p:my-2
+                prose-strong:text-white prose-strong:font-black
+                prose-li:text-white/85 prose-li:marker:text-special-300
+                prose-headings:text-white prose-headings:font-black prose-headings:mt-3 prose-headings:mb-1
+                prose-ol:my-2 prose-ul:my-2
+              ">
+                <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                  {aiArticle?.content || ''}
+                </ReactMarkdown>
+              </div>
             )}
           </div>
         </div>
@@ -310,7 +289,16 @@ export const ParentTips: React.FC = () => {
                 <span className="font-medium text-sm">Gerando conteúdo personalizado...</span>
               </div>
             ) : (
-              <p className="text-white/90 font-medium leading-relaxed text-sm whitespace-pre-wrap">{customContent}</p>
+              <div className="
+                prose prose-invert prose-sm max-w-none
+                prose-p:text-white/90 prose-p:font-medium prose-p:leading-relaxed prose-p:my-1.5
+                prose-strong:text-white prose-strong:font-black
+                prose-li:text-white/85 prose-li:marker:text-primary-300
+                prose-headings:text-white prose-headings:font-black prose-headings:mt-3 prose-headings:mb-1
+                prose-ol:my-2 prose-ul:my-2
+              ">
+                <ReactMarkdown remarkPlugins={[remarkGfm]}>{customContent}</ReactMarkdown>
+              </div>
             )}
           </div>
         )}

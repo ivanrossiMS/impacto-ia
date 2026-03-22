@@ -4,17 +4,19 @@ import {
   BookOpen, Trophy, TrendingUp, Activity,
   Trash2, Edit3, Power, ChevronRight, LayoutGrid
 } from 'lucide-react';
+import { supabase } from '../../lib/supabase';
 import { Card } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
 import { Badge } from '../../components/ui/Badge';
-import { supabase } from '../../lib/supabase';
-import { useSupabaseQuery } from '../../hooks/useSupabase';
+import { useLiveQuery } from 'dexie-react-hooks';
+import { db } from '../../lib/dexie';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
 import { toast } from 'sonner';
 import { cn } from '../../lib/utils';
 import { useAuthStore } from '../../store/auth.store';
+import { useNavigate } from 'react-router-dom';
 
 // ─── Types & Schemas ─────────────────────────────────────────────────────────
 interface SchoolRecord {
@@ -42,9 +44,9 @@ type ClassFormData = z.infer<typeof classSchema>;
 
 // ─── Hooks ───────────────────────────────────────────────────────────────────
 function useSchoolStats(schoolId: string) {
-  const allUsers = useSupabaseQuery<any>('users') || [];
-  const allClasses = useSupabaseQuery<any>('classes') || [];
-  const allGamStats = useSupabaseQuery<any>('gamification_stats') || [];
+  const allUsers = useLiveQuery(() => db.users.toArray(), []) || [];
+  const allClasses = useLiveQuery(() => db.classes.toArray(), []) || [];
+  const allGamStats = useLiveQuery(() => db.gamificationStats.toArray(), []) || [];
 
   const students = allUsers.filter(u => u.schoolId === schoolId && u.role === 'student');
   const teachers = allUsers.filter(u => u.schoolId === schoolId && u.role === 'teacher');
@@ -86,35 +88,52 @@ const ClassForm: React.FC<{ schoolId: string; teachers: any[]; editingClass?: an
     const now = new Date().toISOString();
     const targetClassId = editingClass ? editingClass.id : crypto.randomUUID();
     
-    // Bidirectional sync: if teacherId changed, update teacher's classIds
-    const oldTeacherId = editingClass?.teacherId;
-    const newTeacherId = data.teacherId;
+    // Ensure empty teacherId becomes undefined
+    const { teacherId, ...restData } = data;
+    const newTeacherId = teacherId || undefined;
+    const oldTeacherId = editingClass?.teacherId || undefined;
+    const cleanData: any = newTeacherId ? { ...restData, teacherId: newTeacherId } : restData;
 
-    if (newTeacherId !== oldTeacherId) {
-      if (oldTeacherId) {
-        const { data: oldT } = await supabase.from('users').select('*').eq('id', oldTeacherId).single();
-        if (oldT) {
-          const newIds = (oldT.classIds || []).filter((id: string) => id !== targetClassId);
-          await supabase.from('users').update({ classIds: newIds, classId: newIds[0] || null }).eq('id', oldTeacherId);
+    try {
+      if (editingClass) {
+        const { error } = await supabase.from('classes').update({ ...cleanData, updatedAt: now }).eq('id', editingClass.id);
+        if (error) throw error;
+        
+        await db.classes.update(editingClass.id, { ...cleanData, updatedAt: now });
+        toast.success('Turma atualizada!');
+      } else {
+        const newClassSupa = { id: targetClassId, ...cleanData, schoolId, createdAt: now, updatedAt: now };
+        const { error } = await supabase.from('classes').insert(newClassSupa);
+        if (error) throw error;
+        
+        const newClassDexie = { ...newClassSupa, studentIds: [] };
+        await db.classes.add(newClassDexie as any);
+        toast.success('Turma criada!');
+      }
+
+      // Bidirectional sync: if teacherId changed, update teacher's classIds
+      if (newTeacherId !== oldTeacherId) {
+        if (oldTeacherId) {
+          const { data: oldT } = await supabase.from('users').select('*').eq('id', oldTeacherId).single();
+          if (oldT) {
+            const newIds = (oldT.classIds || []).filter((id: string) => id !== targetClassId);
+            await supabase.from('users').update({ classIds: newIds, classId: newIds[0] || null }).eq('id', oldTeacherId);
+          }
+        }
+        if (newTeacherId) {
+          const { data: newT } = await supabase.from('users').select('*').eq('id', newTeacherId).single();
+          if (newT) {
+            const newIds = Array.from(new Set([...(newT.classIds || []), targetClassId]));
+            await supabase.from('users').update({ classIds: newIds, classId: newIds[0] }).eq('id', newTeacherId);
+          }
         }
       }
-      if (newTeacherId) {
-        const { data: newT } = await supabase.from('users').select('*').eq('id', newTeacherId).single();
-        if (newT) {
-          const newIds = Array.from(new Set([...(newT.classIds || []), targetClassId]));
-          await supabase.from('users').update({ classIds: newIds, classId: newIds[0] }).eq('id', newTeacherId);
-        }
-      }
-    }
 
-    if (editingClass) {
-      await supabase.from('classes').update({ ...data, updatedAt: now }).eq('id', editingClass.id);
-      toast.success('Turma atualizada!');
-    } else {
-      await supabase.from('classes').insert({ id: targetClassId, ...data, schoolId, studentIds: [], createdAt: now, updatedAt: now });
-      toast.success('Turma criada!');
+      onDone();
+    } catch (error: any) {
+      console.error('Error saving class:', error);
+      toast.error('Erro ao salvar turma no servidor.');
     }
-    onDone();
   };
 
   return (
@@ -155,6 +174,7 @@ const ClassForm: React.FC<{ schoolId: string; teachers: any[]; editingClass?: an
 
 // ─── Dashboard Modal ─────────────────────────────────────────────────────────
 const SchoolDashboard: React.FC<{ school: SchoolRecord; onClose: () => void }> = ({ school, onClose }) => {
+  const navigate = useNavigate();
   const stats = useSchoolStats(school.id);
   const [activeTab, setActiveTab] = useState<'overview' | 'classes'>('overview');
   const [showCreate, setShowCreate] = useState<string | null>(null);
@@ -162,9 +182,9 @@ const SchoolDashboard: React.FC<{ school: SchoolRecord; onClose: () => void }> =
   const [search, setSearch] = useState('');
   const [yearFilter, setYearFilter] = useState<string>('all');
 
-  const allUsers = useSupabaseQuery<any>('users') || [];
-  const allClasses = useSupabaseQuery<any>('classes') || [];
-  const gamStats = useSupabaseQuery<any>('gamification_stats') || [];
+  const allUsers = useLiveQuery(() => db.users.toArray()) || [];
+  const allClasses = useLiveQuery(() => db.classes.toArray()) || [];
+  const gamStats = useLiveQuery(() => db.gamificationStats.toArray()) || [];
 
   const users = allUsers.filter(u => u.schoolId === school.id);
   const classes = allClasses.filter(c => c.schoolId === school.id);
@@ -177,12 +197,33 @@ const SchoolDashboard: React.FC<{ school: SchoolRecord; onClose: () => void }> =
 
   const handleDelete = async (item: any) => {
     if (!window.confirm(`Excluir ${item.name}?`)) return;
-    if (activeTab === 'classes') await supabase.from('classes').delete().eq('id', item.id);
-    else {
-      await supabase.from('users').delete().eq('id', item.id);
-      if (item.role === 'student') await supabase.from('gamification_stats').delete().eq('id', item.id);
+    
+    try {
+      if (activeTab === 'classes') {
+        const { error } = await supabase.from('classes').delete().eq('id', item.id);
+        if (error) {
+          if (error.code === '23503') {
+            toast.error('Remova alunos e professores desta turma antes de excluir.');
+            return;
+          }
+          throw error;
+        }
+        await db.classes.delete(item.id);
+      } else {
+        const { error } = await supabase.from('users').delete().eq('id', item.id);
+        if (error) throw error;
+        await db.users.delete(item.id);
+        
+        if (item.role === 'student') {
+          await supabase.from('gamification_stats').delete().eq('id', item.id);
+          await db.gamificationStats.delete(item.id);
+        }
+      }
+      toast.success('Excluído com sucesso');
+    } catch (error: any) {
+      console.error('Error deleting item:', error);
+      toast.error('Erro ao excluir no servidor.');
     }
-    toast.success('Excluído com sucesso');
   };
 
   const handleLogoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -335,7 +376,7 @@ const SchoolDashboard: React.FC<{ school: SchoolRecord; onClose: () => void }> =
               <Button 
                 onClick={() => setShowCreate(activeTab)}
                 variant="primary" className="rounded-2xl px-8 h-12 shadow-lg shadow-primary-500/10">
-                <Plus size={20} className="mr-2" /> Novo {activeTab.slice(0, -1)}
+                <Plus size={20} className="mr-2" /> {activeTab === 'classes' ? 'Nova Turma' : 'Novo'}
               </Button>
             </div>
           )}
@@ -495,7 +536,10 @@ const SchoolDashboard: React.FC<{ school: SchoolRecord; onClose: () => void }> =
                            </div>
                            <div>
                               <h4 className="font-black text-slate-800 leading-tight">{item.name}</h4>
-                              <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">{item.email || item.studentCode || item.grade || 'Membro'}</p>
+                              <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest flex flex-col mt-0.5">
+                                <span>{item.email || item.studentCode || item.grade || 'Membro'}</span>
+                                {item.year && <span className="text-[9px] text-slate-300 xl:mt-0 font-medium">{item.year}</span>}
+                              </p>
                            </div>
                         </div>
                         <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
@@ -519,7 +563,9 @@ const SchoolDashboard: React.FC<{ school: SchoolRecord; onClose: () => void }> =
                      {!stat && activeTab === 'classes' && (
                        <div className="flex items-center justify-between mt-auto pt-4 border-t border-slate-50 text-[10px] font-black uppercase text-slate-400">
                           <span>{item.studentIds?.length || 0} Alunos</span>
-                          <span className="text-primary-500 flex items-center gap-1">Ver Turma <ChevronRight size={12} /></span>
+                          <button onClick={() => navigate('/admin/classes/' + item.id)} className="text-primary-500 flex items-center gap-1 hover:text-primary-600 font-black transition-colors">
+                            Ver Turma <ChevronRight size={12} />
+                          </button>
                        </div>
                      )}
                    </div>
@@ -645,9 +691,9 @@ export const Schools: React.FC = () => {
   const [isAddOpen, setIsAddOpen] = useState(false);
   const [selectedSchool, setSelectedSchool] = useState<SchoolRecord | null>(null);
 
-  const schools = useSupabaseQuery<any>('schools') || [];
-  const users = useSupabaseQuery<any>('users') || [];
-  const classes = useSupabaseQuery<any>('classes') || [];
+  const schools = useLiveQuery(() => db.schools.toArray()) || [];
+  const users = useLiveQuery(() => db.users.toArray()) || [];
+  const classes = useLiveQuery(() => db.classes.toArray()) || [];
 
   const filteredSchools = schools.filter(s => (isAdminMaster || s.id === userSchoolId) && s.name.toLowerCase().includes(searchTerm.toLowerCase()));
 
@@ -658,22 +704,54 @@ export const Schools: React.FC = () => {
   const { register, handleSubmit, reset } = useForm<SchoolFormData>({ defaultValues: { status: 'active' } });
 
   const onSubmit = async (data: SchoolFormData) => {
-    await supabase.from('schools').insert({ id: crypto.randomUUID(), ...data, usersCount: 0, globalScore: 0 });
-    toast.success('Escola Cadastrada!');
+    const newId = crypto.randomUUID();
+    const newSchool = { id: newId, ...data, usersCount: 0, globalScore: 0 };
+    
+    // Optimistic Update
+    await db.schools.add(newSchool);
     setIsAddOpen(false);
     reset();
+
+    // Background Sync
+    supabase.from('schools').insert(newSchool).then(({ error }) => {
+       if (error) {
+         toast.error('Erro ao sincronizar escola com o servidor');
+         db.schools.delete(newId); // Rollback
+       }
+    });
+
+    toast.success('Escola Cadastrada!');
   };
 
   const handleToggleStatus = async (school: any, e: React.MouseEvent) => {
     e.stopPropagation();
-    await supabase.from('schools').update({ status: school.status === 'active' ? 'inactive' : 'active' }).eq('id', school.id);
+    const newStatus = school.status === 'active' ? 'inactive' : 'active';
+    
+    // Optimistic Update
+    await db.schools.update(school.id, { status: newStatus });
+    
+    // Background Sync
+    supabase.from('schools').update({ status: newStatus }).eq('id', school.id).then(({ error }) => {
+       if (error) {
+         toast.error('Erro ao atualizar status no servidor');
+         db.schools.update(school.id, { status: school.status }); // Rollback
+       }
+    });
+
     toast.success('Status atualizado!');
   };
 
   const handleDelete = async (school: any, e: React.MouseEvent) => {
     e.stopPropagation();
     if (window.confirm(`Excluir ${school.name}?`)) {
-      await supabase.from('schools').delete().eq('id', school.id);
+      // Optimistic Delete
+      await db.schools.delete(school.id);
+      
+      // Background Sync
+      supabase.from('schools').delete().eq('id', school.id).then(({ error }) => {
+         if (error) toast.error('Erro ao deletar escola no servidor');
+      });
+
       toast.success('Excluída!');
     }
   };

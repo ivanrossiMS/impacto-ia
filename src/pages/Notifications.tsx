@@ -4,31 +4,13 @@ import { useAuthStore } from '../store/auth.store';
 import { supabase } from '../lib/supabase';
 import { clsx } from 'clsx';
 import { toast } from 'sonner';
+import { useSupabaseQuery } from '../hooks/useSupabase';
 
 export const Notifications: React.FC = () => {
   const { user } = useAuthStore();
   const [filter, setFilter] = useState<'all' | 'unread'>('all');
 
-  const [notifications, setNotifications] = useState<any[]>([]);
-
-  const fetchNotifications = async () => {
-    if (!user) return;
-    const { data } = await supabase
-      .from('notifications')
-      .select('*')
-      .eq('userId', user.id)
-      .order('createdAt', { ascending: false });
-    
-    setNotifications(data || []);
-  };
-
-  React.useEffect(() => {
-    fetchNotifications();
-    const ch = supabase.channel('notif_channel')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'notifications', filter: `userId=eq.${user?.id}` }, fetchNotifications)
-      .subscribe();
-    return () => { supabase.removeChannel(ch); };
-  }, [user]);
+  const notifications = useSupabaseQuery<any>('notifications', [user?.id]);
 
   const filteredList = filter === 'all' ? notifications : notifications.filter(n => !n.read);
 

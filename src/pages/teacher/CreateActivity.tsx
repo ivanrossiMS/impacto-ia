@@ -12,6 +12,7 @@ import { supabase } from '../../lib/supabase';
 import { useSupabaseQuery } from '../../hooks/useSupabase';
 import { useAuthStore } from '../../store/auth.store';
 import { saveActivityToStorage } from '../../lib/activityStorage';
+import { callGenerateActivity } from '../../ai/client';
 
 interface Question {
   id: string;
@@ -21,50 +22,6 @@ interface Question {
   answer?: string;
 }
 
-function generateQuestions(topic: string, subject: string, grade: string, type: string, quantity: number): Question[] {
-  const topicName = topic || 'Conteúdo Geral';
-  const gradeInfo = grade || '5º Ano';
-  const subjectName = subject || 'diversas matérias';
-
-  const buildObjetiva = (i: number): Question => ({
-    id: crypto.randomUUID(), type: 'objetiva',
-    text: `${i + 1}. Sobre ${topicName} no contexto de ${subjectName} para o ${gradeInfo}, qual das afirmações abaixo é CORRETA?`,
-    options: [
-      `A opção correta relacionada a ${topicName}`,
-      `Uma variação incorreta do conceito`,
-      `Uma confusão com outro conceito de ${subjectName}`,
-      `Uma resposta que parece correta mas está equivocada`,
-    ],
-    answer: '0',
-  });
-
-  const buildDissertativa = (i: number): Question => ({
-    id: crypto.randomUUID(), type: 'dissertativa',
-    text: `${i + 1}. Com base em ${topicName}, escreva com suas próprias palavras ${
-      i % 3 === 0 ? `uma explicação sobre a importância deste tema em ${subjectName}.`
-      : i % 3 === 1 ? `dois exemplos práticos do dia a dia relacionados a ${topicName}.`
-      : `uma análise crítica sobre como ${topicName} se aplica ao ${gradeInfo}.`}`,
-    answer: `Espera-se demonstração de compreensão de ${topicName} com vocabulário adequado para o ${gradeInfo}.`,
-  });
-
-  const buildQuiz = (i: number): Question => ({
-    id: crypto.randomUUID(), type: 'objetiva',
-    text: `🎮 ${i + 1}. [Quiz Rápido] Qual alternativa descreve corretamente ${topicName}? Você tem 30 segundos!`,
-    options: [
-      `✅ Esta afirmação está corretamente relacionada a ${topicName}`,
-      `❌ Distorce o conceito`,
-      `⚠️ Confunde com outro tema de ${subjectName}`,
-      `🎭 Parece certo mas está errado`,
-    ],
-    answer: '0',
-  });
-
-  return Array.from({ length: quantity }, (_, i) => {
-    if (type === 'dissertativa') return buildDissertativa(i);
-    if (type === 'quiz_divertido') return buildQuiz(i);
-    return buildObjetiva(i);
-  });
-}
 
 type ActivityTypeId = 'objetiva' | 'quiz_divertido' | 'dissertativa' | 'simulado' | 'prova_mensal' | 'prova_bimestral';
 
@@ -331,7 +288,8 @@ export const CreateActivity: React.FC = () => {
   const [classId, setClassId] = useState('');
   const [difficulty, setDifficulty] = useState('Médio');
   const [quantity, setQuantity] = useState(5);
-  const [duration, setDuration] = useState('45');
+  const [duration, setDuration] = useState('0');
+  const [noExitAllowed, setNoExitAllowed] = useState(false);
   const [activityType, setActivityType] = useState<ActivityTypeId>('objetiva');
   const [isGenerating, setIsGenerating] = useState(false);
   const [step, setStep] = useState(0);
@@ -356,33 +314,87 @@ export const CreateActivity: React.FC = () => {
     { label: 'Adicionando Elementos Pedagógicos', icon: Sparkles },
   ];
 
-  const handleGenerate = () => {
+  const handleGenerate = async () => {
     if (!subject) { toast.error('Selecione a disciplina.'); return; }
     if (!topic) { toast.error('Informe o tópico.'); return; }
     if (!grade) { toast.error('Selecione o ano escolar.'); return; }
+
     setIsGenerating(true); setGenerated(false); setGeneratedQuestions([]); setStep(0); setSavedActivity(false); setEditingIdx(null); setShowAddPanel(false);
+
+    // Animate progress steps while calling Gemini
+    let currentStep = 0;
     const interval = setInterval(() => {
-      setStep(prev => {
-        if (prev >= 3) {
-          clearInterval(interval);
-          setIsGenerating(false);
-          const genType = ['simulado','prova_bimestral','prova_mensal'].includes(activityType) ? 'objetiva' : activityType;
-          setGeneratedQuestions(generateQuestions(topic, subject, grade, genType, quantity));
-          setGenerated(true);
-          setShowQuestionsPanel(true);
-          toast.success('Atividade gerada! Edite as questões antes de salvar. 🚀');
-          return 3;
-        }
-        return prev + 1;
+      currentStep = Math.min(currentStep + 1, 2);
+      setStep(currentStep);
+    }, 1800);
+
+    try {
+      const selectedClass = myClasses.find(c => c.id === classId);
+      const actTypeLabel = ACTIVITY_TYPES.find(t => t.id === activityType)?.label || activityType;
+      const genType = ['simulado','prova_bimestral','prova_mensal'].includes(activityType) ? 'objetiva' : activityType;
+      const data = await callGenerateActivity({
+        topic,
+        subject,
+        grade,
+        type: genType,
+        activityTypeLabel: actTypeLabel,
+        difficulty,
+        count: quantity,
+        className: selectedClass ? `${selectedClass.name} (${selectedClass.grade || grade})` : grade,
+        seed: Date.now(),
+        userId: user?.id,
       });
-    }, 1200);
+
+      // Map Gemini response to local Question format (uuid each question)
+      // Shuffle options for objetiva questions — AI always puts correct at index 0
+      const questions: Question[] = (data.questions || []).map((q: any) => {
+        if (q.type === 'dissertativa' || !q.options?.length) {
+          return {
+            id: crypto.randomUUID(),
+            type: q.type || 'objetiva',
+            text: q.text,
+            options: q.options,
+            answer: q.answer,
+          };
+        }
+        // Fisher-Yates shuffle, tracking where index 0 (correct) goes
+        const opts: string[] = [...q.options];
+        const correctIdx = parseInt(q.answer ?? '0', 10);
+        const indices = opts.map((_, i) => i);
+        for (let i = indices.length - 1; i > 0; i--) {
+          const j = Math.floor(Math.random() * (i + 1));
+          [indices[i], indices[j]] = [indices[j], indices[i]];
+        }
+        const shuffledOpts = indices.map(i => opts[i]);
+        const newCorrectIdx = indices.indexOf(correctIdx);
+        return {
+          id: crypto.randomUUID(),
+          type: q.type || 'objetiva',
+          text: q.text,
+          options: shuffledOpts,
+          answer: String(newCorrectIdx),
+        };
+      });
+
+      clearInterval(interval);
+      setStep(3);
+      setGeneratedQuestions(questions);
+      setGenerated(true);
+      setShowQuestionsPanel(true);
+      toast.success(`${questions.length} questões geradas pelo Gemini! 🚀`);
+    } catch (err: any) {
+      clearInterval(interval);
+      toast.error(err.message || 'Erro ao gerar atividade. Tente novamente.');
+    } finally {
+      setIsGenerating(false);
+    }
   };
 
   const handleSave = async () => {
     const selectedClass = myClasses.find(c => c.id === classId);
     const subjectLabel = SUBJECTS.find(s => s.value === subject)?.label?.split(' ').slice(1).join(' ') || subject;
     const typeLabel = ACTIVITY_TYPES.find(t => t.id === activityType)?.label || activityType;
-    const durationLabel = !duration ? 'Sem limite' : `${duration} min`;
+    const durationLabel = duration === '0' || !duration ? 'Sem limite' : `${duration} min`;
     
     // Save to storage (now in Dexie)
     await saveActivityToStorage({
@@ -390,6 +402,7 @@ export const CreateActivity: React.FC = () => {
       title: `${subjectLabel} — ${topic}`,
       subject: subjectLabel, grade, type: activityType, difficulty,
       duration: durationLabel,
+      noExitAllowed,
       description: `${typeLabel} sobre ${topic}. Turma: ${selectedClass?.name || 'Todas'}. Gerado por IA.`,
       classId: classId || undefined, 
       questions: generatedQuestions, 
@@ -600,7 +613,11 @@ export const CreateActivity: React.FC = () => {
                 <select className="w-full bg-slate-50 border-2 border-transparent rounded-2xl px-5 py-4 text-slate-700 font-bold focus:bg-white focus:border-primary-500/20 outline-none transition-all shadow-inner appearance-none"
                   value={classId} onChange={e => setClassId(e.target.value)}>
                   <option value="">— Todas as minhas turmas —</option>
-                  {myClasses.map(c => <option key={c.id} value={c.id}>{c.name} ({c.grade}) · {c.studentIds?.length || 0} alunos</option>)}
+                  {myClasses.map(c => {
+                    const studentCount = (teacherUsersData || []).filter((u: any) => u.classId === c.id && u.role === 'student').length;
+                    return <option key={c.id} value={c.id}>{c.name} ({c.grade}) · {studentCount} aluno{studentCount !== 1 ? 's' : ''}</option>;
+                  })}
+
                 </select>
               )}
             </div>
@@ -618,19 +635,25 @@ export const CreateActivity: React.FC = () => {
 
             {/* Duration + Difficulty + Quantity */}
             <div className="grid grid-cols-1 md:grid-cols-3 gap-5 relative z-10">
-              {/* Duration */}
+              {/* Duration — typeable number, 0 = sem limite */}
               <div className="space-y-2">
                 <label className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] ml-1 flex items-center gap-1">
-                  <Clock size={11} /> Duração (minutos)
+                  <Clock size={11} /> Duração (min)
                 </label>
-                <input 
-                  type="number" 
-                  value={duration} 
+                <input
+                  type="number"
+                  min="0"
+                  step="1"
+                  value={duration}
                   onChange={e => setDuration(e.target.value)}
-                  placeholder="Ex: 45"
-                  className="w-full bg-slate-50 border-2 border-transparent rounded-2xl px-5 py-4 text-slate-700 font-bold focus:bg-white focus:border-primary-500/20 outline-none transition-all shadow-inner text-sm" 
+                  placeholder="0 = sem limite"
+                  className="w-full bg-slate-50 border-2 border-transparent rounded-2xl px-5 py-4 text-slate-700 font-bold focus:bg-white focus:border-primary-500/20 outline-none transition-all shadow-inner text-sm"
                 />
+                <p className="text-[10px] text-slate-400 font-bold ml-1">
+                  {duration === '0' || !duration ? '⏱️ Sem limite de tempo' : `⏱️ ${duration} minuto${Number(duration) !== 1 ? 's' : ''}`}
+                </p>
               </div>
+
 
               {/* Difficulty */}
               <div className="space-y-2">
@@ -658,6 +681,41 @@ export const CreateActivity: React.FC = () => {
                     value={quantity} onChange={e => setQuantity(Number(e.target.value))} />
                   <span className="w-8 text-center font-black text-slate-700 text-lg leading-none">{quantity}</span>
                 </div>
+              </div>
+            </div>
+
+            {/* No Exit Allowed toggle */}
+            <div
+              onClick={() => setNoExitAllowed(v => !v)}
+              className={cn(
+                'relative z-10 flex items-start gap-4 rounded-2xl border-2 p-5 cursor-pointer transition-all select-none',
+                noExitAllowed
+                  ? 'border-red-400 bg-red-50 shadow-md shadow-red-100'
+                  : 'border-slate-100 bg-slate-50 hover:border-slate-200'
+              )}
+            >
+              {/* Visual toggle switch */}
+              <div className={cn(
+                'mt-0.5 w-11 h-6 rounded-full flex-shrink-0 transition-all relative',
+                noExitAllowed ? 'bg-red-500' : 'bg-slate-200'
+              )}>
+                <div className={cn(
+                  'absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full shadow transition-transform duration-300',
+                  noExitAllowed ? 'translate-x-5' : 'translate-x-0'
+                )} />
+              </div>
+              <div className="flex-1 space-y-1">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="text-sm font-black text-slate-800">🚫 Proibido Sair da Atividade</span>
+                  {noExitAllowed && (
+                    <span className="text-[9px] font-black uppercase tracking-widest bg-red-500 text-white px-2 py-0.5 rounded-lg">ATIVO</span>
+                  )}
+                </div>
+                <p className="text-xs text-slate-500 font-medium leading-snug">
+                  {noExitAllowed
+                    ? '⚠️ Se o aluno sair da página (trocar de aba, fechar o app ou navegar para outra página) durante a atividade, ela será automaticamente encerrada como Falhada e a pontuação zerada.'
+                    : 'Quando ativado, qualquer navegação externa durante a atividade encerrará automaticamente a atividade como Falhada.'}
+                </p>
               </div>
             </div>
 

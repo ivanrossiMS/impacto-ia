@@ -29,7 +29,6 @@ export class SupabaseAuthRepository implements IAuthRepository {
       });
 
       if (authError && authError.message.includes('Invalid login credentials')) {
-        // User probably doesn't exist in auth.users yet. Create them silently.
         const { error: signUpError } = await supabase.auth.signUp({
           email: authEmail,
           password: passwordHash
@@ -41,15 +40,24 @@ export class SupabaseAuthRepository implements IAuthRepository {
             email: authEmail,
             password: passwordHash
           });
+        } else if (signUpError.message.includes('rate limit exceeded')) {
+          // IMPORTANT: If we hit rate limit, we still return the user.
+          // The public.users check already passed, so the credentials are valid.
+          // They just won't have a Supabase Auth session until the limit resets.
+          console.warn('Silent Auth Migration: Rate limit hit. Proceeding with local validation only.', signUpError);
         } else {
-          console.warn('Silent Auth Migration notice:', signUpError);
+          console.warn('Silent Auth Migration failed:', signUpError);
         }
       }
 
       // Update public.users row with the authEmail if it was missing to stay consistent
       if (!user.email) {
-         await supabase.from('users').update({ email: authEmail }).eq('id', user.id);
-         user.email = authEmail;
+         try {
+           await supabase.from('users').update({ email: authEmail }).eq('id', user.id);
+           user.email = authEmail;
+         } catch (e) {
+           console.warn('[Auth] Optional email sync failed (likely 409 or rate limit), proceeding anyway:', e);
+         }
       }
 
       return user as AppUser;
@@ -121,10 +129,15 @@ export class SupabaseAuthRepository implements IAuthRepository {
     }
 
     // Auto-create identity in auth.users
-    await supabase.auth.signUp({
+    const { error: authError } = await supabase.auth.signUp({
       email: authEmail,
       password: data.passwordHash
     });
+
+    if (authError) {
+      console.warn('Optional Auth identity creation failed during registration:', authError);
+      // We don't throw here because the primary record in public.users is already updated.
+    }
   }
 
   async getCurrentUser(id: string): Promise<AppUser | null> {

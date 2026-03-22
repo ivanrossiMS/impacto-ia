@@ -22,6 +22,14 @@ export interface PathStep {
   title: string;
   type: 'intro' | 'theory' | 'practice' | 'quiz' | 'boss';
   activityId?: string; // Reference to a detailed activity
+  content?: string;    // AI-generated intro summary (brief)
+  theory?: string;     // AI-generated rich Markdown content for the Tutor panel
+  questions?: Array<{
+    id: string;
+    text: string;
+    options: Array<{ id: string; text: string; isCorrect: boolean }>;
+    explanation: string;
+  }>;
 }
 
 export interface Activity {
@@ -44,7 +52,9 @@ export interface Activity {
   duration?: string;
   topic?: string;
   description?: string;
+  noExitAllowed?: boolean; // If true, leaving the page during the quiz marks it as failed
 }
+
 
 export interface ActivityQuestion {
   id: string;

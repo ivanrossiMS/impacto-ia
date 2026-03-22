@@ -21,6 +21,7 @@ import { NotFound } from './pages/NotFound';
 // ── LAZY-LOADED: Student pages (code-split per route) ──
 const StudentDashboard = lazy(() => import('./pages/student/Dashboard').then(m => ({ default: m.StudentDashboard })));
 const LearningPaths = lazy(() => import('./pages/student/LearningPaths').then(m => ({ default: m.LearningPaths })));
+const LearningPathViewer = lazy(() => import('./pages/student/LearningPathViewer').then(m => ({ default: m.LearningPathViewer })));
 const AvatarStudio = lazy(() => import('./pages/student/AvatarStudio').then(m => ({ default: m.AvatarStudio })));
 const AvatarOnboarding = lazy(() => import('./pages/student/AvatarOnboarding').then(m => ({ default: m.AvatarOnboarding })));
 const AvatarStore = lazy(() => import('./pages/student/AvatarStore').then(m => ({ default: m.AvatarStore })));
@@ -34,7 +35,8 @@ const StudentDiary = lazy(() => import('./pages/student/Diary').then(m => ({ def
 const StudentLibrary = lazy(() => import('./pages/student/Library').then(m => ({ default: m.Library })));
 const StudentDuelList = lazy(() => import('./pages/student/DuelList').then(m => ({ default: m.DuelList })));
 const StudentDuelCreate = lazy(() => import('./pages/student/DuelCreate').then(m => ({ default: m.DuelCreate })));
-const StudentDuelGame = lazy(() => import('./pages/student/DuelGame').then(m => ({ default: m.DuelGame })));
+const StudentDuelGame     = lazy(() => import('./pages/student/DuelGame').then(m => ({ default: m.DuelGame })));
+const StudentSoloDuelGame = lazy(() => import('./pages/student/SoloDuelGame').then(m => ({ default: m.SoloDuelGame })));
 
 // ── LAZY-LOADED: Guardian pages ──
 const GuardianDashboard = lazy(() => import('./pages/guardian/Dashboard').then(m => ({ default: m.GuardianDashboard })));
@@ -149,6 +151,7 @@ function App() {
             >
               <Route index element={<StudentDashboard />} />
               <Route path="paths" element={<LearningPaths />} />
+              <Route path="paths/:pathId" element={<LearningPathViewer />} />
               <Route path="avatar" element={<AvatarStudio />} />
               <Route path="onboarding" element={<AvatarOnboarding />} />
               <Route path="store" element={<AvatarStore />} />
@@ -164,6 +167,7 @@ function App() {
               <Route path="support" element={<SharedSupport />} />
               <Route path="duels" element={<StudentDuelList />} />
               <Route path="duels/create" element={<StudentDuelCreate />} />
+              <Route path="duels/solo" element={<StudentSoloDuelGame />} />
               <Route path="duels/:duelId" element={<StudentDuelGame />} />
             </Route>
 
@@ -222,6 +226,7 @@ function App() {
             >
               <Route index element={<AdminDashboard />} />
               <Route path="schools" element={<AdminSchools />} />
+              <Route path="classes/:classId" element={<ClassDetail />} />
               <Route path="users" element={<AdminUsers />} />
               <Route path="ranking" element={<AdminRanking />} />
               <Route path="trails" element={<AdminLearningTrails />} />

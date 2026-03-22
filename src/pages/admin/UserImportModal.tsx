@@ -143,7 +143,7 @@ export const UserImportModal: React.FC<UserImportModalProps> = ({
           
           if (lowerH.includes('nome aluno') || (lowerH.includes('nome') && !lowerH.includes('resp'))) field = 'name';
           else if (lowerH.includes('código aluno') || lowerH.includes('codigo aluno') || lowerH.includes('código') || lowerH.includes('login') || lowerH.includes('id')) field = 'code';
-          else if (lowerH.includes('turma') || lowerH.includes('class')) field = 'class';
+          // Removed auto-mapping for 'class' to avoid accidental assignments as per user request
           else if (lowerH.includes('nome') && lowerH.includes('1')) field = 'guardian1Name';
           else if (lowerH.includes('email') && lowerH.includes('1')) field = 'guardian1Email';
           else if (lowerH.includes('nome') && lowerH.includes('2')) field = 'guardian2Name';
@@ -308,33 +308,8 @@ export const UserImportModal: React.FC<UserImportModalProps> = ({
           // Handle Class
           if (row.mappedData.class) {
             let { data: cls } = await supabase.from('classes').select('*').eq('schoolId', selectedSchoolId).eq('name', row.mappedData.class).maybeSingle();
-            
-            // Auto-create class if not exists
-            if (!cls) {
-               const newClsId = crypto.randomUUID();
-               // Try to standardize grade
-               const rawClass = row.mappedData.class;
-               let standardGrade = rawClass;
-               const gradeMatch = rawClass.match(/(\d+)[\sº]*[Aa]no/);
-               const shortMatch = rawClass.match(/^(\d+)[A-Za-z]?$/);
-               
-               if (gradeMatch) standardGrade = `${gradeMatch[1]}º Ano`;
-               else if (shortMatch) standardGrade = `${shortMatch[1]}º Ano`;
 
-               const newCls: any = {
-                 id: newClsId,
-                 name: rawClass,
-                 grade: standardGrade,
-                 schoolId: selectedSchoolId,
-                 year: new Date().getFullYear().toString(),
-                 studentIds: [],
-                 createdAt: now,
-                 updatedAt: now
-               };
-               await supabase.from('classes').insert(newCls);
-               cls = newCls;
-            }
-
+            // Class lookup - strictly by school and name. No auto-creation as per user request.
             if (cls) {
               if (importStrategy === 'replace') {
                 updates.classId = cls.id;
@@ -378,6 +353,7 @@ export const UserImportModal: React.FC<UserImportModalProps> = ({
             updatedAt: now,
             isRegistered: false,
             avatar: '/avatars/default-impacto.png',
+            classId: null, // explicit null as per user request
             classIds: [],
             guardianIds: processedGuardianIds
           };
@@ -385,32 +361,7 @@ export const UserImportModal: React.FC<UserImportModalProps> = ({
           if (row.mappedData.class) {
             let { data: cls } = await supabase.from('classes').select('*').eq('schoolId', selectedSchoolId).eq('name', row.mappedData.class).maybeSingle();
             
-            // Auto-create class on create too
-            if (!cls) {
-               const newClsId = crypto.randomUUID();
-               // Try to standardize grade
-               const rawClass = row.mappedData.class;
-               let standardGrade = rawClass;
-               const gradeMatch = rawClass.match(/(\d+)[\sº]*[Aa]no/);
-               const shortMatch = rawClass.match(/^(\d+)[A-Za-z]?$/);
-               
-               if (gradeMatch) standardGrade = `${gradeMatch[1]}º Ano`;
-               else if (shortMatch) standardGrade = `${shortMatch[1]}º Ano`;
-
-               const newCls: any = {
-                 id: newClsId,
-                 name: rawClass,
-                 grade: standardGrade,
-                 schoolId: selectedSchoolId,
-                 year: new Date().getFullYear().toString(),
-                 studentIds: [],
-                 createdAt: now,
-                 updatedAt: now
-               };
-               await supabase.from('classes').insert(newCls);
-               cls = newCls;
-            }
-
+            // Class lookup - strictly by school and name. No auto-creation as per user request.
             if (cls) {
               newUser.classId = cls.id;
               newUser.classIds = [cls.id];
@@ -462,9 +413,18 @@ export const UserImportModal: React.FC<UserImportModalProps> = ({
 
       toast.success(`Importação concluída! ${createdCount} criados, ${updatedCount} atualizados.`);
       onClose();
-    } catch (error) {
+    } catch (error: any) {
       console.error(error);
-      toast.error('Ocorreu um erro durante a importação.');
+      let errorMsg = 'Ocorreu um erro durante a importação.';
+      
+      if (error.code === '23505') {
+        const detail = error.details || '';
+        if (detail.includes('email')) errorMsg = 'Conflito: Um dos E-mails já está em uso.';
+        else if (detail.includes('studentCode')) errorMsg = 'Conflito: Um dos Códigos de Aluno já está em uso.';
+        else errorMsg = 'Conflito de dados: Alguns registros já existem com e-mails ou códigos duplicados.';
+      }
+      
+      toast.error(errorMsg);
     } finally {
       setIsLoading(false);
     }

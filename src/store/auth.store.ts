@@ -15,7 +15,13 @@ export const useAuthStore = create<AuthState>()(
     (set) => ({
       user: null,
       isAuthenticated: false,
-      login: (user) => set({ user, isAuthenticated: true }),
+      login: (user) => {
+        set({ user, isAuthenticated: true });
+        // Trigger a fresh sync pull now that we're authenticated
+        import('../lib/syncEngine').then(({ syncEngine }) => {
+          syncEngine.pullData().catch(err => console.error('[AuthStore] Sync pull failed:', err));
+        });
+      },
       logout: async () => {
         await supabase.auth.signOut();
         set({ user: null, isAuthenticated: false });

@@ -3,7 +3,7 @@ import {
   Library as LibraryIcon,
   Search, Filter, FileText, Video, Music,
   BookOpen, Star, Download, Eye, Clock,
-  ExternalLink, Sparkles, TrendingUp
+  ExternalLink, Sparkles, TrendingUp, Flame
 } from 'lucide-react';
 import { Card } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
@@ -85,9 +85,16 @@ export const Library: React.FC = () => {
   const [filterSubject, setFilterSubject] = useState('Todas');
   const [filterType, setFilterType] = useState('Todos');
   const [previewItem, setPreviewItem] = useState<LibraryItem | null>(null);
-
   const [items, setItems] = useState<LibraryItem[]>([]);
   const [loading, setLoading] = useState(true);
+  const [focusStats, setFocusStats] = useState<{ streak: number; xp: number } | null>(null);
+
+  const getFocusLevel = (streak: number) => {
+    if (streak >= 7) return { label: 'Excelente 🔥', color: 'text-emerald-600', bg: 'bg-emerald-50' };
+    if (streak >= 3) return { label: 'Ótimo 💪', color: 'text-primary-600', bg: 'bg-primary-50' };
+    if (streak >= 1) return { label: 'Bom 😊', color: 'text-blue-600', bg: 'bg-blue-50' };
+    return { label: 'Iniciando 🌱', color: 'text-slate-600', bg: 'bg-slate-50' };
+  };
 
   const fetchItems = async () => {
     if (!user) return;
@@ -119,6 +126,11 @@ export const Library: React.FC = () => {
 
   useEffect(() => {
     fetchItems();
+    // Fetch real focus/gamification stats
+    if (user?.id) {
+      supabase.from('gamification_stats').select('streak, xp').eq('id', user.id).single()
+        .then(({ data }) => { if (data) setFocusStats({ streak: data.streak || 0, xp: data.xp || 0 }); });
+    }
     const ch = supabase.channel('library_channel')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'library_items' }, fetchItems)
       .subscribe();
@@ -188,7 +200,19 @@ export const Library: React.FC = () => {
            </div>
            <div>
               <div className="text-[10px] font-black uppercase text-slate-400 tracking-widest leading-none mb-1 text-left">Seu Nível de Foco</div>
-              <div className="text-lg font-black text-slate-800 leading-none">Excelente</div>
+              {focusStats ? (() => {
+                const level = getFocusLevel(focusStats.streak);
+                return (
+                  <div>
+                    <div className={`text-lg font-black leading-none ${level.color}`}>{level.label}</div>
+                    <div className="text-[10px] font-bold text-slate-400 flex items-center gap-1 mt-0.5">
+                      <Flame size={10} className="text-orange-400" /> {focusStats.streak} dia{focusStats.streak !== 1 ? 's' : ''} de sequência
+                    </div>
+                  </div>
+                );
+              })() : (
+                <div className="text-lg font-black text-slate-800 leading-none">Excelente</div>
+              )}
            </div>
         </div>
       </header>

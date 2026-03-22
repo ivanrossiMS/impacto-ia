@@ -13,6 +13,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { useSupabaseQuery } from '../../hooks/useSupabase';
 import { cn } from '../../lib/utils';
 import { toast } from 'sonner';
+import { useAuthStore } from '../../store/auth.store';
 
 // ─── Helper ────────────────────────────────────────────────────────────────────
 function getStudentStatus(score: number): 'excellent' | 'good' | 'warning' | 'danger' {
@@ -179,6 +180,8 @@ const StudentProfileModal: React.FC<{
 // ─── Main ──────────────────────────────────────────────────────────────────────
 export const ClassDetail: React.FC = () => {
   const navigate = useNavigate();
+  const { user } = useAuthStore();
+  const backRoute = user?.role === 'admin' ? '/admin/schools' : '/teacher/classes';
   const { classId } = useParams<{ classId: string }>();
   const [searchTerm, setSearchTerm] = useState('');
   const [sortBy, setSortBy] = useState<'name' | 'score'>('name');
@@ -240,9 +243,9 @@ export const ClassDetail: React.FC = () => {
             <Users size={40} className="text-slate-300" />
           </div>
           <p className="font-black text-slate-400 text-lg">Turma não encontrada</p>
-          <button onClick={() => navigate('/teacher/classes')}
+          <button onClick={() => navigate(backRoute)}
             className="font-bold text-primary-600 hover:underline text-sm flex items-center gap-1 mx-auto">
-            <ArrowLeft size={14} /> Voltar para Gestão de Turmas
+            <ArrowLeft size={14} /> Voltar para {user?.role === 'admin' ? 'Escolas' : 'Turmas'}
           </button>
         </div>
       </div>
@@ -278,9 +281,9 @@ export const ClassDetail: React.FC = () => {
     <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500 pb-20">
       {/* Top Bar */}
       <div className="flex items-center justify-between">
-        <button onClick={() => navigate('/teacher/classes')}
+        <button onClick={() => navigate(backRoute)}
           className="flex items-center gap-2 text-slate-400 hover:text-slate-800 font-bold text-xs bg-white border-2 border-slate-100 px-5 py-3 rounded-2xl shadow-sm transition-all hover:-translate-x-1">
-          <ArrowLeft size={16} /> Gestão de Turmas
+          <ArrowLeft size={16} /> Voltar para {user?.role === 'admin' ? 'Escolas' : 'Turmas'}
         </button>
         <div className="flex gap-2">
           <button

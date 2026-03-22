@@ -483,18 +483,20 @@ export const Reports: React.FC = () => {
               </h3>
               <Badge variant="outline">Últimas 5 semanas</Badge>
             </div>
-            <ResponsiveContainer width="100%" height={200}>
-              <BarChart data={xpChartData} barCategoryGap="40%">
-                <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
-                <XAxis dataKey="week" tick={{ fontSize: 11, fontWeight: 700, fill: '#94a3b8' }} axisLine={false} tickLine={false} />
-                <YAxis tick={{ fontSize: 11, fontWeight: 700, fill: '#94a3b8' }} axisLine={false} tickLine={false} />
-                <Tooltip
-                  contentStyle={{ borderRadius: '1rem', border: 'none', boxShadow: '0 10px 40px rgba(0,0,0,0.12)', fontWeight: 700 }}
-                  formatter={(val) => [`${Number(val).toLocaleString('pt-BR')} XP`, 'XP Acumulado']}
-                />
-                <Bar dataKey="xp" fill="#6366f1" radius={[8, 8, 0, 0]} />
-              </BarChart>
-            </ResponsiveContainer>
+            <div className="h-[200px] w-full relative">
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={xpChartData} barCategoryGap="40%" margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" vertical={false} />
+                  <XAxis dataKey="week" tick={{ fontSize: 11, fontWeight: 700, fill: '#94a3b8' }} axisLine={false} tickLine={false} />
+                  <YAxis tick={{ fontSize: 11, fontWeight: 700, fill: '#94a3b8' }} axisLine={false} tickLine={false} />
+                  <Tooltip
+                    contentStyle={{ borderRadius: '1rem', border: 'none', boxShadow: '0 10px 40px rgba(0,0,0,0.12)', fontWeight: 700 }}
+                    formatter={(val) => [`${Number(val).toLocaleString('pt-BR')} XP`, 'XP Acumulado']}
+                  />
+                  <Bar dataKey="xp" fill="#6366f1" radius={[8, 8, 0, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
           </Card>
 
           <Card className="p-8 rounded-[2rem] border-2 border-slate-100">

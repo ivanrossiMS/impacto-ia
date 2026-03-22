@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { 
-  Zap, Plus, Search, BookOpen, Target, 
+  Zap, Search, BookOpen, Target, 
   ChevronRight, Trash2, Edit3, 
   Sparkles, Layers, GraduationCap, Calendar,
   AlertCircle, Trophy, X, CheckCircle2, History,
@@ -13,6 +13,7 @@ import { Badge } from '../../components/ui/Badge';
 import { toast } from 'sonner';
 import { cn } from '../../lib/utils';
 import { createBulkNotifications } from '../../lib/notificationUtils';
+import { callAI, callGenerateTrailStep } from '../../ai/client';
 
 // --- Modals ---
 
@@ -238,8 +239,17 @@ const LinkClassModal: React.FC<{ trail: any; isOpen: boolean; onClose: () => voi
 };
 
 
+const PHASE_TYPES = [
+  { type: 'intro',    label: 'Introdução' },
+  { type: 'theory',  label: 'Teoria' },
+  { type: 'practice',label: 'Prática' },
+  { type: 'quiz',    label: 'Quiz' },
+  { type: 'boss',    label: 'Desafio Final' },
+];
+
 const AIGeneratorModal: React.FC<{ isOpen: boolean; onClose: () => void; onGenerate: (data: any) => void }> = ({ isOpen, onClose, onGenerate }) => {
   const [isGenerating, setIsGenerating] = useState(false);
+  const [generatedPhases, setGeneratedPhases] = useState(0);
   const [formData, setFormData] = useState({
     subject: '',
     topic: '',
@@ -248,33 +258,68 @@ const AIGeneratorModal: React.FC<{ isOpen: boolean; onClose: () => void; onGener
   });
 
   const handleGenerate = async () => {
+    if (!formData.topic || !formData.subject || !formData.grade) {
+      toast.error('Preencha todos os campos.');
+      return;
+    }
     setIsGenerating(true);
-    await new Promise(resolve => setTimeout(resolve, 3000));
-    
-    const mockGeneratedTrail = {
-      id: crypto.randomUUID(),
-      title: `${formData.topic} - Jornada de Descoberta`,
-      subject: formData.subject,
-      grade: formData.grade,
-      difficulty: formData.difficulty,
-      description: `Uma trilha completa sobre ${formData.topic} gerada por nossa IA pedagógica.`,
-      rewardXp: 500,
-      rewardCoins: 200,
-      isAIGenerated: true,
-      steps: [
-        { id: '1', title: `Introdução ao ${formData.topic}`, type: 'intro' },
-        { id: '2', title: `Conceitos Fundamentais`, type: 'theory' },
-        { id: '3', title: `Prática de Fixação`, type: 'practice' },
-        { id: '4', title: `Desafio Final`, type: 'quiz' },
-        { id: '5', title: `O Grande Mestre`, type: 'boss' },
-      ],
-      createdAt: new Date().toISOString()
-    };
-    
-    onGenerate(mockGeneratedTrail);
-    setIsGenerating(false);
-    onClose();
-    toast.success('Trilha gerada com sucesso pela IA!');
+    setGeneratedPhases(0);
+    try {
+      // Fetch existing trail titles to avoid duplicates
+      const { data: existingTrails } = await supabase.from('learning_paths').select('title');
+      const existingTitles = (existingTrails || []).map((t: any) => t.title).filter(Boolean);
+      const forbiddenBlock = existingTitles.length > 0
+        ? `\n\nATENÇÃO OBRIGATÓRIO: As seguintes trilhas JÁ EXISTEM no sistema. É PROIBIDO gerar conteúdo igual, parecido ou que sobreponha esses tópicos. O conteúdo deve ser 100% distinto:\n${existingTitles.map(t => `- "${t}"`).join('\n')}`
+        : '';
+
+      // 1. Generate meta + all 5 steps in parallel
+      const metaPromise = callAI({
+        feature: 'generate-trail-meta',
+        topic: formData.topic + forbiddenBlock,
+        subject: formData.subject,
+        grade: formData.grade,
+      });
+
+      const stepPromises = PHASE_TYPES.map((phase, idx) =>
+        callGenerateTrailStep({
+          topic: formData.topic + forbiddenBlock,
+          subject: formData.subject,
+          grade: formData.grade,
+          difficulty: formData.difficulty,
+          phaseIndex: idx,
+          phaseType: phase.type,
+        }).then(result => {
+          setGeneratedPhases(prev => prev + 1);
+          return result;
+        })
+      );
+
+      const [metaRes, ...steps] = await Promise.all([metaPromise, ...stepPromises]);
+      const meta = metaRes.result as any;
+
+      const newTrail = {
+        id: crypto.randomUUID(),
+        title: meta.title,
+        description: meta.description,
+        rewardXp: meta.rewardXp || 600,
+        rewardCoins: meta.rewardCoins || 250,
+        steps: steps.map((s, i) => ({ ...s, id: String(i + 1) })),
+        subject: formData.subject,
+        grade: formData.grade,
+        difficulty: formData.difficulty,
+        isAIGenerated: true,
+        createdAt: new Date().toISOString()
+      };
+
+      onGenerate(newTrail);
+      onClose();
+      toast.success('Trilha completa gerada com IA! ✨');
+    } catch (err: any) {
+      toast.error(err.message || 'Erro ao gerar trilha. Tente novamente.');
+    } finally {
+      setIsGenerating(false);
+      setGeneratedPhases(0);
+    }
   };
 
   if (!isOpen) return null;
@@ -295,7 +340,19 @@ const AIGeneratorModal: React.FC<{ isOpen: boolean; onClose: () => void; onGener
                 <div className="absolute inset-0 w-20 h-20 border-4 border-primary-500 border-t-transparent rounded-full animate-spin"></div>
                 <Zap className="absolute inset-0 m-auto text-primary-500 animate-pulse" size={32} />
               </div>
-              <h4 className="text-lg font-black text-slate-800 italic uppercase">Gerando conteúdo inteligente...</h4>
+              <div className="space-y-2">
+                <h4 className="text-lg font-black text-slate-800 italic uppercase">Gerando trilha com IA...</h4>
+                <div className="flex items-center justify-center gap-2">
+                  {PHASE_TYPES.map((p, i) => (
+                    <div key={p.type} className={cn("w-8 h-8 rounded-xl text-xs font-black flex items-center justify-center transition-all",
+                      i < generatedPhases ? "bg-primary-500 text-white scale-110" : "bg-slate-100 text-slate-400"
+                    )}>
+                      {i < generatedPhases ? "✓" : i + 1}
+                    </div>
+                  ))}
+                </div>
+                <p className="text-xs text-slate-400 font-bold">{generatedPhases}/5 fases concluídas</p>
+              </div>
             </div>
           ) : (
             <>
@@ -331,11 +388,291 @@ const AIGeneratorModal: React.FC<{ isOpen: boolean; onClose: () => void; onGener
   );
 };
 
+// ─── Bulk AI Generator Modal ─────────────────────────────────────────────────
+
+const GRADES = ['1º Ano', '2º Ano', '3º Ano', '4º Ano', '5º Ano', '6º Ano', '7º Ano', '8º Ano', '9º Ano', 'EM - 1º', 'EM - 2º', 'EM - 3º'];
+const SUBJECTS = ['Português', 'Matemática', 'História', 'Geografia', 'Ciências', 'Física', 'Química', 'Biologia', 'Artes', 'Educação Física'];
+
+const BulkAIGeneratorModal: React.FC<{
+  isOpen: boolean;
+  onClose: () => void;
+  onBulkGenerate: (trails: any[]) => void;
+}> = ({ isOpen, onClose, onBulkGenerate }) => {
+  const [grade, setGrade] = useState('');
+  const [subject, setSubject] = useState('');
+  const [quantity, setQuantity] = useState(3);
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [currentTrail, setCurrentTrail] = useState(0);
+  const [currentPhase, setCurrentPhase] = useState(0);
+  const [status, setStatus] = useState('');
+
+  const handleGenerate = async () => {
+    if (!grade || !subject) {
+      toast.error('Selecione a série e a disciplina.');
+      return;
+    }
+    if (quantity < 1 || quantity > 10) {
+      toast.error('Quantidade deve ser entre 1 e 10 trilhas.');
+      return;
+    }
+
+    setIsGenerating(true);
+    setCurrentTrail(0);
+    setCurrentPhase(0);
+
+    // Fetch existing trail titles to build the forbidden list
+    const { data: existingTrails } = await supabase.from('learning_paths').select('title');
+    const existingTitles = (existingTrails || []).map((t: any) => t.title).filter(Boolean);
+    const forbiddenNote = existingTitles.length > 0
+      ? `\n\nATENÇÃO CRÍTICO: As trilhas abaixo JÁ EXISTEM no sistema. É ABSOLUTAMENTE PROIBIDO gerar contúedo igual, similar, parecido ou que sobreponha qualquer um desses tópicos. Cada nova trilha DEVE ser 100% única e distinta:\n${existingTitles.map(t => `- "${t}"`).join('\n')}`
+      : '';
+
+    // Build the master curriculum prompt to get N unique topics
+    const topicsPrompt = `Você é um especialista em currículo escolar brasileiro (BNCC).
+Gere exatamente ${quantity} tópicos/temas distintos e progressivos para trilhas de aprendizagem da disciplina "${subject}" para a série "${grade}" do Ensino Básico/Médio.
+Regras obrigatórias:
+- Cada tópico deve ser diferente e não repetitivo
+- Respeitar rigorosamente o currículo da BNCC para ${grade}
+- Progressividade: do mais simples ao mais complexo
+- Linguagem adequada ao nível do aluno
+- Cada tópico deve ser uma string curta e descritiva (ex: "Frações Equivalentes", "Ecossistemas Brasileiros")${forbiddenNote}
+Retorne APENAS um array JSON com ${quantity} strings. Exemplo: ["Tópico 1", "Tópico 2", ...]`;
+
+    let topics: string[] = [];
+    try {
+      setStatus('Analisando currículo BNCC e verificando conteúdo existente...');
+      const res = await fetch('/.netlify/functions/ai-proxy', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ feature: 'generate-trail-meta', prompt: topicsPrompt }),
+      });
+      const raw = await res.text();
+      const match = raw.match(/\[.*\]/s);
+      if (match) {
+        const parsed = JSON.parse(match[0]);
+        if (Array.isArray(parsed)) topics = parsed.slice(0, quantity);
+      }
+    } catch (_) {
+      // fallback: generic topics
+    }
+
+    while (topics.length < quantity) {
+      topics.push(`${subject} - Tópico ${topics.length + 1} (${grade})`);
+    }
+
+    const generated: any[] = [];
+
+    for (let i = 0; i < quantity; i++) {
+      const topic = topics[i];
+      // Build the accumulated forbidden list (existing + already-generated in this batch)
+      const allForbidden = [
+        ...existingTitles,
+        ...generated.map(g => g.title),
+      ];
+      const batchForbiddenNote = allForbidden.length > 0
+        ? `\n\nATENÇÃO CRÍTICO: NÃO gere conteúdo igual ou similar a:\n${allForbidden.map(t => `- "${t}"`).join('\n')}`
+        : '';
+      const topicWithContext = topic + batchForbiddenNote;
+
+      setCurrentTrail(i + 1);
+      setCurrentPhase(0);
+      setStatus(`Gerando trilha ${i + 1}/${quantity}: "${topic}"...`);
+
+      try {
+        const metaPromise = callAI({
+          feature: 'generate-trail-meta',
+          topic: topicWithContext,
+          subject,
+          grade,
+        });
+        const stepPromises = PHASE_TYPES.map((phase, idx) =>
+          callGenerateTrailStep({
+            topic: topicWithContext,
+            subject,
+            grade,
+            difficulty: 'medium',
+            phaseIndex: idx,
+            phaseType: phase.type,
+          }).then(result => {
+            setCurrentPhase(prev => prev + 1);
+            return result;
+          })
+        );
+        const [metaRes, ...steps] = await Promise.all([metaPromise, ...stepPromises]);
+        const meta = (metaRes as any).result || metaRes;
+        generated.push({
+          id: crypto.randomUUID(),
+          title: (meta as any).title || topic,
+          description: (meta as any).description || '',
+          rewardXp: (meta as any).rewardXp || 600,
+          rewardCoins: (meta as any).rewardCoins || 250,
+          steps: steps.map((s, si) => ({ ...s, id: String(si + 1) })),
+          subject,
+          grade,
+          difficulty: 'medium',
+          isAIGenerated: true,
+          createdAt: new Date().toISOString(),
+        });
+      } catch (err: any) {
+        toast.error(`Erro na trilha "${topic}": ${err.message}`);
+      }
+    }
+
+    onBulkGenerate(generated);
+    onClose();
+    toast.success(`${generated.length} trilha(s) gerada(s) com sucesso! ✨`);
+    setIsGenerating(false);
+    setCurrentTrail(0);
+    setCurrentPhase(0);
+    setStatus('');
+    setGrade('');
+    setSubject('');
+    setQuantity(3);
+  };
+
+  if (!isOpen) return null;
+
+  const totalPhases = quantity * 5;
+  const donePhases = (currentTrail > 0 ? (currentTrail - 1) * 5 : 0) + currentPhase;
+  const overallPct = totalPhases > 0 ? Math.round((donePhases / totalPhases) * 100) : 0;
+
+  return (
+    <div className="fixed inset-0 z-[200] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-md">
+      <motion.div initial={{ opacity: 0, scale: 0.95, y: 20 }} animate={{ opacity: 1, scale: 1, y: 0 }} className="bg-white rounded-[2.5rem] shadow-2xl w-full max-w-lg overflow-hidden">
+        {/* Header */}
+        <div className="bg-gradient-to-br from-indigo-600 via-purple-600 to-primary-600 p-8 text-white relative overflow-hidden">
+          <div className="absolute inset-0 bg-[url('https://www.transparenttextures.com/patterns/cubes.png')] opacity-10 pointer-events-none" />
+          <div className="relative z-10">
+            <div className="flex items-center gap-3 mb-3">
+              <div className="w-10 h-10 bg-white/20 rounded-2xl flex items-center justify-center">
+                <Layers size={20} className="text-white" />
+              </div>
+              <span className="text-white/70 text-xs font-black uppercase tracking-widest">IA Educativa</span>
+            </div>
+            <h2 className="text-2xl font-black tracking-tight">Criar Trilhas em Lote</h2>
+            <p className="text-white/70 text-sm font-medium mt-1">A IA analisa o currículo BNCC e gera trilhas pedagógicas completas para a série escolhida.</p>
+          </div>
+        </div>
+
+        <div className="p-8">
+          {isGenerating ? (
+            <div className="space-y-6">
+              {/* Overall progress */}
+              <div className="text-center space-y-2">
+                <div className="relative inline-flex">
+                  <div className="w-20 h-20 border-4 border-indigo-100 rounded-full" />
+                  <div className="absolute inset-0 w-20 h-20 border-4 border-indigo-500 border-t-transparent rounded-full animate-spin" />
+                  <Sparkles className="absolute inset-0 m-auto text-indigo-500 animate-pulse" size={28} />
+                </div>
+                <p className="font-black text-slate-800 text-base uppercase italic tracking-wide">Gerando trilhas com IA...</p>
+                <p className="text-slate-400 text-xs font-bold">{status}</p>
+              </div>
+
+              {/* Trail progress */}
+              <div className="space-y-3">
+                <div className="flex justify-between text-[10px] font-black uppercase tracking-widest text-slate-400">
+                  <span>Trilha {currentTrail}/{quantity}</span>
+                  <span>{overallPct}%</span>
+                </div>
+                <div className="w-full bg-slate-100 rounded-full h-3 overflow-hidden">
+                  <div className="h-full bg-gradient-to-r from-indigo-500 to-purple-500 rounded-full transition-all duration-500" style={{ width: `${overallPct}%` }} />
+                </div>
+                {/* Phase dots */}
+                <div className="flex items-center justify-center gap-2 pt-1">
+                  {PHASE_TYPES.map((p, i) => (
+                    <div key={p.type} className={cn(
+                      "w-8 h-8 rounded-xl text-xs font-black flex items-center justify-center transition-all",
+                      i < currentPhase ? "bg-indigo-500 text-white scale-110" : "bg-slate-100 text-slate-400"
+                    )}>
+                      {i < currentPhase ? '✓' : i + 1}
+                    </div>
+                  ))}
+                </div>
+                <p className="text-center text-[10px] text-slate-400 font-bold">{currentPhase}/5 fases da trilha atual</p>
+              </div>
+            </div>
+          ) : (
+            <div className="space-y-5">
+              {/* Grade */}
+              <div className="space-y-1.5">
+                <label className="text-[10px] font-black uppercase text-slate-400 ml-1 tracking-widest">Série do Aluno</label>
+                <select
+                  value={grade} onChange={e => setGrade(e.target.value)}
+                  className="w-full bg-slate-50 border border-slate-200 rounded-2xl px-5 py-4 font-bold outline-none focus:border-indigo-400 transition-colors"
+                >
+                  <option value="">Selecione a série...</option>
+                  {GRADES.map(g => <option key={g} value={g}>{g}</option>)}
+                </select>
+              </div>
+
+              {/* Subject */}
+              <div className="space-y-1.5">
+                <label className="text-[10px] font-black uppercase text-slate-400 ml-1 tracking-widest">Disciplina</label>
+                <select
+                  value={subject} onChange={e => setSubject(e.target.value)}
+                  className="w-full bg-slate-50 border border-slate-200 rounded-2xl px-5 py-4 font-bold outline-none focus:border-indigo-400 transition-colors"
+                >
+                  <option value="">Selecione a disciplina...</option>
+                  {SUBJECTS.map(s => <option key={s} value={s}>{s}</option>)}
+                </select>
+              </div>
+
+              {/* Quantity */}
+              <div className="space-y-1.5">
+                <label className="text-[10px] font-black uppercase text-slate-400 ml-1 tracking-widest">Quantidade de Trilhas</label>
+                <div className="flex items-center gap-4">
+                  <input
+                    type="range" min={1} max={10} value={quantity}
+                    onChange={e => setQuantity(Number(e.target.value))}
+                    className="flex-1 accent-indigo-600"
+                  />
+                  <div className="w-14 h-14 bg-indigo-50 border-2 border-indigo-200 rounded-2xl flex items-center justify-center font-black text-xl text-indigo-700">
+                    {quantity}
+                  </div>
+                </div>
+                <p className="text-[10px] text-slate-400 font-bold ml-1">≈ {quantity * 5} fases no total &bull; Tempo estimado: ~{Math.ceil(quantity * 0.5)} min
+                </p>
+              </div>
+
+              {/* Info box */}
+              {grade && subject && (
+                <div className="bg-indigo-50 border border-indigo-100 rounded-2xl p-4 flex items-start gap-3">
+                  <BrainCircuit size={18} className="text-indigo-500 mt-0.5 flex-shrink-0" />
+                  <p className="text-xs text-indigo-700 font-bold leading-relaxed">
+                    A IA irá analisar o currículo BNCC para <strong>{grade}</strong> em <strong>{subject}</strong>, gerar {quantity} tópicos progressivos distintos e criar trilhas pedagógicas completas com teoria, prática e quiz para cada fase.
+                  </p>
+                </div>
+              )}
+
+              <div className="flex gap-3 pt-2">
+                <Button variant="outline" className="flex-1 rounded-2xl" onClick={onClose}>Cancelar</Button>
+                <Button
+                  disabled={!grade || !subject}
+                  variant="primary"
+                  className="flex-[2] rounded-2xl bg-gradient-to-r from-indigo-600 to-purple-600 border-0"
+                  onClick={handleGenerate}
+                >
+                  <Sparkles size={16} className="mr-2" />
+                  Gerar {quantity} Trilha{quantity > 1 ? 's' : ''} com IA
+                </Button>
+              </div>
+            </div>
+          )}
+        </div>
+      </motion.div>
+    </div>
+  );
+};
+
 // --- Main Page ---
 
 export const AdminLearningTrails: React.FC = () => {
   const [showAIModal, setShowAIModal] = useState(false);
+  const [showBulkAIModal, setShowBulkAIModal] = useState(false);
   const [search, setSearch] = useState('');
+  const [filterYear, setFilterYear] = useState('');
+  const [filterSubject, setFilterSubject] = useState('');
+  const [filterGrade, setFilterGrade] = useState('');
   
   // Modal States
   const [activeTrailDetail, setActiveTrailDetail] = useState<any>(null);
@@ -360,10 +697,19 @@ export const AdminLearningTrails: React.FC = () => {
     return () => { supabase.removeChannel(ch); };
   }, []);
 
-  const filteredTrails = trails.filter(t => 
-    t.title.toLowerCase().includes(search.toLowerCase()) ||
-    t.subject.toLowerCase().includes(search.toLowerCase())
-  );
+  const filteredTrails = trails.filter(t => {
+    const q = search.toLowerCase();
+    const matchSearch = !q || t.title.toLowerCase().includes(q) || (t.subject || '').toLowerCase().includes(q);
+    const matchYear = !filterYear || (t.schoolYear || '') === filterYear;
+    const matchSubject = !filterSubject || (t.subject || '') === filterSubject;
+    const matchGrade = !filterGrade || (t.grade || '') === filterGrade;
+    return matchSearch && matchYear && matchSubject && matchGrade;
+  });
+
+  // Dynamic options derived from loaded data
+  const yearOptions = Array.from(new Set(trails.map(t => t.schoolYear).filter(Boolean))).sort();
+  const subjectOptions = Array.from(new Set(trails.map(t => t.subject).filter(Boolean))).sort();
+  const gradeOptions = Array.from(new Set(trails.map(t => t.grade).filter(Boolean))).sort();
 
   const handleDelete = async (e: React.MouseEvent, id: string) => {
     e.stopPropagation();
@@ -407,9 +753,9 @@ export const AdminLearningTrails: React.FC = () => {
            </h1>
            <p className="text-slate-400 font-bold max-w-xl text-lg tracking-tight leading-relaxed">Gerencie roteiros dinâmicos e utilize <span className="text-primary-500">IA</span> educativa.</p>
         </div>
-        <div className="flex items-center gap-4">
-           <Button variant="outline" className="rounded-2xl border-2 border-slate-200" onClick={() => setShowAIModal(true)}><Zap className="mr-2 text-amber-500" size={18} />Gerar com IA</Button>
-           <Button variant="primary" className="rounded-2xl px-8" onClick={() => toast.info('Criação manual em desenvolvimento. Use Gerar com IA!')}><Plus size={20} className="mr-2" /> Nova Trilha</Button>
+        <div className="flex items-center gap-3 flex-wrap">
+           <Button variant="outline" className="rounded-2xl border-2 border-slate-200" onClick={() => setShowAIModal(true)}><Zap className="mr-2 text-amber-500" size={18} />Gerar individual com IA</Button>
+           <Button variant="primary" className="rounded-2xl px-8 bg-gradient-to-r from-indigo-600 to-purple-600 border-0" onClick={() => setShowBulkAIModal(true)}><Layers size={18} className="mr-2" /> Criar em lote com IA</Button>
         </div>
       </section>
 
@@ -430,10 +776,48 @@ export const AdminLearningTrails: React.FC = () => {
         ))}
       </section>
 
-      <section className="flex flex-col md:flex-row gap-6">
-        <div className="relative flex-1">
+      <section className="space-y-4">
+        {/* Search bar */}
+        <div className="relative">
           <Search className="absolute left-6 top-1/2 -translate-y-1/2 text-slate-400" size={20} />
           <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Buscar por título ou disciplina..." className="w-full bg-white border border-slate-100 rounded-[2rem] py-5 pl-16 pr-6 text-sm font-bold shadow-sm outline-none" />
+        </div>
+        {/* Filters row */}
+        <div className="flex flex-wrap gap-3">
+          <select
+            value={filterYear} onChange={e => setFilterYear(e.target.value)}
+            className="bg-white border border-slate-100 rounded-2xl px-5 py-3 text-sm font-bold text-slate-600 shadow-sm outline-none cursor-pointer hover:border-primary-300 transition-colors"
+          >
+            <option value="">Todos os Anos
+            </option>
+            {yearOptions.map(y => <option key={y} value={y}>{y}</option>)}
+          </select>
+          <select
+            value={filterSubject} onChange={e => setFilterSubject(e.target.value)}
+            className="bg-white border border-slate-100 rounded-2xl px-5 py-3 text-sm font-bold text-slate-600 shadow-sm outline-none cursor-pointer hover:border-primary-300 transition-colors"
+          >
+            <option value="">Todas as Disciplinas</option>
+            {subjectOptions.map(s => <option key={s} value={s}>{s}</option>)}
+          </select>
+          <select
+            value={filterGrade} onChange={e => setFilterGrade(e.target.value)}
+            className="bg-white border border-slate-100 rounded-2xl px-5 py-3 text-sm font-bold text-slate-600 shadow-sm outline-none cursor-pointer hover:border-primary-300 transition-colors"
+          >
+            <option value="">Todas as Séries</option>
+            {gradeOptions.map(g => <option key={g} value={g}>{g}</option>)}
+          </select>
+          {/* Active filter count + clear */}
+          {(filterYear || filterSubject || filterGrade) && (
+            <button
+              onClick={() => { setFilterYear(''); setFilterSubject(''); setFilterGrade(''); }}
+              className="px-5 py-3 bg-red-50 text-red-500 border border-red-100 rounded-2xl text-sm font-black hover:bg-red-100 transition-colors"
+            >
+              Limpar filtros
+            </button>
+          )}
+          <span className="ml-auto self-center text-[10px] font-black uppercase text-slate-400 tracking-widest">
+            {filteredTrails.length} trilha{filteredTrails.length !== 1 ? 's' : ''} encontrada{filteredTrails.length !== 1 ? 's' : ''}
+          </span>
         </div>
       </section>
 
@@ -509,6 +893,16 @@ export const AdminLearningTrails: React.FC = () => {
       <EditTrailModal trail={trailToEdit} isOpen={!!trailToEdit} onClose={() => setTrailToEdit(null)} onSave={handleUpdateTrail} />
       <LinkClassModal trail={trailToLink} isOpen={!!trailToLink} onClose={() => setTrailToLink(null)} onLink={handleLinkTrail} />
       <AIGeneratorModal isOpen={showAIModal} onClose={() => setShowAIModal(false)} onGenerate={async (t) => { await supabase.from('learning_paths').insert(t); toast.success('Trilha gerada'); }} />
+      <BulkAIGeneratorModal
+        isOpen={showBulkAIModal}
+        onClose={() => setShowBulkAIModal(false)}
+        onBulkGenerate={async (trails) => {
+          if (trails.length === 0) return;
+          const { error } = await supabase.from('learning_paths').insert(trails);
+          if (error) toast.error('Erro ao salvar trilhas: ' + error.message);
+          else toast.success(`${trails.length} trilha(s) salva(s) com sucesso!`);
+        }}
+      />
     </div>
   );
 };

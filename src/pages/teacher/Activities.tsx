@@ -1,14 +1,15 @@
 import React, { useState } from 'react';
-import { Card } from '../../components/ui/Card';
+
 import { Button } from '../../components/ui/Button';
 import { Badge } from '../../components/ui/Badge';
 import {
-  Search, BookOpen, Plus, Sparkles, Brain, Clock, ChevronRight,
+  Search, BookOpen, Plus, Sparkles, Clock, ChevronRight,
   X, FileText, Target, CheckSquare, AlignLeft, Trash2, GraduationCap,
   Edit2, Eye, Save, Zap, Gamepad2, Check, TrendingUp, Star
 } from 'lucide-react';
 import { useSupabaseQuery } from '../../hooks/useSupabase';
 import { supabase } from '../../lib/supabase';
+import { decodeActivityMeta, saveActivityToStorage } from '../../lib/activityStorage';
 import { useAuthStore } from '../../store/auth.store';
 import { useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
@@ -19,8 +20,6 @@ import { cn } from '../../lib/utils';
 import { motion, AnimatePresence } from 'framer-motion';
 import type { StudentActivityResult } from '../../types/gamification';
 
-// ─── Storage Helpers (from dedicated file to avoid Fast Refresh conflicts) ─────
-import { saveActivityToStorage } from '../../lib/activityStorage';
 // ─── Types ─────────────────────────────────────────────────────────────────────
 const TYPE_LABELS: Record<string, string> = {
   objetiva: 'Objetiva', dissertativa: 'Dissertativa', simulado: 'Simulado',
@@ -898,7 +897,8 @@ const ActivityEditModal: React.FC<{
       difficulty: activity.difficulty || 'Médio',
       duration: activity.duration || '45 min',
       classId: activity.classId || '',
-      description: activity.description || '',
+      // Strip the ||META: suffix from description before populating the form
+      description: decodeActivityMeta(activity).description || '',
     },
   });
 
@@ -906,7 +906,14 @@ const ActivityEditModal: React.FC<{
 
   const onSubmit = async (data: ActivityFormData) => {
     try {
-      const { error } = await supabase.from('activities').update({ ...data, updatedAt: new Date().toISOString() }).eq('id', activity.id);
+      // Re-encode noExitAllowed meta so we don't lose it on edit
+      const currentMeta = decodeActivityMeta(activity);
+      const descWithMeta = currentMeta.noExitAllowed
+        ? (data.description || '') + '||META:{"noExitAllowed":true}'
+        : data.description;
+      const { error } = await supabase.from('activities')
+        .update({ ...data, description: descWithMeta, updatedAt: new Date().toISOString() })
+        .eq('id', activity.id);
       if (error) throw error;
       toast.success(`"${data.title}" atualizada!`);
       onSaved();
@@ -1019,18 +1026,22 @@ const CreateActivityModal: React.FC<{
 
   const navigate = useNavigate();
 
-  const { register, handleSubmit, formState: { errors, isSubmitting } } = useForm<ActivityFormData>({
+  const { register, handleSubmit, watch, formState: { errors, isSubmitting } } = useForm<ActivityFormData>({
     resolver: zodResolver(activitySchema) as any,
-    defaultValues: { type: 'objetiva', difficulty: 'Médio', duration: '45 min' }
+    defaultValues: { type: 'objetiva', difficulty: 'Médio', duration: '0' }
   });
 
+  const [noExitAllowed, setNoExitAllowed] = useState(false);
+  const watchedDuration = watch('duration', '0');
+
   const onSubmit = async (data: ActivityFormData) => {
+    const durationLabel = !data.duration || data.duration === '0' ? 'Sem limite' : `${data.duration} min`;
     const selectedClass = classes.find((c: any) => c.id === data.classId);
     const activityGrade = selectedClass?.grade || 'Todas as Séries';
     const now = new Date().toISOString();
     const newActivity = {
-      id: crypto.randomUUID(), ...data, grade: activityGrade, questions: [], aiAssisted: false,
-      teacherId, createdAt: now,
+      id: crypto.randomUUID(), ...data, duration: durationLabel, grade: activityGrade,
+      questions: [], aiAssisted: false, noExitAllowed, teacherId, createdAt: now,
     };
     await saveActivityToStorage(newActivity);
     toast.success(`Atividade "${data.title}" criada!`);
@@ -1104,13 +1115,18 @@ const CreateActivityModal: React.FC<{
               </select>
             </div>
             <div>
-              <label className="block text-xs font-black uppercase text-slate-400 tracking-widest mb-2 font-black">Duração (minutos)</label>
-              <input 
-                type="number" 
-                {...register('duration')} 
-                placeholder="Ex: 45"
-                className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 font-bold text-slate-800 outline-none focus:ring-2 focus:ring-indigo-300 transition-all" 
+              <label className="block text-xs font-black uppercase text-slate-400 tracking-widest mb-2">Duração (min)</label>
+              <input
+                type="number"
+                min="0"
+                step="1"
+                {...register('duration')}
+                placeholder="0 = sem limite"
+                className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 font-bold text-slate-800 outline-none focus:ring-2 focus:ring-indigo-300 transition-all"
               />
+              <p className="text-[10px] text-slate-400 font-bold mt-1">
+                {!watchedDuration || watchedDuration === '0' ? '⏱️ Sem limite de tempo' : `⏱️ ${watchedDuration} minuto${Number(watchedDuration) !== 1 ? 's' : ''}`}
+              </p>
             </div>
           </div>
 
@@ -1129,6 +1145,30 @@ const CreateActivityModal: React.FC<{
             <textarea {...register('description')} rows={3}
               className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 font-bold text-slate-800 outline-none focus:ring-2 focus:ring-indigo-300 resize-none"
               placeholder="Descreva o objetivo pedagógico desta atividade..." />
+          </div>
+
+          {/* noExitAllowed toggle */}
+          <div
+            onClick={() => setNoExitAllowed(v => !v)}
+            className={cn(
+              'flex items-start gap-4 rounded-2xl border-2 p-4 cursor-pointer transition-all select-none',
+              noExitAllowed ? 'border-red-400 bg-red-50 shadow-sm' : 'border-slate-100 bg-slate-50 hover:border-slate-200'
+            )}
+          >
+            <div className={cn('mt-0.5 w-10 h-5 rounded-full flex-shrink-0 relative transition-all', noExitAllowed ? 'bg-red-500' : 'bg-slate-200')}>
+              <div className={cn('absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform duration-300', noExitAllowed ? 'translate-x-5' : 'translate-x-0')} />
+            </div>
+            <div className="flex-1 space-y-0.5">
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="text-sm font-black text-slate-800">🚫 Proibido Sair da Atividade</span>
+                {noExitAllowed && <span className="text-[9px] font-black bg-red-500 text-white px-2 py-0.5 rounded-lg uppercase tracking-widest">ATIVO</span>}
+              </div>
+              <p className="text-xs text-slate-500 font-medium leading-snug">
+                {noExitAllowed
+                  ? '⚠️ Se o aluno sair da página durante a atividade, ela será encerrada automaticamente como Falhada.'
+                  : 'Quando ativado: sair da página durante a atividade = Falhada automática.'}
+              </p>
+            </div>
           </div>
 
           <div className="flex gap-3 pt-2">
@@ -1150,14 +1190,16 @@ export const Activities: React.FC = () => {
   const [searchTerm, setSearchTerm] = useState('');
   const [filterType, setFilterType] = useState<string>('all');
   const [filterClass, setFilterClass] = useState<string>('all');
+  const [filterSubject, setFilterSubject] = useState<string>('all');
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [viewActivity, setViewActivity] = useState<any | null>(null);
   const [editActivity, setEditActivity] = useState<any | null>(null);
   const [progressActivity, setProgressActivity] = useState<any | null>(null);
 
-  const allActivitiesData = useSupabaseQuery<any>('activities');
-  const allActivities = allActivitiesData || [];
-  const myActivities = allActivities.filter((a: any) => !a.teacherId || a.teacherId === user?.id);
+  const allActivitiesRaw = useSupabaseQuery<any>('activities');
+  // Decode noExitAllowed (stored inside description as ||META:) for every activity
+  const allActivities = (allActivitiesRaw || []).map(decodeActivityMeta);
+  const myActivities = allActivities;
 
   const handleCreated = () => { /* useSupabaseQuery handles it */ };
 
@@ -1168,20 +1210,43 @@ export const Activities: React.FC = () => {
   const classesData = useSupabaseQuery<any>('classes');
   const classes = (classesData || []).filter((c: any) => classIds.includes(c.id));
 
+  // Unique subjects in this teacher's activities
+  const availableSubjectsTeacher: string[] = Array.from(
+    new Set(myActivities.map((a: any) => a.subject).filter(Boolean))
+  ).sort() as string[];
+
   const filtered = myActivities.filter((a: any) => {
-    const matchesType = filterType === 'all' || a.type === filterType;
-    const matchesClass = filterClass === 'all' || a.classId === filterClass;
-    const matchesSearch =
+    const matchesType    = filterType    === 'all' || a.type    === filterType;
+    const matchesClass   = filterClass   === 'all' || a.classId === filterClass;
+    const matchesSubject = filterSubject === 'all' || a.subject === filterSubject;
+    const matchesSearch  =
       (a.title || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
       (a.subject || '').toLowerCase().includes(searchTerm.toLowerCase());
-    return matchesType && matchesClass && matchesSearch;
+    return matchesType && matchesClass && matchesSubject && matchesSearch;
   });
 
   const handleDelete = async (id: string) => {
+    // Optimistic: remove from Dexie immediately so UI reacts instantly
+    try {
+      const { db } = await import('../../lib/dexie');
+      await (db.activities as any).delete(id);
+    } catch (_) { /* ignore local error — Supabase is the source of truth */ }
     const { error } = await supabase.from('activities').delete().eq('id', id);
-    if (error) { toast.error('Erro ao excluir.'); console.error(error); return; }
+    if (error) {
+      toast.error('Erro ao excluir — tente novamente.');
+      console.error(error);
+      // Re-sync from Supabase to restore the correct state
+      const { data } = await supabase.from('activities').select('*');
+      if (data) {
+        const { db } = await import('../../lib/dexie');
+        await (db.activities as any).clear();
+        await (db.activities as any).bulkPut(data);
+      }
+      return;
+    }
     toast.success('Atividade removida.');
   };
+
 
   const TYPE_TABS = [
     { key: 'all', label: 'Todas' },
@@ -1192,180 +1257,358 @@ export const Activities: React.FC = () => {
     { key: 'prova_bimestral', label: 'Provas Bimestrais' },
   ];
 
+  // ── Gradient map per activity type ─────────────────────────────────────────
+  const TYPE_GRADIENT: Record<string, string> = {
+    objetiva:       'from-blue-600 to-indigo-700',
+    dissertativa:   'from-violet-600 to-purple-700',
+    simulado:       'from-orange-500 to-amber-600',
+    prova_bimestral:'from-rose-600 to-red-700',
+    quiz_divertido: 'from-pink-500 to-fuchsia-600',
+    prova_mensal:   'from-cyan-500 to-teal-600',
+  };
+  const TYPE_EMOJI: Record<string, string> = {
+    objetiva:'📝', dissertativa:'✍️', simulado:'🎯',
+    prova_bimestral:'📋', quiz_divertido:'🎮', prova_mensal:'📅',
+  };
+
   return (
     <div className="space-y-8 animate-in fade-in slide-in-from-bottom-6 duration-700">
-      <header className="flex flex-col lg:flex-row lg:items-center justify-between gap-6">
-        <div>
-          <h1 className="text-4xl font-black text-slate-800 tracking-tight">Banco de Atividades</h1>
-          <p className="text-slate-500 font-medium">
-            {myActivities.length} atividade{myActivities.length !== 1 ? 's' : ''} criada{myActivities.length !== 1 ? 's' : ''}. Explore, crie e gerencie para suas turmas.
-          </p>
-        </div>
-        <div className="flex gap-3">
-          <Button
-            onClick={() => navigate('/teacher/create-activity')}
-            variant="outline"
-            className="rounded-2xl gap-2 font-bold px-5 bg-white border-slate-200">
-            <Sparkles size={18} className="text-indigo-500" /> Criar com IA
-          </Button>
-          <Button
-            onClick={() => setIsModalOpen(true)}
-            variant="primary"
-            className="rounded-2xl gap-2 font-black px-8 shadow-xl shadow-primary-500/20">
-            <Plus size={20} /> Nova Atividade
-          </Button>
+
+      {/* ── HEADER ─────────────────────────────────────────────────────────── */}
+      <header className="relative bg-gradient-to-br from-slate-900 via-indigo-950 to-slate-900 rounded-[2.5rem] p-8 overflow-hidden shadow-2xl">
+        <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top_right,rgba(99,102,241,0.3),transparent_60%)]" />
+        <div className="absolute bottom-0 left-0 w-80 h-80 bg-primary-500/10 rounded-full blur-3xl -ml-20 -mb-20 pointer-events-none" />
+        <div className="relative z-10 flex flex-col lg:flex-row lg:items-center justify-between gap-6">
+          <div>
+            <div className="flex items-center gap-3 mb-2">
+              <div className="w-10 h-10 bg-primary-500 rounded-2xl flex items-center justify-center shadow-lg shadow-primary-500/30">
+                <BookOpen size={20} className="text-white" />
+              </div>
+              <span className="text-[10px] font-black text-primary-400 uppercase tracking-[0.3em]">Banco de Atividades</span>
+            </div>
+            <h1 className="text-4xl font-black text-white tracking-tight leading-none mb-1">Suas Atividades</h1>
+            <p className="text-slate-400 font-medium text-sm">
+              {myActivities.length} atividade{myActivities.length !== 1 ? 's' : ''} criada{myActivities.length !== 1 ? 's' : ''}
+            </p>
+          </div>
+
+          {/* Stats chips */}
+          <div className="flex flex-wrap gap-3">
+            {[
+              { label: 'Total', value: myActivities.length, icon: FileText, color: 'bg-white/10 text-white' },
+              { label: 'Com IA', value: myActivities.filter((a: any) => a.aiAssisted).length, icon: Sparkles, color: 'bg-indigo-500/30 text-indigo-200' },
+              { label: 'Proibido Sair', value: myActivities.filter((a: any) => a.noExitAllowed).length, icon: Zap, color: 'bg-red-500/30 text-red-200' },
+            ].map(chip => (
+              <div key={chip.label} className={cn('flex items-center gap-2.5 px-4 py-2.5 rounded-2xl border border-white/10 backdrop-blur-sm', chip.color)}>
+                <chip.icon size={14} />
+                <div>
+                  <div className="text-[9px] font-black uppercase tracking-widest opacity-60">{chip.label}</div>
+                  <div className="text-lg font-black leading-none">{chip.value}</div>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          {/* CTA Buttons */}
+          <div className="flex gap-3 flex-shrink-0">
+            <button
+              onClick={() => navigate('/teacher/create-activity')}
+              className="flex items-center gap-2 px-5 py-3 bg-white/10 hover:bg-white/20 border border-white/20 text-white rounded-2xl font-black text-sm transition-all backdrop-blur-sm"
+            >
+              <Sparkles size={16} className="text-indigo-300" /> Criar com IA
+            </button>
+            <button
+              onClick={() => setIsModalOpen(true)}
+              className="flex items-center gap-2 px-6 py-3 bg-primary-500 hover:bg-primary-400 text-white rounded-2xl font-black text-sm shadow-xl shadow-primary-500/30 transition-all"
+            >
+              <Plus size={18} /> Nova Atividade
+            </button>
+          </div>
         </div>
       </header>
 
-      {/* Toolbar */}
-      <div className="space-y-3">
+      {/* ── TOOLBAR ────────────────────────────────────────────────────────── */}
+      <div className="space-y-4">
+        {/* Search */}
         <div className="relative">
-          <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={20} />
-          <input type="text" placeholder="Buscar por título, matéria ou conteúdo..."
-            value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)}
-            className="w-full bg-white border-2 border-slate-100 rounded-[1.5rem] py-4 pl-14 pr-4 text-sm font-bold focus:border-primary-500/20 outline-none transition-all shadow-sm" />
+          <Search className="absolute left-5 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
+          <input
+            type="text"
+            placeholder="Buscar por título, matéria ou conteúdo..."
+            value={searchTerm}
+            onChange={e => setSearchTerm(e.target.value)}
+            className="w-full bg-white border-2 border-slate-100 rounded-[1.5rem] py-4 pl-14 pr-5 text-sm font-bold focus:border-primary-300 outline-none transition-all shadow-sm placeholder:text-slate-300"
+          />
         </div>
+
+        {/* Type pills + Class filter */}
         <div className="flex flex-wrap items-center gap-2 justify-between">
-          <div className="flex flex-wrap gap-2">
+          <div className="flex flex-wrap gap-2 p-1.5 bg-slate-100 rounded-2xl w-fit">
             {TYPE_TABS.map(({ key, label }) => (
-              <button key={key} onClick={() => setFilterType(key)}
-                className={cn('px-4 py-2 rounded-xl text-sm font-bold transition-all',
-                  filterType === key ? 'bg-white text-slate-800 shadow border border-slate-200' : 'text-slate-400 hover:text-slate-600')}>
+              <button
+                key={key}
+                onClick={() => setFilterType(key)}
+                className={cn(
+                  'px-4 py-1.5 rounded-xl text-xs font-black transition-all',
+                  filterType === key
+                    ? 'bg-white text-slate-900 shadow-md'
+                    : 'text-slate-400 hover:text-slate-600'
+                )}
+              >
                 {label}
               </button>
             ))}
           </div>
           {classes.length > 0 && (
-            <select value={filterClass} onChange={e => setFilterClass(e.target.value)}
-              className="bg-white border border-slate-200 rounded-xl px-3 py-2 text-sm font-bold text-slate-700 outline-none appearance-none cursor-pointer">
+            <select
+              value={filterClass}
+              onChange={e => setFilterClass(e.target.value)}
+              className="bg-white border-2 border-slate-100 rounded-2xl px-4 py-2.5 text-sm font-bold text-slate-700 outline-none appearance-none cursor-pointer focus:border-primary-300"
+            >
               <option value="all">🏫 Todas as turmas</option>
-              {classes.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+              {classes.map((c: any) => <option key={c.id} value={c.id}>{c.name}</option>)}
             </select>
           )}
         </div>
+
+        {/* Subject filter chips */}
+        {availableSubjectsTeacher.length > 1 && (
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Matéria:</span>
+            <button
+              onClick={() => setFilterSubject('all')}
+              className={cn(
+                'px-3 py-1.5 rounded-xl text-xs font-black border-2 transition-all',
+                filterSubject === 'all'
+                  ? 'bg-slate-900 text-white border-slate-900'
+                  : 'bg-white text-slate-500 border-slate-100 hover:border-slate-300'
+              )}
+            >
+              📚 Todas
+            </button>
+            {availableSubjectsTeacher.map(sub => (
+              <button
+                key={sub}
+                onClick={() => setFilterSubject(filterSubject === sub ? 'all' : sub)}
+                className={cn(
+                  'px-3 py-1.5 rounded-xl text-xs font-black border-2 transition-all',
+                  filterSubject === sub
+                    ? 'bg-indigo-600 text-white border-indigo-600 shadow-md'
+                    : 'bg-white text-slate-600 border-slate-100 hover:border-indigo-200 hover:text-indigo-600'
+                )}
+              >
+                {sub}
+              </button>
+            ))}
+          </div>
+        )}
+
       </div>
 
-      {/* Activities Grid */}
+      {/* ── ACTIVITIES GRID ─────────────────────────────────────────────────── */}
       {filtered.length === 0 ? (
-        <div className="text-center py-20 border-4 border-dashed border-slate-100 rounded-[3rem]">
-          <BookOpen size={48} className="mx-auto mb-4 text-slate-200" />
-          <h3 className="text-xl font-black text-slate-800">
-            {myActivities.length === 0 ? 'Nenhuma atividade criada ainda' : 'Nenhum resultado'}
+        <div className="text-center py-24 border-4 border-dashed border-slate-100 rounded-[3rem] bg-slate-50/50">
+          <div className="text-7xl mb-4">📭</div>
+          <h3 className="text-2xl font-black text-slate-700">
+            {myActivities.length === 0 ? 'Nenhuma atividade ainda' : 'Nenhum resultado'}
           </h3>
-          <p className="text-slate-400 mt-2 mb-6">
-            {myActivities.length === 0 ? 'Crie sua primeira atividade manualmente ou use nossa IA.' : 'Tente ajustar os filtros de busca.'}
+          <p className="text-slate-400 mt-2 mb-8 font-medium">
+            {myActivities.length === 0 ? 'Crie sua primeira atividade.' : 'Tente outros filtros.'}
           </p>
           <div className="flex gap-3 justify-center">
-            <Button onClick={() => navigate('/teacher/create-activity')} variant="outline" className="rounded-2xl gap-2 font-bold">
-              <Sparkles size={18} /> Criar com IA
-            </Button>
-            <Button onClick={() => setIsModalOpen(true)} variant="primary" className="rounded-2xl gap-2 font-bold">
-              <Plus size={18} /> Nova Atividade
-            </Button>
+            <button
+              onClick={() => navigate('/teacher/create-activity')}
+              className="flex items-center gap-2 px-6 py-3 bg-white border-2 border-slate-200 text-slate-700 rounded-2xl font-black text-sm hover:border-indigo-300 transition-all"
+            >
+              <Sparkles size={16} className="text-indigo-500" /> Criar com IA
+            </button>
+            <button
+              onClick={() => setIsModalOpen(true)}
+              className="flex items-center gap-2 px-6 py-3 bg-primary-500 text-white rounded-2xl font-black text-sm shadow-lg shadow-primary-500/20 hover:bg-primary-400 transition-all"
+            >
+              <Plus size={16} /> Nova Atividade
+            </button>
           </div>
         </div>
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-5">
           {filtered.map((act: any) => {
-            const TypeIcon = TYPE_ICON[act.type] || FileText;
+            const emoji = TYPE_EMOJI[act.type] || '📄';
+            const qCount = act.questions?.length || 0;
+            // Pick an accent color per type for the left border
+            const accentColors: Record<string, string> = {
+              objetiva: '#6366f1', dissertativa: '#8b5cf6',
+              simulado: '#0ea5e9', quiz_divertido: '#f59e0b',
+              prova_bimestral: '#10b981', prova_mensal: '#ef4444',
+            };
+            const accent = accentColors[act.type] || '#6366f1';
+            const lightBg: Record<string, string> = {
+              objetiva: 'bg-indigo-50', dissertativa: 'bg-violet-50',
+              simulado: 'bg-sky-50', quiz_divertido: 'bg-amber-50',
+              prova_bimestral: 'bg-emerald-50', prova_mensal: 'bg-red-50',
+            };
+            const iconBg = lightBg[act.type] || 'bg-indigo-50';
+            const labelColor: Record<string, string> = {
+              objetiva: 'text-indigo-600', dissertativa: 'text-violet-600',
+              simulado: 'text-sky-600', quiz_divertido: 'text-amber-600',
+              prova_bimestral: 'text-emerald-600', prova_mensal: 'text-red-600',
+            };
+            const subjectColor = labelColor[act.type] || 'text-indigo-600';
+
             return (
-              <Card key={act.id} className="p-0 overflow-hidden border-slate-100 group hover:border-primary-100 hover:shadow-xl transition-all duration-500">
-                <div className="flex flex-col sm:flex-row">
-                  <div className="sm:w-44 bg-slate-50 p-8 flex items-center justify-center border-b sm:border-b-0 sm:border-r border-slate-100 relative group-hover:bg-indigo-50 transition-colors flex-shrink-0">
-                    {act.aiAssisted && (
-                      <div className="absolute top-2 left-2">
-                        <Badge variant="ai" className="px-2 py-0.5 text-[8px]">IA</Badge>
+              <motion.div
+                key={act.id}
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                whileHover={{ y: -5 }}
+                transition={{ type: 'spring', stiffness: 380, damping: 26 }}
+                className="bg-white rounded-2xl flex flex-col overflow-hidden"
+                style={{
+                  borderTop: `4px solid ${accent}`,
+                  boxShadow: '0 0 0 1px rgba(0,0,0,0.07), 0 5px 0 0 rgba(0,0,0,0.06), 0 10px 20px -6px rgba(0,0,0,0.09)',
+                  transition: 'box-shadow 0.2s, transform 0.2s',
+                }}
+                onMouseEnter={e => { (e.currentTarget as HTMLElement).style.boxShadow = '0 0 0 1px rgba(0,0,0,0.09), 0 8px 0 0 rgba(0,0,0,0.08), 0 18px 36px -8px rgba(0,0,0,0.16)'; }}
+                onMouseLeave={e => { (e.currentTarget as HTMLElement).style.boxShadow = '0 0 0 1px rgba(0,0,0,0.07), 0 5px 0 0 rgba(0,0,0,0.06), 0 10px 20px -6px rgba(0,0,0,0.09)'; }}
+              >
+                {/* ══ HEADER — cinza claro ══════════════════════════════════ */}
+                <div className="bg-gray-50 border-b border-gray-100 px-5 py-4 flex items-center justify-between gap-3">
+                  <div className="flex items-center gap-3 min-w-0">
+                    <div
+                      className="w-11 h-11 rounded-xl flex items-center justify-center text-2xl flex-shrink-0 shadow-sm"
+                      style={{ background: `${accent}16`, border: `1.5px solid ${accent}26` }}
+                    >
+                      {emoji}
+                    </div>
+                    <div className="min-w-0">
+                      <div className="text-[10px] font-black uppercase tracking-[0.18em] truncate" style={{ color: accent }}>
+                        {act.subject || '—'}
                       </div>
-                    )}
-                    <div className="w-20 h-20 bg-white rounded-3xl flex items-center justify-center text-slate-300 shadow-sm border border-slate-100 group-hover:text-indigo-400 group-hover:scale-110 transition-all">
-                      <TypeIcon size={36} />
+                      <div className="text-xs text-slate-500 font-semibold mt-0.5 truncate">
+                        {TYPE_LABELS[act.type] || act.type}
+                      </div>
                     </div>
                   </div>
 
-                  <div className="flex-1 p-6">
-                    <div className="flex items-center gap-2 mb-3 flex-wrap">
-                      <span className={cn('text-[10px] font-black px-2 py-0.5 rounded-lg uppercase tracking-wider', TYPE_COLORS[act.type] || 'bg-slate-50 text-slate-600')}>
-                        {TYPE_LABELS[act.type] || act.type}
-                      </span>
-                      {act.subject && <span className="text-[10px] font-black uppercase text-primary-600 tracking-widest">{act.subject}</span>}
-                    </div>
-                    <h3 className="text-lg font-black text-slate-800 mb-2 leading-tight">{act.title}</h3>
+                  {/* AI badge */}
+                  {act.aiAssisted && (
+                    <span className="text-[10px] font-black text-violet-600 bg-violet-50 border border-violet-100 px-2 py-1 rounded-lg flex-shrink-0 uppercase tracking-wider">
+                      ✨ IA
+                    </span>
+                  )}
+                </div>
 
+                {/* ══ BODY — branco ════════════════════════════════════════ */}
+                <div className="flex flex-col flex-1 px-5 pt-4 pb-5 gap-3">
+                  {/* Title + description */}
+                  <div>
+                    <h3 className="text-base font-black text-slate-900 leading-snug line-clamp-2">
+                      {act.title}
+                    </h3>
                     {act.description && (
-                      <p className="text-sm text-slate-500 mb-3 line-clamp-2">{act.description}</p>
+                      <p className="text-xs text-slate-400 font-medium mt-1 line-clamp-1">{act.description}</p>
                     )}
+                  </div>
 
-                    <div className="flex gap-3 mb-4 flex-wrap">
-                      {act.duration && (
-                        <div className="flex items-center gap-1.5 text-xs font-bold text-slate-400">
-                          <Clock size={13} /> {act.duration}
-                        </div>
-                      )}
-                      {act.difficulty && (
-                        <div className="flex items-center gap-1.5 text-xs font-bold text-slate-400">
-                          <Brain size={13} /> {act.difficulty}
-                        </div>
-                      )}
-                      {act.questions?.length > 0 && (
-                        <div className="flex items-center gap-1.5 text-xs font-bold text-slate-400">
-                          <Zap size={13} /> {act.questions.length} questões
-                        </div>
-                      )}
+                  {/* Chips */}
+                  <div className="flex flex-wrap gap-1.5">
+                    {act.difficulty && (
+                      <span className="text-xs font-bold text-slate-600 bg-gray-50 border border-gray-200 px-2 py-1 rounded-md">
+                        {act.difficulty === 'Fácil' ? '🟢' : act.difficulty === 'Médio' ? '🟡' : '🔴'} {act.difficulty}
+                      </span>
+                    )}
+                    {act.duration && (
+                      <span className="flex items-center gap-1 text-xs font-bold text-slate-500 bg-gray-50 border border-gray-200 px-2 py-1 rounded-md">
+                        <Clock size={10} /> {act.duration}
+                      </span>
+                    )}
+                    {qCount > 0 && (
+                      <span className="flex items-center gap-1 text-xs font-bold text-slate-500 bg-gray-50 border border-gray-200 px-2 py-1 rounded-md">
+                        <Zap size={10} className="text-amber-400" /> {qCount} questão{qCount !== 1 ? 'ões' : ''}
+                      </span>
+                    )}
+                    {act.noExitAllowed ? (
+                      <span className="flex items-center gap-1 text-[11px] font-black text-red-600 bg-red-50 border border-red-100 px-2 py-1 rounded-md">
+                        🚫 Proibido Sair
+                      </span>
+                    ) : (
+                      <span className="text-[11px] font-medium text-slate-400 bg-gray-50 border border-gray-200 px-2 py-1 rounded-md">
+                        ✅ Livre
+                      </span>
+                    )}
+                    {act.grade && (
+                      <span className="flex items-center gap-1 text-xs font-bold text-slate-400 bg-gray-50 border border-gray-200 px-2 py-1 rounded-md">
+                        <GraduationCap size={10} /> {act.grade}
+                      </span>
+                    )}
+                  </div>
+
+                  {/* Actions */}
+                  <div className="mt-auto flex items-center justify-between pt-3 border-t border-gray-100 gap-2">
+                    <div className="flex gap-1">
+                      <button
+                        onClick={() => handleDelete(act.id)}
+                        title="Excluir"
+                        className="p-2 text-slate-300 hover:text-red-500 hover:bg-red-50 rounded-lg transition-all"
+                      >
+                        <Trash2 size={14} />
+                      </button>
+                      <button
+                        onClick={() => setEditActivity(act)}
+                        title="Editar"
+                        className="p-2 text-slate-300 hover:text-indigo-500 hover:bg-indigo-50 rounded-lg transition-all"
+                      >
+                        <Edit2 size={14} />
+                      </button>
                     </div>
 
-                    <div className="flex items-center justify-between pt-3 border-t border-slate-50">
-                      <div className="flex gap-1.5">
-                        <button onClick={() => handleDelete(act.id)}
-                          className="p-1.5 text-slate-300 hover:text-red-400 hover:bg-red-50 rounded-lg transition-colors" title="Excluir">
-                          <Trash2 size={14} />
-                        </button>
-                        <button onClick={() => setEditActivity(act)}
-                          className="p-1.5 text-slate-300 hover:text-indigo-500 hover:bg-indigo-50 rounded-lg transition-colors" title="Editar">
-                          <Edit2 size={14} />
-                        </button>
-                      </div>
+                    <div className="flex gap-2">
                       <button
                         onClick={() => setViewActivity(act)}
-                        className="flex items-center gap-1.5 text-xs font-black text-slate-400 bg-slate-50 hover:bg-primary-500 hover:text-white px-4 py-2 rounded-xl transition-all group-hover:bg-primary-500 group-hover:text-white"
+                        className="flex items-center gap-1 text-xs font-bold text-slate-500 bg-gray-50 hover:bg-gray-100 border border-gray-200 px-3 py-1.5 rounded-lg transition-all"
                       >
-                        <Eye size={14} /> Ver questões
+                        <Eye size={12} /> Questões
                       </button>
                       {act.classId && (
                         <button
                           onClick={() => setProgressActivity(act)}
-                          className="flex items-center gap-1.5 text-xs font-black text-primary-500 bg-primary-50 hover:bg-primary-500 hover:text-white px-4 py-2 rounded-xl transition-all"
+                          className="flex items-center gap-1 text-xs font-bold text-white px-3 py-1.5 rounded-lg transition-all"
+                          style={{ background: accent, boxShadow: `0 2px 8px ${accent}44` }}
                         >
-                          <TrendingUp size={14} /> Acompanhar
+                          <TrendingUp size={12} /> Turma
                         </button>
                       )}
                     </div>
                   </div>
                 </div>
-              </Card>
+              </motion.div>
             );
           })}
         </div>
       )}
 
-      {/* AI Banner */}
-      <Card className="p-10 bg-slate-900 text-white rounded-[2.5rem] relative overflow-hidden shadow-2xl">
-        <div className="absolute top-0 right-0 w-96 h-96 bg-primary-500/10 rounded-full blur-3xl -mr-20 -mt-20" />
+      {/* ── AI BANNER ──────────────────────────────────────────────────────── */}
+      <div className="relative bg-gradient-to-br from-indigo-600 via-violet-600 to-purple-700 rounded-[2.5rem] p-8 overflow-hidden shadow-2xl shadow-indigo-500/20">
+        <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_bottom_left,rgba(255,255,255,0.1),transparent_60%)]" />
+        <div className="absolute top-0 right-0 w-72 h-72 bg-white/5 rounded-full blur-3xl -mr-16 -mt-16" />
         <div className="relative z-10 flex flex-col md:flex-row items-center gap-8">
-          <div className="w-20 h-20 bg-primary-500 rounded-[2.5rem] flex items-center justify-center shadow-xl shadow-primary-500/20 shrink-0">
-            <Sparkles size={40} className="text-white" />
+          <div className="w-20 h-20 bg-white/20 rounded-[2rem] flex items-center justify-center shadow-xl border border-white/20 backdrop-blur-sm flex-shrink-0">
+            <Sparkles size={38} className="text-white" />
           </div>
-          <div className="space-y-3 text-center md:text-left">
-            <h2 className="text-2xl font-black tracking-tight">Crie atividades em segundos com IA</h2>
-            <p className="text-slate-400 font-medium max-w-2xl">
-              Descreva o tema e nossa IA gera questões objetivas, dissertativas, simulados ou provas bimestrais — alinhadas à BNCC.
+          <div className="text-center md:text-left flex-1">
+            <h2 className="text-2xl font-black text-white tracking-tight mb-1">Crie atividades em segundos com IA</h2>
+            <p className="text-white/60 font-medium text-sm max-w-xl">
+              Descreva o tema e nossa IA gera questões objetivas, dissertativas, simulados ou provas — alinhadas à BNCC.
             </p>
           </div>
-          <Button onClick={() => navigate('/teacher/create-activity')}
-            className="shrink-0 bg-white text-slate-900 hover:bg-slate-50 rounded-2xl px-8 py-5 font-black text-sm">
-            <Sparkles size={18} className="mr-2 text-indigo-500" /> Experimentar Gerador
-          </Button>
+          <button
+            onClick={() => navigate('/teacher/create-activity')}
+            className="flex-shrink-0 flex items-center gap-2 px-8 py-4 bg-white text-indigo-700 rounded-2xl font-black text-sm shadow-xl hover:bg-indigo-50 transition-all"
+          >
+            <Sparkles size={17} /> Experimentar Gerador
+          </button>
         </div>
-      </Card>
+      </div>
 
       {/* Modals */}
       <AnimatePresence>
