@@ -11,6 +11,7 @@ import { Badge } from '../../components/ui/Badge';
 import { Button } from '../../components/ui/Button';
 import { cn } from '../../lib/utils';
 import { calculateLevel } from '../../lib/gamificationUtils';
+import { StudentAvatarMini } from '../../components/ui/StudentAvatarMini';
 
 export const Ranking: React.FC = () => {
   const { user: guardian } = useAuthStore();
@@ -108,12 +109,29 @@ export const Ranking: React.FC = () => {
         (classData || []).forEach((c: any) => { classNameMap[c.id] = c.name; });
       }
 
-      const entries = studentsToRank.map(s => ({
-        user: s,
-        stats: statsMap.get(s.id) || null,
-        className: classNameMap[(s as any).classId || ''] || '',
-        isMyChild: (guardian as Guardian)?.studentIds?.includes(s.id) || (s as Student).guardianIds?.includes(guardian?.id || '') || false
-      }));
+      // --- Fetch avatar profiles + catalog for real avatar URLs ---
+      let profilesData: any[] = [];
+      let catalogData: any[] = [];
+      if (ids.length > 0) {
+        const [{ data: profiles }, { data: catalog }] = await Promise.all([
+          supabase.from('student_avatar_profiles').select('studentId, selectedAvatarId').in('studentId', ids),
+          supabase.rpc('get_avatar_catalog'),
+        ]);
+        profilesData = profiles || [];
+        catalogData = catalog || [];
+      }
+
+      const entries = studentsToRank.map(s => {
+        const profile = profilesData.find((p: any) => p.studentId === s.id);
+        const avatarItem = catalogData.find((c: any) => c.id === profile?.selectedAvatarId);
+        return ({
+          user: s,
+          stats: statsMap.get(s.id) || null,
+          className: classNameMap[(s as any).classId || ''] || '',
+          isMyChild: (guardian as Guardian)?.studentIds?.includes(s.id) || (s as Student).guardianIds?.includes(guardian?.id || '') || false,
+          avatarUrl: (avatarItem as any)?.assetUrl || null,
+        });
+      });
 
       // Sort by XP
       const sorted = entries
@@ -215,12 +233,14 @@ export const Ranking: React.FC = () => {
                  {top3[1] && (
                    <div className="flex flex-col items-center group">
                       <div className="relative mb-4">
-                         <div className={cn(
-                           "w-16 h-16 rounded-[1.2rem] flex items-center justify-center text-white font-black text-2xl shadow-xl border-4 border-white transition-all group-hover:scale-110",
-                           avatarColors[1]
-                         )}>
-                            {top3[1].user.name[0]}
-                         </div>
+                         <StudentAvatarMini
+                            studentId={top3[1].user.id}
+                            fallbackInitial={top3[1].user.name[0]}
+                            fallbackColor={avatarColors[1]}
+                            size={64}
+                            shape="xl"
+                            className="shadow-xl ring-4 ring-white rounded-xl"
+                          />
                          <div className="absolute -top-3 -right-3 w-8 h-8 rounded-full bg-slate-100 flex items-center justify-center text-slate-500 border border-slate-200 font-black shadow-sm">
                             <Medal size={16} />
                          </div>
@@ -241,12 +261,14 @@ export const Ranking: React.FC = () => {
                    <div className="flex flex-col items-center group -mt-10">
                       <div className="relative mb-6">
                          <Crown size={48} className="text-amber-400 absolute -top-12 left-1/2 -translate-x-1/2 animate-bounce fill-amber-400/20" />
-                         <div className={cn(
-                           "w-24 h-24 rounded-[2rem] flex items-center justify-center text-white font-black text-4xl shadow-[0_20px_40px_rgba(245,158,11,0.3)] border-4 border-white transition-all group-hover:scale-110 relative z-10",
-                           avatarColors[0]
-                         )}>
-                            {top3[0].user.name[0]}
-                         </div>
+                         <StudentAvatarMini
+                            studentId={top3[0].user.id}
+                            fallbackInitial={top3[0].user.name[0]}
+                            fallbackColor={avatarColors[0]}
+                            size={96}
+                            shape="2xl"
+                            className="shadow-[0_20px_40px_rgba(245,158,11,0.3)] ring-4 ring-white rounded-2xl relative z-10 transition-all group-hover:scale-110"
+                          />
                          <div className="absolute -bottom-3 -right-3 w-12 h-12 rounded-full bg-white flex items-center justify-center text-amber-500 border-2 border-amber-100 font-black text-xl shadow-xl z-20">
                             1
                          </div>
@@ -269,12 +291,14 @@ export const Ranking: React.FC = () => {
                  {top3[2] && (
                    <div className="flex flex-col items-center group">
                       <div className="relative mb-4">
-                         <div className={cn(
-                           "w-16 h-16 rounded-[1.2rem] flex items-center justify-center text-white font-black text-2xl shadow-xl border-4 border-white transition-all group-hover:scale-110",
-                           avatarColors[2]
-                         )}>
-                            {top3[2].user.name[0]}
-                         </div>
+                         <StudentAvatarMini
+                            studentId={top3[2].user.id}
+                            fallbackInitial={top3[2].user.name[0]}
+                            fallbackColor={avatarColors[2]}
+                            size={64}
+                            shape="xl"
+                            className="shadow-xl ring-4 ring-white rounded-xl"
+                          />
                          <div className="absolute -top-3 -left-3 w-8 h-8 rounded-full bg-orange-50 flex items-center justify-center text-orange-500 border border-orange-100 font-black shadow-sm">
                             <Medal size={16} />
                          </div>
@@ -316,12 +340,13 @@ export const Ranking: React.FC = () => {
                       )}>
                         {entry.rank}º
                       </span>
-                      <div className={cn(
-                        "w-12 h-12 rounded-2xl flex items-center justify-center text-white font-black text-lg shadow-sm shrink-0",
-                        avatarColors[entry.rank % avatarColors.length]
-                      )}>
-                        {entry.user.name[0]}
-                      </div>
+                      <StudentAvatarMini
+                        studentId={entry.user.id}
+                        fallbackInitial={entry.user.name[0]}
+                        fallbackColor={avatarColors[entry.rank % avatarColors.length]}
+                        size={48}
+                        shape="2xl"
+                      />
                       <div>
                         <h4 className={cn("font-black tracking-tight", entry.isMyChild ? "text-primary-700" : "text-slate-800")}>
                           {entry.user.name}

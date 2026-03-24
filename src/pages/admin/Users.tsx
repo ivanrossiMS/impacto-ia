@@ -19,6 +19,7 @@ import { useAuthStore } from '../../store/auth.store';
 import { UserImportModal } from './UserImportModal';
 import { BulkActionsModal } from './BulkActionsModal';
 import { ShieldAlert } from 'lucide-react';
+import { StudentAvatarMini } from '../../components/ui/StudentAvatarMini';
 
 // ─── Schema ────────────────────────────────────────────────────────────────
 const userSchema = z.object({
@@ -481,6 +482,16 @@ export const Users: React.FC = () => {
   const schools = useLiveQuery(() => db.schools.toArray()) || [];
   const classes = useLiveQuery(() => db.classes.toArray()) || [];
   const stats = useLiveQuery(() => db.gamificationStats.toArray()) || [];
+  const allAvatarProfiles = useLiveQuery(() => db.studentAvatarProfiles.toArray()) || [];
+  const allCatalog = useLiveQuery(() => db.avatarCatalog.toArray()) || [];
+
+  // Resolve real avatar URL from profile system (for students)
+  const getAvatarUrl = (u: any): string | null => {
+    if (u.role !== 'student') return (u as any).avatar || null;
+    const profile = allAvatarProfiles.find((p: any) => p.studentId === u.id);
+    const item = allCatalog.find((c: any) => c.id === (profile as any)?.selectedAvatarId);
+    return (item as any)?.assetUrl || (u as any).avatar || null;
+  };
 
   const filteredUsers = users.filter(u => {
     const matchesRole = activeRole === 'all' || u.role === activeRole;
@@ -607,9 +618,10 @@ export const Users: React.FC = () => {
             <table className="w-full text-left border-collapse">
                <thead>
                   <tr className="bg-slate-50/50 border-b border-slate-100 text-[10px] font-black tracking-[0.2em] text-slate-400 uppercase">
-                     <th className="p-8">Usuário</th>
-                     <th className="p-8">Moedas</th>
-                     <th className="p-8">Perfil / Acesso</th>
+                     <th className="p-8">Nome</th>
+                     <th className="p-8">Turma</th>
+                      <th className="p-8">Moeda</th>
+                     <th className="p-8">Perfil</th>
                      <th className="p-8">Unidade</th>
                      <th className="p-8">Status</th>
                      <th className="p-8 text-right">Ações</th>
@@ -620,9 +632,15 @@ export const Users: React.FC = () => {
                     <tr key={u.id} className="hover:bg-slate-50/50 transition-all group">
                        <td className="p-8">
                           <div className="flex items-center gap-5">
-                             <div className="w-14 h-14 rounded-2xl bg-slate-100 flex items-center justify-center text-slate-400 text-xl font-black border border-slate-200 overflow-hidden shadow-inner">
-                                {u.avatar ? <img src={u.avatar} className="w-full h-full object-cover" /> : u.name[0]}
-                             </div>
+                             <StudentAvatarMini
+                                studentId={u.id}
+                                fallbackInitial={u.name[0]}
+                                fallbackColor={u.role === 'student' ? 'bg-primary-500' : 'bg-slate-400'}
+                                 fallbackAvatarUrl={(u as any).avatar}
+                                size={56}
+                                shape="2xl"
+                                className="border border-slate-200 shadow-inner"
+                              />
                              <div>
                                 <div className="text-lg font-black text-slate-800 leading-tight group-hover:text-primary-600 transition-colors uppercase">{u.name}</div>
                                 <div className="space-y-1 mt-1.5">

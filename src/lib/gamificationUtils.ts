@@ -4,20 +4,33 @@ import { useGamificationStore } from '../store/gamification.store';
 
 /**
  * Gamification Utilities — IMPACTO-IA
- * Rebalanced v2: Power-curve leveling, richer rewards, streak bonuses.
+ * Rebalanced v3: Power-curve leveling (1.8 exponent), level cap 100.
  */
 
 // ─────────────────────────────────────────────────────────────────────────────
 // LEVEL CURVE  (Power Curve 1.8 — fast early, slow late)
-// Formula: XP needed to START level L = round(80 * (L-1)^1.8)
+// Formula: XP needed to reach level L = round(80 * (L-1)^1.8)
 //
-// L2  →   80 XP  │ L5  →  ~916 XP  │ L10 → ~3,637 XP
-// L20 → ~13,500  │ L30 → ~31,000   │ L50 → ~84,000
+// Active student (~730 XP/day: 1 perfect activity + login)
+// Casual student (~80 XP/day: login + a few questions)
+//
+// Level │ Total XP     │ Active    │ Casual
+// ──────┼──────────────┼───────────┼────────────
+// L 5   │   ~905 XP    │ 1.2 days  │ 11 days
+// L10   │  ~4,176 XP   │ 5.7 days  │ 52 days
+// L20   │ ~16,024 XP   │ 22 days   │ 6.7 months
+// L30   │ ~34,296 XP   │ 47 days   │ 14 months
+// L50   │ ~88,560 XP   │ 4 months  │ ~3.0 years
+// L75   │ ~186,000 XP  │ 8.5 months│ ~6.4 years
+// L100  │ ~312,240 XP  │ ~14 months│ max grinders only
 // ─────────────────────────────────────────────────────────────────────────────
+
+export const MAX_LEVEL = 100;
 
 export function getXPForLevel(level: number): number {
   if (level <= 1) return 0;
-  return Math.round(80 * Math.pow(level - 1, 1.8));
+  if (level > MAX_LEVEL) return getXPForLevel(MAX_LEVEL); // hard cap
+  return Math.round(240 * Math.pow(level - 1, 1.8));  // 3× base (was 80) — harder progression
 }
 
 export function calculateLevel(xp: number): number {
@@ -25,7 +38,7 @@ export function calculateLevel(xp: number): number {
   let level = 1;
   while (getXPForLevel(level + 1) <= xp) {
     level++;
-    if (level >= 200) break; // safety cap
+    if (level >= MAX_LEVEL) break; // cap at 100
   }
   return level;
 }

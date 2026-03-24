@@ -4,6 +4,7 @@ import { useAuthStore } from '../../store/auth.store';
 import { useAvatarStore } from '../../store/avatar.store';
 import { updateGamificationStats } from '../../lib/gamificationUtils';
 import { supabase } from '../../lib/supabase';
+import { db } from '../../lib/dexie';
 import {
   Target,
   ChevronRight,
@@ -34,6 +35,7 @@ import { getLevelProgress } from '../../lib/gamificationUtils';
 import { cn } from '../../lib/utils';
 import { incrementMissionProgress } from '../../lib/missionUtils';
 import { checkAndUnlockAchievements } from '../../lib/gameSeeder';
+import { AchievementUnlockModal, useAchievementUnlock } from '../../components/achievements/AchievementUnlockModal';
 
 
 
@@ -42,6 +44,7 @@ export const StudentDashboard: React.FC = () => {
   const navigate = useNavigate();
   const user = useAuthStore(state => state.user);
   const { profile, fetchProfile, fetchCatalog, catalog } = useAvatarStore();
+  const { firstInQueue, clearFirst, checkForNew } = useAchievementUnlock(user?.id);
   
   const [dashboardData, setDashboardData] = useState<any>({
     stats: null,
@@ -55,124 +58,235 @@ export const StudentDashboard: React.FC = () => {
   });
   const [loading, setLoading] = useState(true);
 
-  const fetchDashboardData = async () => {
+  // ── 1. Skeleton Loader ────────────────────────────────────────────────────
+  const DashboardSkeleton = () => (
+    <div className="space-y-8 animate-pulse">
+      {/* Hero skeleton */}
+      <div className="h-64 bg-slate-800 rounded-[2rem]">
+        <div className="p-10 space-y-4">
+          <div className="h-3 w-24 bg-white/10 rounded-full" />
+          <div className="h-10 w-64 bg-white/10 rounded-2xl" />
+          <div className="flex gap-3 mt-6">
+            {[80, 100, 200].map(w => (
+              <div key={w} className="h-16 rounded-[2rem] bg-white/5" style={{ width: w }} />
+            ))}
+          </div>
+        </div>
+      </div>
+      {/* Cards row */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        {[1, 2].map(i => (
+          <div key={i} className="h-64 bg-white rounded-[2.5rem] border border-slate-100 p-8 space-y-4">
+            <div className="h-6 w-40 bg-slate-100 rounded-xl" />
+            {[1, 2, 3].map(j => (
+              <div key={j} className="h-12 bg-slate-50 rounded-2xl" />
+            ))}
+          </div>
+        ))}
+      </div>
+      {/* Bottom row */}
+      <div className="grid md:grid-cols-2 gap-8">
+        {[1, 2].map(i => (
+          <div key={i} className="h-48 bg-white rounded-[2.5rem] border border-slate-100" />
+        ))}
+      </div>
+    </div>
+  );
+
+  // ── 2. Load from Dexie cache (instant) ───────────────────────────────────
+  const loadFromCache = async () => {
     if (!user) return;
-    
     try {
-      // 1. Stats
-      const { data: stats } = await supabase.from('gamification_stats').select('*').eq('id', user.id).single();
+      const [stats, liveUser] = await Promise.all([
+        db.gamificationStats.get(user.id),
+        db.users.get(user.id),
+      ]);
 
-      // 2. User & Class
-      const { data: liveUser } = await supabase.from('users').select('*').eq('id', user.id).single();
       let myClass = null;
-      if (liveUser?.classId) {
-        const { data: c } = await supabase.from('classes').select('*').eq('id', liveUser.classId).single();
-        myClass = c;
-      }
+      const liveUserAny = liveUser as any;
+      if (liveUserAny?.classId) myClass = await db.classes.get(liveUserAny.classId) ?? null;
 
-      // 3. Active Mission
+      const currentYear = new Date().getFullYear().toString();
+      const userGrade = (liveUser as any)?.grade || (myClass as any)?.grade || '';
+
+      // Mission
       let activeMission = null;
-      const { data: studentMissions } = await supabase.from('student_missions').select('*').eq('studentId', user.id).is('completedAt', null);
-      if (studentMissions && studentMissions.length > 0) {
-        const first = studentMissions[0];
-        const { data: detail } = await supabase.from('missions').select('*').eq('id', first.missionId).single();
+      const smList = await db.studentMissions.where('studentId').equals(user.id).filter((m: any) => !m.completedAt).toArray();
+      if (smList.length > 0) {
+        const first = smList[0] as any;
+        const detail = await db.missions.get(first.missionId);
         activeMission = { ...first, detail };
       }
 
-      // 4. Active Path
-      let activePath = null;
-      const userGrade = liveUser?.grade || myClass?.grade || '';
-      const currentYear = new Date().getFullYear().toString();
-      
+      // Paths
       let classPaths: any[] = [];
-      if (liveUser?.classId) {
-         const { data: cp } = await supabase.from('learning_paths').select('*').eq('classId', liveUser.classId);
-         classPaths = (cp || []).filter(p => !p.schoolYear || p.schoolYear === currentYear);
+      if (liveUserAny?.classId) {
+        classPaths = (await db.learningPaths.where('classId' as any).equals(liveUserAny.classId).toArray())
+          .filter((p: any) => !p.schoolYear || p.schoolYear === currentYear);
       }
-      const { data: gp } = await supabase.from('learning_paths').select('*').eq('grade', userGrade);
-      let generalPaths = (gp || []).filter(p => (!p.classId || p.classId === '') && (!p.schoolYear || p.schoolYear === currentYear));
-      
-      let allPathDefs = [...classPaths, ...generalPaths];
-      const { data: studentProgress } = await supabase.from('student_progress').select('*').eq('studentId', user.id).eq('status', 'in_progress');
-      
-      if (studentProgress && studentProgress.length > 0) {
-        const first = studentProgress[0];
-        const detail = allPathDefs.find(p => p.id === first.pathId); // might need fetch if not in list
-        activePath = { ...first, detail };
+      const generalPaths = (await db.learningPaths.where('grade' as any).equals(userGrade).toArray())
+        .filter((p: any) => (!p.classId || p.classId === '') && (!p.schoolYear || p.schoolYear === currentYear));
+      const allPathDefs = [...classPaths, ...generalPaths];
+
+      let activePath = null;
+      const inProgress = await db.studentProgress.where('studentId' as any).equals(user.id).filter((p: any) => p.status === 'in_progress').toArray();
+      if (inProgress.length > 0) {
+        const first = inProgress[0] as any;
+        activePath = { ...first, detail: allPathDefs.find(p => p.id === first.pathId) };
       } else if (allPathDefs.length > 0) {
-        activePath = { 
-          id: 'none', studentId: user.id, pathId: allPathDefs[0].id, 
-          completedStepIds: [], status: 'not_started', startedAt: '',
-          detail: allPathDefs[0]
-        };
+        activePath = { id: 'none', studentId: user.id, pathId: allPathDefs[0].id, completedStepIds: [], status: 'not_started', startedAt: '', detail: allPathDefs[0] };
       }
 
-      // 5. Achievements
-      const { data: achievDefs } = await supabase.from('achievements').select('*');
-      const { data: rawAch } = await supabase.from('student_achievements').select('*').eq('studentId', user.id);
-      const achievements = (rawAch || []).map(a => ({ ...a, detail: (achievDefs || []).find(d => d.id === a.achievementId) }));
+      // Achievements
+      const [achievDefs, rawAch] = await Promise.all([
+        db.achievements.toArray(),
+        db.studentAchievements.where('studentId' as any).equals(user.id).toArray(),
+      ]);
+      const achievements = rawAch.map((a: any) => ({ ...a, detail: achievDefs.find(d => d.id === a.achievementId) }));
 
-      // 6. Activities
+      // Activities
       let availableActivities: any[] = [];
-      if (liveUser?.classId) {
-        const { data: classActivities } = await supabase.from('activities').select('*').eq('classId', liveUser.classId);
-        const { data: results } = await supabase.from('student_activity_results').select('*').eq('studentId', user.id);
-        
-        availableActivities = (classActivities || []).map(act => {
-          const result = (results || []).find(r => r.activityId === act.id);
+      if (liveUserAny?.classId) {
+        const [classActivities, results] = await Promise.all([
+          db.activities.where('classId' as any).equals(liveUserAny.classId).toArray(),
+          db.studentActivityResults.where('studentId' as any).equals(user.id).toArray(),
+        ]);
+        availableActivities = (classActivities as any[]).map(act => {
+          const result = (results as any[]).find(r => r.activityId === act.id);
           return { ...act, status: result ? 'Concluída' : 'Pendente' };
         }).sort((a, b) => {
-          // Pending first, then sorted by newest
           if (a.status === 'Pendente' && b.status !== 'Pendente') return -1;
           if (a.status !== 'Pendente' && b.status === 'Pendente') return 1;
           return b.id.localeCompare(a.id);
         });
       }
 
-      // 7. Duels
+      // Duels (basic, no server round-trip for opponent names)
+      const [d1, d2] = await Promise.all([
+        db.duels.where('challengerId' as any).equals(user.id).toArray(),
+        db.duels.where('challengedId' as any).equals(user.id).toArray(),
+      ]);
+      const allDuels = [...(d1 as any[]), ...(d2 as any[])]
+        .sort((a, b) => {
+          const aPend = a.status !== 'completed', bPend = b.status !== 'completed';
+          if (aPend && !bPend) return -1; if (!aPend && bPend) return 1;
+          return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+        })
+        .slice(0, 3)
+        .map((d: any) => {
+          let outcome = 'Pendente';
+          if (d.status === 'completed') {
+            outcome = d.winnerId === user.id ? 'Vitória' : d.winnerId === 'draw' ? 'Empate' : 'Derrota';
+          }
+          return { ...d, opponentName: 'Oponente', opponentClass: '', outcome,
+            myScore: d.challengerId === user.id ? d.challengerScore : d.challengedScore,
+            opScore: d.challengerId === user.id ? d.challengedScore : d.challengerScore };
+        });
+
+      // Only update state if we got meaningful data
+      if (stats || liveUser) {
+        setDashboardData({ stats: stats as any, liveUser: liveUser as any, myClass, activeMission, activePath, achievements, availableActivities, duelData: { recent: allDuels } });
+        setLoading(false); // Instant — no spinner!
+      }
+    } catch (err) {
+      console.warn('[Dashboard] Dexie cache read error:', err);
+    }
+  };
+
+  // ── 3. Background refresh from Supabase (enriches data) ──────────────────
+  const refreshFromNetwork = async () => {
+    if (!user) return;
+    try {
+      const { data: stats } = await supabase.from('gamification_stats').select('*').eq('id', user.id).single();
+      const { data: liveUser } = await supabase.from('users').select('*').eq('id', user.id).single();
+      let myClass = null;
+      if (liveUser?.classId) {
+        const { data: c } = await supabase.from('classes').select('*').eq('id', liveUser.classId).single();
+        myClass = c;
+        if (c) await db.classes.put(c);
+      }
+      if (stats) await db.gamificationStats.put(stats as any);
+      if (liveUser) await db.users.put(liveUser as any);
+
+      const currentYear = new Date().getFullYear().toString();
+      const userGrade = liveUser?.grade || (myClass as any)?.grade || '';
+
+      let activeMission = null;
+      const { data: studentMissions } = await supabase.from('student_missions').select('*').eq('studentId', user.id).is('completedAt', null);
+      if (studentMissions?.length) {
+        const first = studentMissions[0];
+        const { data: detail } = await supabase.from('missions').select('*').eq('id', first.missionId).single();
+        activeMission = { ...first, detail };
+        if (detail) await db.missions.put(detail as any);
+      }
+
+      let classPaths: any[] = [], generalPaths: any[] = [];
+      if (liveUser?.classId) {
+        const { data: cp } = await supabase.from('learning_paths').select('*').eq('classId', liveUser.classId);
+        classPaths = (cp || []).filter(p => !p.schoolYear || p.schoolYear === currentYear);
+        for (const p of classPaths) await db.learningPaths.put(p as any);
+      }
+      const { data: gp } = await supabase.from('learning_paths').select('*').eq('grade', userGrade);
+      generalPaths = (gp || []).filter(p => (!p.classId || p.classId === '') && (!p.schoolYear || p.schoolYear === currentYear));
+      for (const p of generalPaths) await db.learningPaths.put(p as any);
+      const allPathDefs = [...classPaths, ...generalPaths];
+
+      let activePath = null;
+      const { data: studentProgress } = await supabase.from('student_progress').select('*').eq('studentId', user.id).eq('status', 'in_progress');
+      if (studentProgress?.length) {
+        const first = studentProgress[0];
+        activePath = { ...first, detail: allPathDefs.find(p => p.id === first.pathId) };
+      } else if (allPathDefs.length > 0) {
+        activePath = { id: 'none', studentId: user.id, pathId: allPathDefs[0].id, completedStepIds: [], status: 'not_started', startedAt: '', detail: allPathDefs[0] };
+      }
+
+      const { data: achievDefs } = await supabase.from('achievements').select('*');
+      const { data: rawAch } = await supabase.from('student_achievements').select('*').eq('studentId', user.id);
+      const achievements = (rawAch || []).map(a => ({ ...a, detail: (achievDefs || []).find(d => d.id === a.achievementId) }));
+
+      let availableActivities: any[] = [];
+      if (liveUser?.classId) {
+        const { data: classActivities } = await supabase.from('activities').select('*').eq('classId', liveUser.classId);
+        const { data: results } = await supabase.from('student_activity_results').select('*').eq('studentId', user.id);
+        availableActivities = (classActivities || []).map(act => {
+          const result = (results || []).find(r => r.activityId === act.id);
+          return { ...act, status: result ? 'Concluída' : 'Pendente' };
+        }).sort((a, b) => {
+          if (a.status === 'Pendente' && b.status !== 'Pendente') return -1;
+          if (a.status !== 'Pendente' && b.status === 'Pendente') return 1;
+          return b.id.localeCompare(a.id);
+        });
+      }
+
       const { data: d1 } = await supabase.from('duels').select('*').eq('challengerId', user.id);
       const { data: d2 } = await supabase.from('duels').select('*').eq('challengedId', user.id);
-      let allDuels = [...(d1 || []), ...(d2 || [])].sort((a, b) => {
-        // Pending/in-progress duels first
-        const aPending = a.status !== 'completed';
-        const bPending = b.status !== 'completed';
-        if (aPending && !bPending) return -1;
-        if (!aPending && bPending) return 1;
-        return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
-      });
-      
+      let allDuels = [...(d1 || []), ...(d2 || [])]
+        .sort((a, b) => {
+          const aPend = a.status !== 'completed', bPend = b.status !== 'completed';
+          if (aPend && !bPend) return -1; if (!aPend && bPend) return 1;
+          return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+        });
       const recent = await Promise.all(allDuels.slice(0, 3).map(async (d: any) => {
-        const opponentId = d.challengerId === user.id ? d.challengedId : d.challengerId;
-        const { data: opp } = await supabase.from('users').select('name, classId').eq('id', opponentId).single();
+        const oppId = d.challengerId === user.id ? d.challengedId : d.challengerId;
+        const oppCached = await db.users.get(oppId);
+        let oppName = (oppCached as any)?.name || 'Oponente';
         let opponentClass = '';
-        if (opp?.classId) {
-          const { data: cls } = await supabase.from('classes').select('name').eq('id', opp.classId).single();
-          opponentClass = cls?.name || '';
-        }
-        
-        let outcome = 'Pendente';
-        if (d.status === 'completed') {
-          if (d.winnerId === user.id) outcome = 'Vitória';
-          else if (d.winnerId === 'draw') outcome = 'Empate';
-          else outcome = 'Derrota';
-        }
-        const myScore = d.challengerId === user.id ? d.challengerScore : d.challengedScore;
-        const opScore = d.challengerId === user.id ? d.challengedScore : d.challengerScore;
-
-        return { 
-          ...d, 
-          opponentName: opp?.name?.split(' ').slice(0, 2).join(' ') || 'Oponente',
-          opponentClass,
-          outcome, myScore, opScore
-        };
+        if (!oppCached) {
+          const { data: opp } = await supabase.from('users').select('name, classId').eq('id', oppId).single();
+          oppName = opp?.name?.split(' ').slice(0, 2).join(' ') || 'Oponente';
+          if (opp?.classId) { const { data: cls } = await supabase.from('classes').select('name').eq('id', opp.classId).single(); opponentClass = cls?.name || ''; }
+        } else { opponentClass = (myClass as any)?.name || ''; }
+        let outcome = d.status === 'completed' ? (d.winnerId === user.id ? 'Vitória' : d.winnerId === 'draw' ? 'Empate' : 'Derrota') : 'Pendente';
+        return { ...d, opponentName: oppName, opponentClass, outcome,
+          myScore: d.challengerId === user.id ? d.challengerScore : d.challengedScore,
+          opScore: d.challengerId === user.id ? d.challengedScore : d.challengerScore };
       }));
 
-      setDashboardData({
-        stats, liveUser, myClass, activeMission, activePath,
-        achievements, availableActivities, duelData: { recent }
-      });
+      setDashboardData({ stats, liveUser, myClass, activeMission, activePath, achievements, availableActivities, duelData: { recent } });
+      setLoading(false);
     } catch (e) {
-       console.error("Dashboard Supabase fetch error:", e);
+      console.error('[Dashboard] Network refresh error:', e);
+      setLoading(false);
     }
   };
 
@@ -261,44 +375,34 @@ export const StudentDashboard: React.FC = () => {
   useEffect(() => {
     if (!user) return;
     const init = async () => {
+      // Phase 1: Instant render from local cache
       await fetchProfile(user.id);
       await fetchCatalog();
-      try {
-        await fetchDashboardData();
-        await updateGamificationStats(user.id, {}); // Updates streak if needed
-        await checkAndUnlockAchievements(user.id);
-        await incrementMissionProgress(user.id, 'login', 1);
-      } catch (error) {
-        console.error('Error updating gamification stats:', error);
-      }
-      setLoading(false);
+      await loadFromCache();
+
+      // Phase 2: Background network sync (non-blocking)
+      refreshFromNetwork().then(async () => {
+        try {
+          await updateGamificationStats(user.id, {});
+          await checkAndUnlockAchievements(user.id);
+          await checkForNew();
+          await incrementMissionProgress(user.id, 'login', 1);
+        } catch (err) {
+          console.warn('[Dashboard] Gamification update error:', err);
+        }
+      });
     };
     init();
-    
+
     const channel = supabase.channel('dashboard_updates')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'gamification_stats' }, () => {
-        fetchDashboardData();
-      })
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'student_missions' }, () => {
-        fetchDashboardData();
-      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'gamification_stats' }, () => refreshFromNetwork())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'student_missions' }, () => refreshFromNetwork())
       .subscribe();
-      
-    return () => {
-      supabase.removeChannel(channel);
-    };
+
+    return () => { supabase.removeChannel(channel); };
   }, [user?.id, fetchProfile, fetchCatalog]);
 
-  if (loading) {
-    return (
-      <div className="flex justify-center items-center h-screen">
-        <div className="relative">
-          <div className="w-16 h-16 border-4 border-primary-100 border-t-primary-500 rounded-full animate-spin"></div>
-          <Sparkles className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 text-special-500" size={24} />
-        </div>
-      </div>
-    );
-  }
+  if (loading) return <DashboardSkeleton />;
 
   // Safe fallback values - never block if stats is null
   const safeStats = stats ?? { level: 1, xp: 0, coins: 0, streak: 0, lastStudyDate: '' };
@@ -321,6 +425,13 @@ export const StudentDashboard: React.FC = () => {
 
   return (
     <div className="space-y-10 animate-in fade-in slide-in-from-bottom-6 duration-700">
+      {/* Achievement Unlock Celebration */}
+      {firstInQueue && (
+        <AchievementUnlockModal
+          achievement={firstInQueue}
+          onClose={clearFirst}
+        />
+      )}
 
       {/* Hero Section - Modern & Compact */}
       <section className="relative group overflow-hidden rounded-[2rem] shadow-2xl border border-white/10">

@@ -19,6 +19,7 @@ import * as z from 'zod';
 import { cn } from '../../lib/utils';
 import { motion, AnimatePresence } from 'framer-motion';
 import type { StudentActivityResult } from '../../types/gamification';
+import { createBulkNotifications } from '../../lib/notificationUtils';
 
 // ─── Types ─────────────────────────────────────────────────────────────────────
 const TYPE_LABELS: Record<string, string> = {
@@ -1023,7 +1024,7 @@ const CreateActivityModal: React.FC<{
 }> = ({ teacherId, classIds, onClose, onCreated }) => {
   const classesData = useSupabaseQuery<any>('classes');
   const classes = (classesData || []).filter((c: any) => classIds.includes(c.id));
-
+  const { user } = useAuthStore();
   const navigate = useNavigate();
 
   const { register, handleSubmit, watch, formState: { errors, isSubmitting } } = useForm<ActivityFormData>({
@@ -1044,6 +1045,19 @@ const CreateActivityModal: React.FC<{
       questions: [], aiAssisted: false, noExitAllowed, teacherId, createdAt: now,
     };
     await saveActivityToStorage(newActivity);
+
+    // Notify students in the linked class
+    if (data.classId && selectedClass?.studentIds?.length > 0) {
+      await createBulkNotifications(
+        selectedClass.studentIds,
+        'student',
+        'Nova Atividade Publicada! 📝',
+        `${user?.name || 'Seu professor'} publicou uma nova atividade: "${data.title}".`,
+        'info',
+        'high',
+        '/student/activities'
+      );
+    }
     toast.success(`Atividade "${data.title}" criada!`);
     onCreated();
     onClose();

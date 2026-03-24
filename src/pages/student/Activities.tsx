@@ -15,6 +15,7 @@ import { REWARDS, updateGamificationStats } from '../../lib/gamificationUtils';
 import { motion, AnimatePresence } from 'framer-motion';
 import { decodeActivityMeta } from '../../lib/activityStorage';
 import { useSupabaseQuery } from '../../hooks/useSupabase';
+import { AnswerFeedbackOverlay, type FeedbackType } from '../../components/ui/AnswerFeedbackOverlay';
 
 // ── Subject configuration ───────────────────────────────────────────────────
 const SUBJECT_CONFIG: Record<string, { emoji: string; gradient: string; badge: string; light: string; accent: string }> = {
@@ -77,6 +78,9 @@ export const Activities: React.FC = () => {
   const [startedAt, setStartedAt] = useState<number | null>(null);
   const [viewingResult, setViewingResult] = useState<{ activity: any; result: any } | null>(null);
   const [selectedSubject, setSelectedSubject] = useState<string | null>(null);
+  // ── Answer feedback overlay ───────────────────────────────────────────────
+  const [feedbackState, setFeedbackState] = useState<{ type: FeedbackType; correctText?: string; explanation?: string } | null>(null);
+  const pendingNextRef = React.useRef<(() => void) | null>(null);
 
   // ── Reactive data via Dexie/SyncEngine — auto-updates without any manual refresh ──
   const allUsers              = useSupabaseQuery<any>('users');
@@ -180,7 +184,12 @@ export const Activities: React.FC = () => {
     return () => clearInterval(timer);
   }, [activeActivity, timeLeft, isFinished]);
 
-  const handleTimeout = async () => { toast.error('O tempo acabou!'); handleGiveUp(); };
+  const handleTimeout = async () => {
+    const q = activeActivity?.questions?.[currentQuestionIndex];
+    const correctOpt = q?.options?.find((o: any) => o.isCorrect);
+    setFeedbackState({ type: 'timeout', correctText: correctOpt?.text });
+    pendingNextRef.current = () => handleGiveUp();
+  };
 
   // ── Persistent timer helpers ─────────────────────────────────────────────────
   const timerKeyFor = (activityId: string) => `impacto_timer_start_${activityId}`;
@@ -235,8 +244,11 @@ export const Activities: React.FC = () => {
     const correct = currentQuestion.options?.find((o: any) => o.id === selectedAnswer)?.isCorrect;
     setAnswered(true);
     setResults(prev => [...prev, { questionId: currentQuestion.id, correct: !!correct, selectedOptionId: selectedAnswer }]);
-    if (correct) toast.success('Resposta correta! 🎉');
-    else toast.error('Não foi dessa vez. Continue!');
+    setFeedbackState({
+      type: correct ? 'correct' : 'wrong',
+      explanation: correct ? currentQuestion.explanation : 'Tente outra vez na próxima!',
+    });
+    pendingNextRef.current = () => handleNext();
   };
 
   const handleNext = async () => {
@@ -1152,6 +1164,19 @@ export const Activities: React.FC = () => {
           </motion.div>
         )}
       </AnimatePresence>
+
+      {/* ── ANSWER FEEDBACK OVERLAY ─────────────────────────────────────────── */}
+      <AnswerFeedbackOverlay
+        feedback={feedbackState?.type ?? null}
+        correctAnswerText={feedbackState?.correctText}
+        explanation={feedbackState?.explanation}
+        onDismiss={() => {
+          const next = pendingNextRef.current;
+          pendingNextRef.current = null;
+          setFeedbackState(null);
+          if (next) next();
+        }}
+      />
     </div>
   );
 };

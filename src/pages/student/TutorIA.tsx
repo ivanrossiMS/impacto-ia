@@ -1,10 +1,10 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { 
   Bot, BookOpen, Repeat, 
-  Clock, Flame, BrainCircuit,
-  Volume2, Paperclip, ChevronRight, Settings2,
+  Clock, Flame, BrainCircuit, Volume2,
+  Paperclip, ChevronRight, Settings2,
   Trophy, Lightbulb, Users, MessageSquare, Search,
-  Bookmark, BookMarked, X
+  Bookmark, BookMarked, X, Mic, MicOff, ImageIcon
 } from 'lucide-react';
 import { useAuthStore } from '../../store/auth.store';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -174,6 +174,80 @@ export const TutorIA: React.FC = () => {
 
   const [turma, setTurma] = useState<{ name: string; grade: string } | null>(null);
 
+  // ── File attachment state ──
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [attachedFile, setAttachedFile] = useState<{
+    name: string;
+    type: string;
+    base64: string;  // raw base64 WITHOUT the data-URL prefix
+    preview?: string; // object URL or data-URL for image preview
+  } | null>(null);
+
+  // ── Voice / Microphone state ──
+  const [isListening, setIsListening] = useState(false);
+  const recognitionRef = useRef<any>(null);
+
+  const stopListening = useCallback(() => {
+    recognitionRef.current?.stop();
+    setIsListening(false);
+  }, []);
+
+  const startListening = useCallback(() => {
+    const SpeechRecognition =
+      (window as any).SpeechRecognition ||
+      (window as any).webkitSpeechRecognition;
+    if (!SpeechRecognition) {
+      toast.error('Seu navegador não suporta reconhecimento de voz. Use Chrome ou Edge.');
+      return;
+    }
+    const rec = new SpeechRecognition();
+    rec.lang = 'pt-BR';
+    rec.interimResults = true;
+    rec.continuous = false;
+    rec.onresult = (e: any) => {
+      const transcript = Array.from(e.results)
+        .map((r: any) => r[0].transcript)
+        .join('');
+      setInputValue(transcript);
+    };
+    rec.onerror = () => { setIsListening(false); };
+    rec.onend = () => { setIsListening(false); };
+    recognitionRef.current = rec;
+    rec.start();
+    setIsListening(true);
+  }, []);
+
+  const handleMicToggle = useCallback(() => {
+    if (isListening) { stopListening(); } else { startListening(); }
+  }, [isListening, startListening, stopListening]);
+
+  // ── File picker ──
+  const handleFileChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    // Only accept images (for multimodal Gemini) and plain text
+    const isImage = file.type.startsWith('image/');
+    const isText  = file.type.startsWith('text/');
+    if (!isImage && !isText) {
+      toast.error('Por enquanto só imagens e arquivos de texto são suportados.');
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      const dataUrl = reader.result as string;
+      const base64 = dataUrl.split(',')[1]; // strip data:...;base64,
+      setAttachedFile({
+        name: file.name,
+        type: file.type,
+        base64,
+        preview: isImage ? dataUrl : undefined,
+      });
+    };
+    reader.readAsDataURL(file);
+    // Reset the input so the same file can be re-selected
+    e.target.value = '';
+  }, []);
+
   // ── Save current session to localStorage whenever messages change ──
   useEffect(() => {
     if (user?.id && messages.length > 0) {
@@ -225,15 +299,19 @@ export const TutorIA: React.FC = () => {
     if (!inputValue.trim() || isTyping) return;
 
     const userText = inputValue.trim();
+    const fileSnap = attachedFile; // capture before clearing
     const newUserMessage: Message = {
       id: Date.now().toString(),
       sender: 'user',
-      text: userText,
+      text: fileSnap
+        ? `${userText}\n\n📎 *Arquivo anexado: ${fileSnap.name}*`
+        : userText,
       timestamp: new Date().toISOString(),
     };
 
     setMessages(prev => [...prev, newUserMessage]);
     setInputValue('');
+    setAttachedFile(null);
     setIsTyping(true);
 
     if (user) incrementMissionProgress(user.id, 'tutor_question', 1);
@@ -244,6 +322,11 @@ export const TutorIA: React.FC = () => {
         userName: user?.name || 'Estudante',
         grade: turma?.grade || (user as any)?.grade || undefined,
         userId: user?.id,
+        // Pass image data if a file was attached
+        ...(fileSnap?.type.startsWith('image/') ? {
+          imageBase64: fileSnap.base64,
+          imageMimeType: fileSnap.type,
+        } : {}),
       });
 
       const aiResponse: Message = {
@@ -621,8 +704,42 @@ export const TutorIA: React.FC = () => {
 
             <div className="relative group z-10">
               <div className="absolute -inset-1 bg-gradient-to-r from-primary-500 to-indigo-600 rounded-[2.5rem] blur opacity-15 group-focus-within:opacity-30 transition-opacity"></div>
+              {/* Hidden file input */}
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="image/*,text/*"
+                className="hidden"
+                onChange={handleFileChange}
+              />
+
+              {/* Attached file preview */}
+              {attachedFile && (
+                <div className="px-4 pt-3 pb-1">
+                  <div className="inline-flex items-center gap-2 bg-primary-50 border border-primary-200 text-primary-700 text-xs font-bold px-3 py-1.5 rounded-xl">
+                    {attachedFile.preview
+                      ? <img src={attachedFile.preview} alt="" className="w-6 h-6 rounded object-cover" />
+                      : <ImageIcon size={14} />}
+                    <span className="truncate max-w-[180px]">{attachedFile.name}</span>
+                    <button
+                      onClick={() => setAttachedFile(null)}
+                      className="ml-1 hover:text-red-500 transition-colors"
+                    >
+                      <X size={12} />
+                    </button>
+                  </div>
+                </div>
+              )}
+
               <div className="relative flex items-end gap-3 rounded-[2.2rem] bg-white border border-slate-200 p-3 shadow-2xl shadow-indigo-500/5 ring-4 ring-transparent focus-within:ring-primary-500/5 transition-all">
-                <button className="p-3.5 mb-1.5 ml-1.5 text-slate-300 hover:text-primary-500 transition-colors hidden md:block"><Paperclip size={20} /></button>
+                {/* Paperclip — file upload */}
+                <button
+                  onClick={() => fileInputRef.current?.click()}
+                  className="p-3.5 mb-1.5 ml-1.5 text-slate-300 hover:text-primary-500 transition-colors hidden md:block"
+                  title="Anexar imagem"
+                >
+                  <Paperclip size={20} />
+                </button>
                 <textarea
                   value={inputValue}
                   onChange={(e) => setInputValue(e.target.value)}
@@ -632,7 +749,19 @@ export const TutorIA: React.FC = () => {
                   rows={1}
                 />
                 <div className="flex items-center gap-2 mb-1.5 mr-1.5">
-                  <button className="p-3.5 text-slate-300 hover:text-special-500 transition-colors hidden md:block"><Volume2 size={20} /></button>
+                  {/* Microphone — voice input */}
+                  <button
+                    onClick={handleMicToggle}
+                    className={cn(
+                      'p-3.5 transition-colors hidden md:flex items-center justify-center rounded-2xl',
+                      isListening
+                        ? 'text-white bg-red-500 shadow-lg shadow-red-500/30 animate-pulse'
+                        : 'text-slate-300 hover:text-special-500'
+                    )}
+                    title={isListening ? 'Parar gravação' : 'Falar pergunta'}
+                  >
+                    {isListening ? <MicOff size={20} /> : <Mic size={20} />}
+                  </button>
                   <button
                     onClick={handleSend}
                     disabled={!inputValue.trim() || isTyping}

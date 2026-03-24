@@ -39,13 +39,40 @@ class AIClientError extends Error {
 export async function callAI<T = string>(options: AICallOptions): Promise<AIResponse<T>> {
   const { feature, ...rest } = options;
 
-  const response = await fetch(AI_PROXY_URL, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ feature, ...rest }),
-  });
+  // 55s client-side timeout — longer than the function's own 50s to let the
+  // function return a proper JSON error before the browser cuts the connection.
+  const controller = new AbortController();
+  const clientTimeout = setTimeout(() => controller.abort(), 55_000);
 
-  const data = await response.json();
+  let response: Response;
+  try {
+    response = await fetch(AI_PROXY_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ feature, ...rest }),
+      signal: controller.signal,
+    });
+  } catch (err: any) {
+    clearTimeout(clientTimeout);
+    if (err.name === 'AbortError') throw new AIClientError('A requisição de IA expirou. Tente novamente.', 504);
+    throw new AIClientError(err.message || 'Falha na conexão com o serviço de IA.');
+  }
+  clearTimeout(clientTimeout);
+
+  // Read body as text first — if the function crashes/times out it may return
+  // plain text ("TimeoutError", etc.) instead of JSON.
+  const rawText = await response.text();
+  let data: any;
+  try {
+    data = JSON.parse(rawText);
+  } catch {
+    // Non-JSON body = the Netlify function itself crashed or timed out.
+    console.error(`[AI Client] Non-JSON response (HTTP ${response.status}):`, rawText.slice(0, 200));
+    throw new AIClientError(
+      `Serviço de IA indisponível (${response.status}). Tente novamente em instantes.`,
+      response.status
+    );
+  }
 
   if (!response.ok) {
     const message = data?.error || `AI call failed with status ${response.status}`;
@@ -59,12 +86,14 @@ export async function callAI<T = string>(options: AICallOptions): Promise<AIResp
 // Feature-specific helpers (typed wrappers)
 // ============================================================
 
-/** Tutor Chat — student asking a question */
+/** Tutor Chat — student asking a question, optionally with an attached image */
 export async function callTutorChat(params: {
   message: string;
   userName: string;
   grade?: string;
   userId?: string;
+  imageBase64?: string;
+  imageMimeType?: string;
 }): Promise<string> {
   const res = await callAI<string>({ feature: "tutor-chat", ...params });
   return res.result;
@@ -130,7 +159,11 @@ export async function callGenerateDuel(params: {
   grade?: string;
   userId?: string;
 }): Promise<{ questions: any[] }> {
-  const res = await callAI<{ questions: any[] }>({ feature: "generate-duel", ...params });
+  const res = await callAI<{ questions: any[] }>({
+    feature: "generate-duel",
+    seed: Date.now(),  // unique per duel — forces varied question selection
+    ...params,
+  });
   return res.result;
 }
 

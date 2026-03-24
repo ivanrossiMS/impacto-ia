@@ -9,20 +9,37 @@ import {
   MessageCircle,
   Bot,
   Loader2,
-  ChevronRight
+  ChevronRight,
+  User,
+  Zap,
+  Flame,
+  AlertCircle
 } from 'lucide-react';
 import { Card } from '../../components/ui/Card';
 import { Badge } from '../../components/ui/Badge';
 import { cn } from '../../lib/utils';
 import { toast } from 'sonner';
-
-import { callParentTips, callParentQA } from '../../ai/client';
+import { useAuthStore } from '../../store/auth.store';
+import type { Guardian } from '../../types/user';
+import { supabase } from '../../lib/supabase';
+import { callParentQA } from '../../ai/client';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 
 const ARTICLE_STORAGE_KEY = 'guardian_ai_article';
 const ARTICLE_DATE_KEY = 'guardian_ai_article_date';
 const FIVE_DAYS_MS = 5 * 24 * 60 * 60 * 1000;
+
+interface ChildContext {
+  name: string;
+  grade?: string;
+  level: number;
+  xp: number;
+  streak: number;
+  lastStudyDate?: string;
+  weakSubjects: string[];
+  daysInactive: number;
+}
 
 interface StaticArticle {
   category: string;
@@ -62,6 +79,7 @@ interface AIArticle {
 }
 
 export const ParentTips: React.FC = () => {
+  const user = useAuthStore(state => state.user) as Guardian;
   const [activeCategory, setActiveCategory] = useState<string>('Todos');
   const [aiArticle, setAiArticle] = useState<AIArticle | null>(null);
   const [isLoadingArticle, setIsLoadingArticle] = useState(false);
@@ -69,7 +87,79 @@ export const ParentTips: React.FC = () => {
   const [customContent, setCustomContent] = useState('');
   const [isLoadingCustom, setIsLoadingCustom] = useState(false);
   const [selectedArticle, setSelectedArticle] = useState<StaticArticle | null>(null);
+  const [childCtx, setChildCtx] = useState<ChildContext | null>(null);
   const customRef = useRef<HTMLDivElement>(null);
+
+  // ── Fetch real child context ────────────────────────────────────────────────
+  useEffect(() => {
+    const fetchChildContext = async () => {
+      if (!user?.studentIds?.length) return;
+      const primaryId = user.studentIds[0];
+
+      try {
+        const [userRes, statsRes, resultsRes] = await Promise.all([
+          supabase.from('users').select('name, grade').eq('id', primaryId).single(),
+          supabase.from('gamification_stats').select('xp, streak, level, lastStudyDate').eq('id', primaryId).single(),
+          supabase.from('activity_results').select('subject, score').eq('studentId', primaryId).order('createdAt', { ascending: false }).limit(20),
+        ]);
+
+        const childUser = userRes.data;
+        const stats = statsRes.data;
+        const results = resultsRes.data || [];
+
+        // Calculate weak subjects (< 60% avg score)
+        const bySubject: Record<string, number[]> = {};
+        results.forEach((r: any) => {
+          if (r.subject) {
+            bySubject[r.subject] = bySubject[r.subject] || [];
+            bySubject[r.subject].push(r.score ?? 0);
+          }
+        });
+        const weakSubjects = Object.entries(bySubject)
+          .filter(([, scores]) => {
+            const avg = scores.reduce((a, b) => a + b, 0) / scores.length;
+            return avg < 60;
+          })
+          .map(([sub]) => sub)
+          .slice(0, 3);
+
+        // Days inactive
+        const lastStudy = stats?.lastStudyDate ? new Date(stats.lastStudyDate) : null;
+        const daysInactive = lastStudy
+          ? Math.floor((Date.now() - lastStudy.getTime()) / (24 * 60 * 60 * 1000))
+          : 999;
+
+        setChildCtx({
+          name: childUser?.name?.split(' ')[0] || 'seu filho',
+          grade: childUser?.grade,
+          level: stats?.level || 1,
+          xp: stats?.xp || 0,
+          streak: stats?.streak || 0,
+          lastStudyDate: stats?.lastStudyDate,
+          weakSubjects,
+          daysInactive,
+        });
+      } catch { /* silent */ }
+    };
+    fetchChildContext();
+  }, [user?.studentIds]);
+
+  // ── Generate contextual AI article ─────────────────────────────────────────
+  const buildContextualPrompt = (topic: string, ctx: ChildContext | null): string => {
+    if (!ctx) {
+      return `Você é um coach parental educacional. Escreva um artigo útil e inspirador para responsáveis sobre: "${topic}". Use linguagem acolhedora, prática e motivadora. Máximo 250 palavras. Formate em markdown.`;
+    }
+    const contextParts = [
+      `O filho se chama ${ctx.name}`,
+      ctx.grade ? `está no ${ctx.grade}` : '',
+      `é Nível ${ctx.level} na plataforma com ${ctx.xp} XP`,
+      ctx.streak > 0 ? `tem sequência de ${ctx.streak} dia${ctx.streak !== 1 ? 's' : ''}` : 'ainda não tem sequência de estudos',
+      ctx.daysInactive === 0 ? 'estudou hoje' : ctx.daysInactive < 3 ? `estudou há ${ctx.daysInactive} dia${ctx.daysInactive !== 1 ? 's' : ''}` : `está ${ctx.daysInactive} dias sem estudar`,
+      ctx.weakSubjects.length > 0 ? `tem dificuldades em: ${ctx.weakSubjects.join(', ')}` : '',
+    ].filter(Boolean).join(', ');
+    
+    return `Você é um coach parental educacional. ${contextParts}. Com ESSE contexto específico em mente, escreva um artigo personalizado e motivador para o responsável sobre: "${topic}". Mencione o nome ${ctx.name} de forma natural. Use linguagem acolhedora e prática. Máximo 280 palavras. Formate em markdown.`;
+  };
 
   // Load or generate AI article
   useEffect(() => {
@@ -92,12 +182,19 @@ export const ParentTips: React.FC = () => {
         'como incentivar a curiosidade intelectual em crianças',
         'a importância do sono para o aprendizado infantil',
         'como lidar com a frustração e o erro de forma positiva',
-        'comunicação não-violenta com filhos adolescentes',
+        'comunicação não-violenta com filhos que estudam online',
         'atividade física e desempenho escolar: a conexão científica',
       ];
       try {
         const topic = TOPICS[Math.floor(Math.random() * TOPICS.length)];
-        const content = await callParentTips({ topic });
+        const prompt = buildContextualPrompt(topic, childCtx);
+        const res = await fetch('/.netlify/functions/ai-proxy', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ prompt, intent: 'parent_tips' }),
+        });
+        const { text } = await res.json();
+        const content = text || '';
         localStorage.setItem(ARTICLE_STORAGE_KEY, content);
         localStorage.setItem(ARTICLE_DATE_KEY, now.toString());
         setAiArticle({ content, generatedAt: now.toString() });
@@ -121,17 +218,24 @@ export const ParentTips: React.FC = () => {
       'como incentivar a curiosidade intelectual em crianças',
       'a importância do sono para o aprendizado infantil',
       'como lidar com a frustração e o erro de forma positiva',
-      'comunicação não-violenta com filhos adolescentes',
+      'comunicação não-violenta com filhos que estudam online',
       'atividade física e desempenho escolar: a conexão científica',
     ];
     try {
       const topic = TOPICS[Math.floor(Math.random() * TOPICS.length)];
-      const content = await callParentTips({ topic });
+      const prompt = buildContextualPrompt(topic, childCtx);
+      const res = await fetch('/.netlify/functions/ai-proxy', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prompt, intent: 'parent_tips' }),
+      });
+      const { text } = await res.json();
+      const content = text || '';
       const now = Date.now();
       localStorage.setItem(ARTICLE_STORAGE_KEY, content);
       localStorage.setItem(ARTICLE_DATE_KEY, now.toString());
       setAiArticle({ content, generatedAt: now.toString() });
-      toast.success('Novo artigo gerado pelo Gemini!');
+      toast.success(childCtx ? `Novo artigo personalizado para ${childCtx.name}!` : 'Novo artigo gerado!');
     } catch {
       toast.error('Não foi possível gerar o artigo. Verifique a conexão.');
     } finally {
@@ -174,9 +278,51 @@ export const ParentTips: React.FC = () => {
             <span className="text-xs font-black uppercase tracking-[0.2em]">Guia para a Família</span>
           </div>
           <h1 className="text-4xl font-black text-slate-800 tracking-tight leading-none">Dicas e <span className="text-special-600">Estratégias</span></h1>
-          <p className="text-slate-500 font-medium">Artigos gerados pela IA e curados por especialistas para ajudar no desenvolvimento do seu filho.</p>
+          <p className="text-slate-500 font-medium">
+            {childCtx
+              ? `Artigos e dicas personalizados para acompanhar ${childCtx.name} na jornada de aprendizado.`
+              : 'Artigos gerados pela IA e curados por especialistas para ajudar no desenvolvimento do seu filho.'
+            }
+          </p>
         </div>
       </header>
+
+      {/* Child Context Banner */}
+      {childCtx && (
+        <div className="bg-gradient-to-r from-primary-50 to-special-50 border border-primary-100 rounded-[2rem] p-5 flex flex-wrap items-center gap-4">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 bg-primary-100 rounded-xl flex items-center justify-center text-primary-600">
+              <User size={20} />
+            </div>
+            <div>
+              <div className="font-black text-slate-800">{childCtx.name}</div>
+              {childCtx.grade && <div className="text-xs font-bold text-slate-400">{childCtx.grade}</div>}
+            </div>
+          </div>
+          <div className="flex flex-wrap gap-3 ml-auto">
+            <div className="flex items-center gap-1.5 bg-white border border-primary-100 px-3 py-1.5 rounded-xl">
+              <Zap size={14} className="text-primary-500" />
+              <span className="text-sm font-black text-primary-700">Nv. {childCtx.level}</span>
+            </div>
+            <div className="flex items-center gap-1.5 bg-white border border-energy-100 px-3 py-1.5 rounded-xl">
+              <Flame size={14} className="text-energy-500" />
+              <span className="text-sm font-black text-energy-700">{childCtx.streak} dias</span>
+            </div>
+            {childCtx.daysInactive > 2 && (
+              <div className="flex items-center gap-1.5 bg-orange-50 border border-orange-100 px-3 py-1.5 rounded-xl">
+                <AlertCircle size={14} className="text-orange-500" />
+                <span className="text-xs font-black text-orange-600">{childCtx.daysInactive}d sem estudar</span>
+              </div>
+            )}
+            {childCtx.weakSubjects.length > 0 && (
+              <div className="flex items-center gap-1.5 bg-red-50 border border-red-100 px-3 py-1.5 rounded-xl">
+                <AlertCircle size={14} className="text-red-400" />
+                <span className="text-xs font-black text-red-600">Dificuldade: {childCtx.weakSubjects.join(', ')}</span>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* AI Featured Article */}
       <Card className="p-0 overflow-hidden border-2 border-special-100 rounded-[2.5rem] shadow-xl">

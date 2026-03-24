@@ -14,7 +14,7 @@ interface AvatarState {
   profile: StudentAvatarProfile | null;
   isLoading: boolean;
   
-  fetchCatalog: () => Promise<void>;
+  fetchCatalog: (opts?: { schoolId?: string | null; isMaster?: boolean }) => Promise<void>;
   fetchOwnedItems: (studentId: string) => Promise<void>;
   fetchProfile: (studentId: string) => Promise<void>;
   
@@ -22,6 +22,7 @@ interface AvatarState {
   addCatalogItem: (item: Omit<AvatarCatalogItem, 'id' | 'createdAt' | 'updatedAt'>) => Promise<void>;
   updateCatalogItem: (id: string, updates: Partial<AvatarCatalogItem>) => Promise<void>;
   deleteCatalogItem: (id: string) => Promise<void>;
+  uploadCatalogImage: (file: File) => Promise<string>; // returns public URL
   
   buyItem: (studentId: string, item: AvatarCatalogItem) => Promise<void>;
   updateProfile: (profile: StudentAvatarProfile) => Promise<void>;
@@ -34,14 +35,34 @@ export const useAvatarStore = create<AvatarState>((set) => ({
   profile: null,
   isLoading: false,
 
-  fetchCatalog: async () => {
+  /**
+   * Fetch the avatar catalog.
+   * - isMaster=true  → fetch ALL items (admin master, no filter)
+   * - schoolId given → fetch items WHERE (schoolId = given OR schoolId IS NULL)
+   * - no args        → fetch all active items (backwards compat / student with no schoolId)
+   */
+  fetchCatalog: async (opts) => {
     set({ isLoading: true });
     try {
-      const { data: items, error } = await supabase.from('avatar_catalog').select('*').eq('isActive', 1);
+      // Use RPC (SECURITY DEFINER) to bypass RLS — app uses custom auth, not Supabase Auth
+      const { data: items, error } = await supabase.rpc('get_avatar_catalog');
+
       if (error) throw error;
-      set({ catalog: items || [] });
+
+      let result = (items as any[]) || [];
+
+      if (opts?.isMaster) {
+        // Admin master: return everything (no filter)
+      } else if (opts?.schoolId) {
+        // Regular admin / student: keep items for their school OR global (null)
+        result = result.filter(
+          item => item.schoolId === opts.schoolId || item.schoolId == null
+        );
+      }
+
+      set({ catalog: result });
     } catch (error) {
-      console.error('Error fetching catalog:', error);
+      console.error('[AvatarStore] Error fetching catalog:', error);
     } finally {
       set({ isLoading: false });
     }
@@ -78,7 +99,6 @@ export const useAvatarStore = create<AvatarState>((set) => ({
       set({ profile });
     } catch (error) {
       console.error('Error fetching profile:', error);
-      // Even on error, set a default so the UI can render
       set({
         profile: {
           studentId,
@@ -100,10 +120,8 @@ export const useAvatarStore = create<AvatarState>((set) => ({
       throw new Error('Moedas insuficientes!');
     }
 
-    // Deduct coins and update streak
     await updateGamificationStats(studentId, { coinsToAdd: -item.priceCoins });
 
-    // Add to owned items
     const newItem: StudentOwnedAvatarItem = {
       id: crypto.randomUUID(),
       studentId,
@@ -115,7 +133,6 @@ export const useAvatarStore = create<AvatarState>((set) => ({
     const { error } = await supabase.from('student_owned_avatars').insert(newItem);
     if (error) throw error;
     
-    // Update local state
     set((state) => ({
       ownedItems: [...state.ownedItems, newItem]
     }));
@@ -128,20 +145,50 @@ export const useAvatarStore = create<AvatarState>((set) => ({
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString()
     };
-    await supabase.from('avatar_catalog').insert(newItem);
+    // Use RPC to bypass RLS
+    const { error } = await supabase.rpc('insert_avatar_catalog_item', { p: newItem });
+    if (error) {
+      console.error('[AvatarStore] addCatalogItem error:', error);
+      throw new Error(error.message);
+    }
     set((state) => ({ catalog: [...state.catalog, newItem] }));
+  },
+
+  uploadCatalogImage: async (file: File): Promise<string> => {
+    const ext = file.name.split('.').pop() || 'png';
+    const safeName = `${crypto.randomUUID()}.${ext}`;
+    const path = `catalog/${safeName}`;
+
+    const { error: uploadError } = await supabase.storage
+      .from('avatar-assets')
+      .upload(path, file, { contentType: file.type, upsert: true });
+
+    if (uploadError) {
+      console.warn('[AvatarStore] Storage upload failed, falling back to base64:', uploadError.message);
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = e => resolve(e.target?.result as string);
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+      });
+    }
+
+    const { data } = supabase.storage.from('avatar-assets').getPublicUrl(path);
+    return data.publicUrl;
   },
 
   updateCatalogItem: async (id, updates) => {
     const updatedAt = new Date().toISOString();
-    await supabase.from('avatar_catalog').update({ ...updates, updatedAt }).eq('id', id);
+    const { error } = await supabase.from('avatar_catalog').update({ ...updates, updatedAt }).eq('id', id);
+    if (error) throw new Error(error.message);
     set((state) => ({
       catalog: state.catalog.map(item => item.id === id ? { ...item, ...updates, updatedAt } : item)
     }));
   },
 
   deleteCatalogItem: async (id) => {
-    await supabase.from('avatar_catalog').delete().eq('id', id);
+    // Use RPC to bypass RLS
+    await supabase.rpc('delete_avatar_catalog_item', { p_id: id });
     set((state) => ({
       catalog: state.catalog.filter(item => item.id !== id)
     }));

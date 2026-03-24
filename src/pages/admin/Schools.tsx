@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+﻿import React, { useState } from 'react';
 import {
   School, Plus, ArrowUpRight, Search, X, Users, GraduationCap,
   BookOpen, Trophy, TrendingUp, Activity,
@@ -17,6 +17,7 @@ import { toast } from 'sonner';
 import { cn } from '../../lib/utils';
 import { useAuthStore } from '../../store/auth.store';
 import { useNavigate } from 'react-router-dom';
+import { StudentAvatarMini } from '../../components/ui/StudentAvatarMini';
 
 // ─── Types & Schemas ─────────────────────────────────────────────────────────
 interface SchoolRecord {
@@ -58,12 +59,22 @@ function useSchoolStats(schoolId: string) {
   const totalCoins = studentStats.reduce((sum, s) => sum + (s.coins || 0), 0);
   const totalXp = studentStats.reduce((sum, s) => sum + (s.xp || 0), 0);
   const avgLevel = students.length > 0 ? (studentStats.reduce((sum, s) => sum + (s.level || 1), 0) / students.length).toFixed(1) : '1.0';
-  const activeRatio = students.length > 0 ? Math.round((students.filter(s => s.status === 'active').length / students.length) * 100) : 0;
+  // Real engagement: students who actually used the platform (xp > 0 OR streak > 0)
+  const engagedStudents = studentStats.filter(s => (s.xp || 0) > 0 || (s.streak || 0) > 0).length;
+  const activeRatio = students.length > 0 ? Math.round((engagedStudents / students.length) * 100) : 0;
+
+  const allAvatarProfiles = useLiveQuery(() => db.studentAvatarProfiles.toArray(), []) || [];
+  const allCatalog = useLiveQuery(() => db.avatarCatalog.toArray(), []) || [];
 
   const topStudents = [...studentStats]
     .sort((a, b) => (b.xp || 0) - (a.xp || 0))
     .slice(0, 5)
-    .map(stat => ({ stat, user: students.find(u => u.id === stat.id) }))
+    .map(stat => {
+      const user = students.find(u => u.id === stat.id);
+      const profile = allAvatarProfiles.find((p: any) => p.studentId === stat.id);
+      const avatarItem = allCatalog.find((c: any) => c.id === (profile as any)?.selectedAvatarId);
+      return { stat, user, avatarUrl: (avatarItem as any)?.assetUrl || (user as any)?.avatar || null };
+    })
     .filter(x => !!x.user);
 
   const classPerformance = classes.map(c => {
@@ -185,6 +196,15 @@ const SchoolDashboard: React.FC<{ school: SchoolRecord; onClose: () => void }> =
   const allUsers = useLiveQuery(() => db.users.toArray()) || [];
   const allClasses = useLiveQuery(() => db.classes.toArray()) || [];
   const gamStats = useLiveQuery(() => db.gamificationStats.toArray()) || [];
+  const allAvatarProfiles = useLiveQuery(() => db.studentAvatarProfiles.toArray()) || [];
+  const allCatalog = useLiveQuery(() => db.avatarCatalog.toArray()) || [];
+
+  // Resolve real avatar for students via profile + catalog system
+  const getAvatarUrl = (userId: string): string | null => {
+    const profile = allAvatarProfiles.find((p: any) => p.studentId === userId);
+    const item = allCatalog.find((c: any) => c.id === (profile as any)?.selectedAvatarId);
+    return (item as any)?.assetUrl || null;
+  };
 
   const users = allUsers.filter(u => u.schoolId === school.id);
   const classes = allClasses.filter(c => c.schoolId === school.id);
@@ -494,8 +514,10 @@ const SchoolDashboard: React.FC<{ school: SchoolRecord; onClose: () => void }> =
                         <div className="pt-6 border-t border-slate-800 flex items-center justify-between">
                            <div className="flex -space-x-3">
                               {stats.topStudents.slice(0, 4).map(({ user, stat }) => (
-                                <img key={stat.id} src={user?.avatar || '/avatars/default-impacto.png'} className="w-8 h-8 rounded-full border-2 border-slate-900 bg-slate-800" />
-                              ))}
+                                 <div key={stat.id} className="rounded-full">
+                                   <StudentAvatarMini studentId={stat.id} fallbackInitial={user?.name?.[0] || '?'} fallbackColor="bg-slate-600" size={32} />
+                                 </div>
+                               ))}
                            </div>
                            <p className="text-[9px] font-bold text-slate-500 uppercase">Top Talentos</p>
                         </div>
@@ -531,9 +553,13 @@ const SchoolDashboard: React.FC<{ school: SchoolRecord; onClose: () => void }> =
                    <div key={item.id} className="p-6 bg-white border border-slate-100 rounded-[2rem] hover:border-primary-100 transition-all shadow-sm flex flex-col group">
                      <div className="flex items-start justify-between mb-4">
                         <div className="flex items-center gap-4">
-                           <div className="w-12 h-12 bg-slate-50 rounded-2xl flex items-center justify-center text-slate-400 font-black text-xl border border-slate-100 uppercase">
-                              {item.avatar ? <img src={item.avatar} className="w-full h-full object-cover rounded-2xl" /> : item.name[0]}
-                           </div>
+                            <div className="w-12 h-12 bg-slate-50 rounded-2xl flex items-center justify-center text-slate-400 font-black text-xl border border-slate-100 uppercase overflow-visible">
+                                {item.role === 'student' ? (
+                                  <StudentAvatarMini studentId={item.id} fallbackInitial={item.name[0]} size={48} shape="2xl" />
+                                ) : (
+                                  (item as any).avatar ? <img src={(item as any).avatar} className="w-full h-full object-cover rounded-2xl" alt={item.name} /> : item.name[0]
+                                )}
+                            </div>
                            <div>
                               <h4 className="font-black text-slate-800 leading-tight">{item.name}</h4>
                               <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest flex flex-col mt-0.5">
@@ -560,9 +586,12 @@ const SchoolDashboard: React.FC<{ school: SchoolRecord; onClose: () => void }> =
                           </div>
                        </div>
                      )}
-                     {!stat && activeTab === 'classes' && (
-                       <div className="flex items-center justify-between mt-auto pt-4 border-t border-slate-50 text-[10px] font-black uppercase text-slate-400">
-                          <span>{item.studentIds?.length || 0} Alunos</span>
+                      {!stat && activeTab === 'classes' && (
+                        <div className="flex items-center justify-between mt-auto pt-4 border-t border-slate-50 text-[10px] font-black uppercase text-slate-400">
+                          <span>
+                            {/* Count students linked via classId OR studentIds array */}
+                            {allUsers.filter(u => u.role === 'student' && (u.schoolId === school.id) && ((u as any).classId === item.id || (item.studentIds || []).includes(u.id))).length} Alunos
+                          </span>
                           <button onClick={() => navigate('/admin/classes/' + item.id)} className="text-primary-500 flex items-center gap-1 hover:text-primary-600 font-black transition-colors">
                             Ver Turma <ChevronRight size={12} />
                           </button>
@@ -663,8 +692,8 @@ const SchoolStatsCard: React.FC<{
       <div className="mt-auto pt-6 border-t border-slate-50 flex items-center justify-between">
          <div className="flex -space-x-3">
             {stats.topStudents.slice(0, 3).map(({ user, stat }) => (
-              <div key={stat.id} className="w-9 h-9 rounded-full border-2 border-white bg-slate-100 overflow-hidden shadow-sm" title={user?.name}>
-                 <img src={user?.avatar || '/avatars/default-impacto.png'} className="w-full h-full object-cover" />
+              <div key={stat.id} className="rounded-full border-2 border-white bg-slate-100 overflow-visible shadow-sm" title={user?.name}>
+                <StudentAvatarMini studentId={stat.id} fallbackInitial={user?.name?.[0] || '?'} fallbackColor="bg-slate-400" size={36} />
               </div>
             ))}
             {stats.studentCount > 3 && (

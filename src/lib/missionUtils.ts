@@ -1,6 +1,8 @@
 import { supabase } from './supabase';
 import { toast } from 'sonner';
 import { updateGamificationStats } from './gamificationUtils';
+import { createNotification } from './notificationUtils';
+
 
 /**
  * Increments progress for all active missions of a certain criteria for a student.

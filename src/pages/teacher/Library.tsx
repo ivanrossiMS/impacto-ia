@@ -31,14 +31,6 @@ const TYPE_CONFIG = {
   text:  { color: 'bg-green-500', icon: FileText, label: 'Texto', emoji: '📄', desc: 'Texto ou apostila' },
 };
 
-const BASE_ITEMS: LibraryItem[] = [
-  { id: 'b1', title: 'Introdução a Frações', type: 'video', subject: 'Matemática', grade: '5º Ano', year: String(CURRENT_YEAR), downloads: 1240, rating: 4.8, description: 'Vídeo explicativo com exemplos visuais e exercícios guiados.' },
-  { id: 'b2', title: 'Sistema Solar: Guia Completo', type: 'text', subject: 'Ciências', grade: '6º Ano', year: String(CURRENT_YEAR), downloads: 850, rating: 4.9, description: 'Apostila detalhada com planetas, satélites e curiosidades.' },
-  { id: 'b3', title: 'Quiz: Gramática Avançada', type: 'quiz', subject: 'Português', grade: '7º Ano', year: String(CURRENT_YEAR), downloads: 2100, rating: 4.7, description: 'Banco de questões sobre morfologia, sintaxe e semântica.' },
-  { id: 'b4', title: 'Podcast: História do Brasil', type: 'audio', subject: 'História', grade: '9º Ano', year: String(CURRENT_YEAR - 1), downloads: 450, rating: 4.5, description: 'Série de podcasts com linha do tempo histórica narrada.' },
-  { id: 'b5', title: 'Geometria Espacial Visual', type: 'video', subject: 'Matemática', grade: '8º Ano', year: String(CURRENT_YEAR), downloads: 920, rating: 4.6, description: 'Animações 3D com cálculo de volume e área de sólidos.' },
-  { id: 'b6', title: 'Revolução Industrial — Apostila', type: 'text', subject: 'História', grade: '9º Ano', year: String(CURRENT_YEAR - 1), downloads: 680, rating: 4.4, description: 'Resumo completo com causas, consequências e cronologia.' },
-];
 
 // ─── Library Item Preview Modal ───────────────────────────────────────────────
 const PreviewModal: React.FC<{
@@ -384,22 +376,6 @@ export const Library: React.FC = () => {
   const allLibraryItemsData = useSupabaseQuery<any>('library_items');
   const myItems = (allLibraryItemsData || []).filter((item: any) => item.teacherId === user?.id);
 
-  const seedBaseItems = async () => {
-    const { count, error } = await supabase.from('library_items').select('*', { count: 'exact', head: true });
-    if (error) { toast.error('Erro ao verificar itens base.'); return; }
-    if (count && count > 0) return;
-
-    const itemsToSeed = BASE_ITEMS.map(item => ({
-      ...item,
-      id: crypto.randomUUID(),
-      teacherId: user?.id || 'base-teacher',
-      addedAt: new Date().toISOString()
-    }));
-    
-    const { error: insertError } = await supabase.from('library_items').insert(itemsToSeed);
-    if (insertError) { toast.error('Erro ao inserir base'); return; }
-    toast.success('Biblioteca inicial carregada!');
-  };
 
   const teacherUsersData = useSupabaseQuery<any>('users');
   const teacherUser = teacherUsersData?.find((u: any) => u.id === user?.id);
@@ -507,9 +483,6 @@ export const Library: React.FC = () => {
           <p className="text-slate-500 font-medium">{allItems.length} recursos disponíveis · clique para visualizar ou editar</p>
         </div>
         <div className="flex gap-3 mt-4 md:mt-0">
-          <Button onClick={seedBaseItems} variant="outline" className="rounded-2xl gap-2 font-black px-6">
-            <Layers size={18} /> Carregar Base
-          </Button>
           <Button onClick={() => setIsUploadOpen(true)} variant="primary" className="rounded-2xl gap-2 font-black px-8 shadow-xl shadow-primary-500/20">
             <Upload size={18} /> Upload Material
           </Button>

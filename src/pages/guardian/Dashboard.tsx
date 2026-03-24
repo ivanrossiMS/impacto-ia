@@ -162,7 +162,7 @@ export const GuardianDashboard: React.FC = () => {
         supabase.from('achievements').select('*'),
         supabase.from('missions').select('*'),
         supabase.from('learning_paths').select('*'),
-        supabase.from('avatar_catalog').select('*')
+        supabase.rpc('get_avatar_catalog')  // use RPC to bypass RLS 500 errors
       ]);
 
       setCatalog(allCatalog || []);
@@ -178,7 +178,7 @@ export const GuardianDashboard: React.FC = () => {
         { data: classesData }
       ] = await Promise.all([
         supabase.from('gamification_stats').select('*').in('id', studentIds),
-        supabase.from('student_avatar_profiles').select('*').in('id', studentIds),
+        supabase.from('student_avatar_profiles').select('*').in('studentId', studentIds), // fixed: key is studentId
         supabase.from('student_achievements').select('*').in('studentId', studentIds),
         supabase.from('student_missions').select('*').in('studentId', studentIds),
         supabase.from('student_progress').select('*').in('studentId', studentIds),
@@ -186,8 +186,8 @@ export const GuardianDashboard: React.FC = () => {
       ]);
 
       const enrichedStudents: StudentFull[] = students.map(student => {
-        const stats = statsData?.find(s => s.id === student.id) || null;
-        const profile = profilesData?.find(p => p.id === student.id) || null;
+        const stats   = statsData?.find(s => s.id === student.id) || null;
+        const profile = profilesData?.find(p => p.studentId === student.id) || null; // fixed: match by studentId
         
         const rawAch = studentAchievsData?.filter(a => a.studentId === student.id) || [];
         const achievements = rawAch.map(sa => ({
@@ -224,6 +224,7 @@ export const GuardianDashboard: React.FC = () => {
     fetchDashboardData();
     const ch = supabase.channel('guardian_dash')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'gamification_stats' }, fetchDashboardData)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'student_avatar_profiles' }, fetchDashboardData) // refresh when avatar changes
       .subscribe();
     return () => { supabase.removeChannel(ch); };
   }, [user?.id]);

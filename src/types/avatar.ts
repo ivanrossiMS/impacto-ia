@@ -1,4 +1,4 @@
-export type AvatarRarity = 'comum' | 'raro' | 'épico' | 'lendário';
+export type AvatarRarity = 'comum' | 'incomum' | 'raro' | 'épico' | 'lendário';
 
 export type AvatarItemType = 'avatar' | 'background' | 'border' | 'sticker' | 'base' | 'hair' | 'clothes' | 'shoes' | 'accessory' | 'base_body' | 'mouth' | 'eyes' | 'headwear' | 'glasses' | 'effect' | 'top' | 'bottom';
 
@@ -8,8 +8,8 @@ export interface AvatarCatalogItem {
   id: string;
   name: string;
   description?: string;
-  assetUrl: string; // The main image
-  previewUrl?: string; // Smaller preview if needed
+  assetUrl: string;
+  previewUrl?: string;
   type: AvatarItemType;
   category?: string;
   rarity: AvatarRarity;
@@ -21,10 +21,11 @@ export interface AvatarCatalogItem {
   isActive: number;
   sortOrder: number;
   tags?: string[];
+  schoolId?: string | null; // null = global (all schools); UUID = school-specific
   createdAt: string;
   updatedAt: string;
-  imageUrl?: string; // Legacy compatibility
-  isPremium?: boolean; // Legacy compatibility
+  imageUrl?: string;
+  isPremium?: boolean;
 }
 
 

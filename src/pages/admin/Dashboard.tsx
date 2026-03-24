@@ -186,11 +186,17 @@ export const AdminDashboard: React.FC = () => {
          const { data: allStudents } = await supabase.from('users').select('*').eq('role', 'student');
          if (allStudents && allStudents.length > 0) {
             studentIdsForEngagement = allStudents.map(s => s.id);
-            const { data: allStats } = await supabase.from('gamification_stats').select('*').in('id', studentIdsForEngagement);
+            const [{ data: allStats }, { data: profiles }, { data: catalog }] = await Promise.all([
+               supabase.from('gamification_stats').select('*').in('id', studentIdsForEngagement),
+               supabase.from('student_avatar_profiles').select('studentId, selectedAvatarId').in('studentId', studentIdsForEngagement),
+               supabase.rpc('get_avatar_catalog'),
+            ]);
             if (allStats) {
                topStudents = allStudents.map(s => {
                   const stat = allStats.find(st => st.id === s.id);
-                  return { ...s, xp: stat?.xp || 0, coins: stat?.coins || 0 };
+                  const profile = (profiles || []).find((p: any) => p.studentId === s.id);
+                  const avatarItem = (catalog || []).find((c: any) => c.id === profile?.selectedAvatarId);
+                  return { ...s, xp: stat?.xp || 0, coins: stat?.coins || 0, avatar: avatarItem?.assetUrl || (s as any).avatar || null };
                }).sort((a, b) => b.xp - a.xp).slice(0, 3);
             }
          }
@@ -198,11 +204,17 @@ export const AdminDashboard: React.FC = () => {
          const { data: schoolStudents } = await supabase.from('users').select('*').eq('role', 'student').eq('schoolId', userSchoolId);
          if (schoolStudents && schoolStudents.length > 0) {
             studentIdsForEngagement = schoolStudents.map(s => s.id);
-            const { data: schoolStats } = await supabase.from('gamification_stats').select('*').in('id', studentIdsForEngagement);
+            const [{ data: schoolStats }, { data: profiles }, { data: catalog }] = await Promise.all([
+               supabase.from('gamification_stats').select('*').in('id', studentIdsForEngagement),
+               supabase.from('student_avatar_profiles').select('studentId, selectedAvatarId').in('studentId', studentIdsForEngagement),
+               supabase.rpc('get_avatar_catalog'),
+            ]);
             if (schoolStats) {
                topStudents = schoolStudents.map(s => {
                   const stat = schoolStats.find(st => st.id === s.id);
-                  return { ...s, xp: stat?.xp || 0, coins: stat?.coins || 0 };
+                  const profile = (profiles || []).find((p: any) => p.studentId === s.id);
+                  const avatarItem = (catalog || []).find((c: any) => c.id === profile?.selectedAvatarId);
+                  return { ...s, xp: stat?.xp || 0, coins: stat?.coins || 0, avatar: avatarItem?.assetUrl || (s as any).avatar || null };
                }).sort((a, b) => b.xp - a.xp).slice(0, 3);
             }
          }

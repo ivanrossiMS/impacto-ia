@@ -27,6 +27,31 @@ type MissionWithProgress = Mission & {
   progress: StudentMissionProgress | null;
 };
 
+// Live countdown to midnight (daily mission reset)
+function useMidnightCountdown() {
+  const [countdown, setCountdown] = React.useState('');
+  const [urgency, setUrgency] = React.useState<'ok' | 'warn' | 'danger'>('ok');
+
+  React.useEffect(() => {
+    const tick = () => {
+      const now = new Date();
+      const midnight = new Date();
+      midnight.setHours(24, 0, 0, 0);
+      const diff = midnight.getTime() - now.getTime();
+      const h = Math.floor(diff / 3600000);
+      const m = Math.floor((diff % 3600000) / 60000);
+      const s = Math.floor((diff % 60000) / 1000);
+      setCountdown(`${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`);
+      setUrgency(h < 1 ? 'danger' : h < 3 ? 'warn' : 'ok');
+    };
+    tick();
+    const id = setInterval(tick, 1000);
+    return () => clearInterval(id);
+  }, []);
+
+  return { countdown, urgency };
+}
+
 export const Missions: React.FC = () => {
   const navigate = useNavigate();
   const user = useAuthStore(state => state.user);
@@ -34,6 +59,7 @@ export const Missions: React.FC = () => {
   const [stats, setStats] = useState<GamificationStats | null>(null);
   const [missions, setMissions] = useState<MissionWithProgress[]>([]);
   const [loading, setLoading] = useState(true);
+  const { countdown, urgency } = useMidnightCountdown();
 
   useEffect(() => {
     if (!user) return;
@@ -154,6 +180,45 @@ export const Missions: React.FC = () => {
           </button>
         ))}
       </div>
+
+      {/* Daily Mission Countdown Timer */}
+      {activeTab === 'daily' && (
+        <div className={cn(
+          "flex items-center justify-between px-6 py-4 rounded-[2rem] border-2 transition-all",
+          urgency === 'danger' ? 'bg-red-50 border-red-200' :
+          urgency === 'warn' ? 'bg-yellow-50 border-yellow-200' :
+          'bg-slate-50 border-slate-200'
+        )}>
+          <div className="flex items-center gap-3">
+            <div className={cn(
+              "w-10 h-10 rounded-xl flex items-center justify-center text-lg",
+              urgency === 'danger' ? 'bg-red-100' : urgency === 'warn' ? 'bg-yellow-100' : 'bg-slate-100'
+            )}>
+              {urgency === 'danger' ? '🚨' : urgency === 'warn' ? '⚠️' : '⏰'}
+            </div>
+            <div>
+              <div className={cn(
+                "text-[10px] font-black uppercase tracking-widest",
+                urgency === 'danger' ? 'text-red-500' : urgency === 'warn' ? 'text-yellow-600' : 'text-slate-400'
+              )}>
+                {urgency === 'danger' ? 'Quase no tempo! Missões resetam em' :
+                 urgency === 'warn' ? 'Atenção! Missões resetam em' :
+                 'Missões diárias resetam em'}
+              </div>
+              <div className={cn(
+                "text-2xl font-black tabular-nums tracking-tight",
+                urgency === 'danger' ? 'text-red-600' : urgency === 'warn' ? 'text-yellow-700' : 'text-slate-700'
+              )}>
+                {countdown}
+              </div>
+            </div>
+          </div>
+          <div className="hidden md:flex flex-col items-end text-right">
+            <div className="text-[10px] font-black uppercase tracking-widest text-slate-400">Missões à meia-noite</div>
+            <div className="text-xs font-bold text-slate-500 mt-0.5">Não perca suas recompensas!</div>
+          </div>
+        </div>
+      )}
 
       {filteredMissions.length === 0 ? (
         <div className="text-center py-20 bg-white rounded-[2.5rem] border-2 border-dashed border-slate-100">

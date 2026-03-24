@@ -21,32 +21,32 @@ export class SupabaseAuthRepository implements IAuthRepository {
     if (user && user.isRegistered === true && user.passwordHash && user.passwordHash === passwordHash) {
       
       // Transparent Migration to Supabase Auth (`auth.users`)
-      const authEmail = user.email ? user.email.toLowerCase() : `student_${user.id}@impacto.ia`;
-      
-      const { error: authError } = await supabase.auth.signInWithPassword({
-        email: authEmail,
-        password: passwordHash
-      });
+      // Only attempt if user has a real email (skip fake @impacto.ia domains)
+      const authEmail = user.email ? user.email.toLowerCase() : null;
+      const hasFakeEmail = !authEmail || authEmail.endsWith('@impacto.ia');
 
-      if (authError && authError.message.includes('Invalid login credentials')) {
-        const { error: signUpError } = await supabase.auth.signUp({
+      if (!hasFakeEmail && authEmail) {
+        const { error: authError } = await supabase.auth.signInWithPassword({
           email: authEmail,
           password: passwordHash
         });
-        
-        if (!signUpError) {
-          // Retry login
-          await supabase.auth.signInWithPassword({
+
+        if (authError && authError.message.includes('Invalid login credentials')) {
+          const { error: signUpError } = await supabase.auth.signUp({
             email: authEmail,
             password: passwordHash
           });
-        } else if (signUpError.message.includes('rate limit exceeded')) {
-          // IMPORTANT: If we hit rate limit, we still return the user.
-          // The public.users check already passed, so the credentials are valid.
-          // They just won't have a Supabase Auth session until the limit resets.
-          console.warn('Silent Auth Migration: Rate limit hit. Proceeding with local validation only.', signUpError);
-        } else {
-          console.warn('Silent Auth Migration failed:', signUpError);
+
+          if (!signUpError) {
+            await supabase.auth.signInWithPassword({
+              email: authEmail,
+              password: passwordHash
+            });
+          } else if (signUpError.message.includes('rate limit exceeded')) {
+            console.warn('Silent Auth Migration: Rate limit hit. Proceeding with local validation only.', signUpError);
+          } else {
+            console.warn('Silent Auth Migration failed:', signUpError);
+          }
         }
       }
 

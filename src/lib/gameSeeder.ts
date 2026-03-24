@@ -1,4 +1,5 @@
 import { supabase } from './supabase';
+import { createNotification } from './notificationUtils';
 
 // ============================================================
 // 100 ACHIEVEMENT DEFINITIONS
@@ -1103,6 +1104,96 @@ export const ALL_ACHIEVEMENTS = [
     category: "supremo",
     requiredCount: 99,
     criteria: "all_achievements"
+  },
+
+  // ── Duelos ──────────────────────────────────────────────────────────────
+  {
+    id: 'a1b2c3d4-e5f6-7890-abcd-ef1234567801',
+    title: "Primeiro Sangue",
+    description: "Entrou na arena e completou seu primeiro duelo. A batalha começou!",
+    icon: "⚔️",
+    rewardXp: 100,
+    rewardCoins: 50,
+    category: "duelos",
+    requiredCount: 1,
+    criteria: "duel_completed"
+  },
+  {
+    id: 'a1b2c3d4-e5f6-7890-abcd-ef1234567802',
+    title: "Gladiador em Ascensão",
+    description: "Sobreviveu a 5 duelos na arena do conhecimento. Respeito conquistado!",
+    icon: "🛡️",
+    rewardXp: 250,
+    rewardCoins: 125,
+    category: "duelos",
+    requiredCount: 5,
+    criteria: "duel_completed"
+  },
+  {
+    id: 'a1b2c3d4-e5f6-7890-abcd-ef1234567803',
+    title: "Coliseu Pessoal",
+    description: "20 duelos disputados. Seu nome já ressoa nos corredores da arena!",
+    icon: "🏟️",
+    rewardXp: 600,
+    rewardCoins: 300,
+    category: "duelos",
+    requiredCount: 20,
+    criteria: "duel_completed"
+  },
+  {
+    id: 'a1b2c3d4-e5f6-7890-abcd-ef1234567804',
+    title: "Veterano da Arena",
+    description: "50 batalhas de conhecimento disputadas. Um guerreiro forjado no fogo!",
+    icon: "🔱",
+    rewardXp: 1500,
+    rewardCoins: 750,
+    category: "duelos",
+    requiredCount: 50,
+    criteria: "duel_completed"
+  },
+  {
+    id: 'a1b2c3d4-e5f6-7890-abcd-ef1234567805',
+    title: "Primeira Vitória",
+    description: "Derrotou um adversário e provou seu valor intelectual!",
+    icon: "🥊",
+    rewardXp: 150,
+    rewardCoins: 75,
+    category: "duelos",
+    requiredCount: 1,
+    criteria: "duel_wins"
+  },
+  {
+    id: 'a1b2c3d4-e5f6-7890-abcd-ef1234567806',
+    title: "Caçador de Crânios",
+    description: "10 vitórias nos duelos. Seu raciocínio é uma arma afiada!",
+    icon: "💀",
+    rewardXp: 400,
+    rewardCoins: 200,
+    category: "duelos",
+    requiredCount: 10,
+    criteria: "duel_wins"
+  },
+  {
+    id: 'a1b2c3d4-e5f6-7890-abcd-ef1234567807',
+    title: "Mestre dos Duelos",
+    description: "25 vitórias consecutivas. Poucos ousam te desafiar na plataforma!",
+    icon: "👑",
+    rewardXp: 1000,
+    rewardCoins: 500,
+    category: "duelos",
+    requiredCount: 25,
+    criteria: "duel_wins"
+  },
+  {
+    id: 'a1b2c3d4-e5f6-7890-abcd-ef1234567808',
+    title: "Imperador da Arena",
+    description: "50 vitórias! Seu trono no topo da arena é inabalável. Lenda viva!",
+    icon: "🌋",
+    rewardXp: 2500,
+    rewardCoins: 1250,
+    category: "duelos",
+    requiredCount: 50,
+    criteria: "duel_wins"
   }
 ];
 
@@ -1202,19 +1293,17 @@ const EPIC_TEMPLATES = [
 // SEED ACHIEVEMENTS INTO DATABASE
 // ============================================================
 export async function seedAchievements() {
-  // Always wipe and re-upsert to guarantee 100 unique valid achievements without duplicate IDs
+  const total = ALL_ACHIEVEMENTS.length;
   const { data: existing } = await supabase.from('achievements').select('id');
+  if (existing && existing.length === total) {
+    // DB already has the exact same count as our definitions — skip re-seed
+    return;
+  }
   if (existing && existing.length > 0) {
-    if (existing.length !== 100) {
-        console.log('[GameSeeder] Found', existing.length, 'achievements, wiping out for clean fresh start...');
-        await supabase.from('achievements').delete().neq('id', '00000000-0000-0000-0000-000000000000');
-    } else {
-        // Exactly 100 array items and exactly 100 in DB. No duplicates!
-        return; 
-    }
+    console.log(`[GameSeeder] Found ${existing.length} achievements in DB but definitions have ${total}. Wiping for clean re-seed...`);
+    await supabase.from('achievements').delete().neq('id', '00000000-0000-0000-0000-000000000000');
   }
 
-  // Wait, if it's less than 100, we should probably delete them and re-insert, but Supabase doesn't have .clear() easily. We can just upsert.
   const toUpsert = ALL_ACHIEVEMENTS.map(ach => ({
     id: ach.id,
     title: ach.title,
@@ -1242,7 +1331,16 @@ function pickRandom<T>(arr: T[], n: number): T[] {
   return shuffled.slice(0, n);
 }
 
+// Module-level lock: prevents parallel/double calls (React StrictMode + multiple callers)
+let _missionsUpdatePromise: Promise<void> | null = null;
+
 export async function ensureMissionsAreUpToDate() {
+  if (_missionsUpdatePromise) return _missionsUpdatePromise;
+  _missionsUpdatePromise = _runMissionsUpdate().finally(() => { _missionsUpdatePromise = null; });
+  return _missionsUpdatePromise;
+}
+
+async function _runMissionsUpdate() {
   const now = new Date();
 
   // Fetch all missions
@@ -1353,67 +1451,173 @@ export async function ensureMissionsAreUpToDate() {
 export async function checkAndUnlockAchievements(studentId: string) {
   if (!studentId) return;
 
-  const { data: statsObj } = await supabase.from('gamification_stats').select('*').eq('id', studentId).single();
+  const { data: statsObj } = await supabase
+    .from('gamification_stats')
+    .select('*')
+    .eq('id', studentId)
+    .single();
   if (!statsObj) return;
   const stats = statsObj;
 
   const { data: allAchsObj } = await supabase.from('achievements').select('*');
   const allAchs = allAchsObj || [];
-  
-  const { data: unlockedObj } = await supabase.from('student_achievements').select('*').eq('studentId', studentId);
+
+  const { data: unlockedObj } = await supabase
+    .from('student_achievements')
+    .select('achievementId')
+    .eq('studentId', studentId);
   const unlocked = unlockedObj || [];
   const unlockedIds = new Set(unlocked.map(u => u.achievementId));
+  const alreadyUnlockedCount = unlocked.length;
+
+  // ── Batch fetch all extra counts in parallel ────────────────────────────────
+  const [
+    actRes, misRes, invRes, pathStartRes, pathCompRes,
+    diaryRes, diaryAiRes, duelCompRes, duelWinRes, userRes,
+  ] = await Promise.all([
+    supabase.from('student_activity_results')
+      .select('id', { count: 'exact', head: true })
+      .eq('studentId', studentId).eq('status', 'passed'),
+    supabase.from('student_missions')
+      .select('id', { count: 'exact', head: true })
+      .eq('studentId', studentId).not('claimedAt', 'is', null),
+    supabase.from('student_owned_avatars')
+      .select('id', { count: 'exact', head: true })
+      .eq('studentId', studentId),
+    supabase.from('student_progress')
+      .select('id', { count: 'exact', head: true })
+      .eq('studentId', studentId),
+    supabase.from('student_progress')
+      .select('id', { count: 'exact', head: true })
+      .eq('studentId', studentId).eq('status', 'completed'),
+    supabase.from('diary_entries')
+      .select('id', { count: 'exact', head: true })
+      .eq('studentId', studentId),
+    supabase.from('diary_entries')
+      .select('id', { count: 'exact', head: true })
+      .eq('studentId', studentId).eq('isAIGenerated', true),
+    supabase.from('duels')
+      .select('id', { count: 'exact', head: true })
+      .eq('status', 'completed')
+      .or(`challengerId.eq.${studentId},challengedId.eq.${studentId}`),
+    supabase.from('duels')
+      .select('id', { count: 'exact', head: true })
+      .eq('status', 'completed')
+      .eq('winnerId', studentId),
+    supabase.from('users')
+      .select('createdAt')
+      .eq('id', studentId)
+      .single(),
+  ]);
+
+  const counts = {
+    activitiesCorrect: actRes.count ?? 0,
+    missionsCompleted: misRes.count ?? 0,
+    itemsOwned: invRes.count ?? 0,
+    pathsStarted: pathStartRes.count ?? 0,
+    pathsCompleted: pathCompRes.count ?? 0,
+    diaryEntries: diaryRes.count ?? 0,
+    diaryAiEntries: diaryAiRes.count ?? 0,
+    duelCompleted: duelCompRes.count ?? 0,
+    duelWins: duelWinRes.count ?? 0,
+    daysRegistered: userRes.data?.createdAt
+      ? Math.floor((Date.now() - new Date(userRes.data.createdAt).getTime()) / 86400000)
+      : 0,
+  };
+
+  const getCurrentCount = (criteria: string): number => {
+    switch (criteria) {
+      case 'xp':                return stats.xp;
+      case 'coins':             return stats.coins;
+      case 'level':             return stats.level;
+      case 'streak':            return stats.streak;
+      case 'login':             return 1;
+      case 'login_days':        return counts.daysRegistered;
+      case 'days_registered':   return counts.daysRegistered;
+      case 'activities_correct': return counts.activitiesCorrect;
+      case 'math_correct':      return counts.activitiesCorrect;
+      case 'portuguese_correct':return counts.activitiesCorrect;
+      case 'science_correct':   return counts.activitiesCorrect;
+      case 'history_correct':   return counts.activitiesCorrect;
+      case 'geography_correct': return counts.activitiesCorrect;
+      case 'subjects_mastered': return Math.min(5, Math.floor(counts.activitiesCorrect / 10));
+      case 'missions_completed':return counts.missionsCompleted;
+      case 'all_daily':         return counts.missionsCompleted > 0 ? 1 : 0;
+      case 'all_weekly':        return counts.missionsCompleted > 0 ? 1 : 0;
+      case 'epic_mission':      return counts.missionsCompleted > 0 ? 1 : 0;
+      case 'items_owned':       return counts.itemsOwned;
+      case 'items_purchased':   return counts.itemsOwned > 0 ? 1 : 0;
+      case 'avatar_customized': return counts.itemsOwned > 0 ? 1 : 0;
+      case 'full_avatar':       return counts.itemsOwned >= 3 ? 1 : 0;
+      case 'stickers_equipped': return Math.min(counts.itemsOwned, 4);
+      case 'paths_started':     return counts.pathsStarted;
+      case 'paths_completed':   return counts.pathsCompleted;
+      case 'diary_entries':     return counts.diaryEntries;
+      case 'diary_ai_entry':    return counts.diaryAiEntries > 0 ? 1 : 0;
+      case 'diary_tags':        return counts.diaryEntries;
+      case 'duel_completed':    return counts.duelCompleted;
+      case 'duel_wins':         return counts.duelWins;
+      case 'all_achievements':  return alreadyUnlockedCount;
+      case 'coins_spent':       return Math.max(0, (stats.xp * 2) - stats.coins);
+      // Event-driven: unlocked at activity time, not computable here
+      default:                  return 0;
+    }
+  };
 
   const toUnlock: { achievementId: string; unlockedAt: string }[] = [];
 
-  // Local static ALL_ACHIEVEMENTS mapped by condition because DB doesn't store target count easily in old schema
   for (const ach of allAchs) {
     if (unlockedIds.has(ach.id)) continue;
-    
-    // Find matching logic
     const template = ALL_ACHIEVEMENTS.find(a => a.id === ach.id || a.title === ach.title);
     if (!template) continue;
-
-    let achieved = false;
-    switch (template.criteria) {
-      case 'xp': achieved = stats.xp >= template.requiredCount; break;
-      case 'coins': achieved = stats.coins >= template.requiredCount; break;
-      case 'level': achieved = stats.level >= template.requiredCount; break;
-      case 'streak': achieved = stats.streak >= template.requiredCount; break;
-      case 'login': achieved = true; break;
-      default: achieved = false;
-    }
-
-    if (achieved) {
+    const current = getCurrentCount(template.criteria);
+    if (current >= template.requiredCount) {
       toUnlock.push({ achievementId: ach.id, unlockedAt: new Date().toISOString() });
     }
   }
 
-  if (toUnlock.length > 0) {
-    const inserts = toUnlock.map(item => ({
-      studentId,
-      achievementId: item.achievementId,
-      unlockedAt: item.unlockedAt,
-    }));
-    await supabase.from('student_achievements').insert(inserts);
-    console.log(`[GameSeeder] Unlocked ${toUnlock.length} achievements for ${studentId}`);
+  if (toUnlock.length === 0) return;
 
-    // Award XP for newly unlocked achievements
-    let bonusXp = 0;
-    let bonusCoins = 0;
-    for (const item of toUnlock) {
-      const def = allAchs.find((a: any) => a.id === item.achievementId) as any;
-      if (def) {
-        bonusXp += def.rewardXp || 0;
-        bonusCoins += def.rewardCoins || 0;
-      }
+  const inserts = toUnlock.map(item => ({
+    studentId,
+    achievementId: item.achievementId,
+    unlockedAt: item.unlockedAt,
+  }));
+  await supabase.from('student_achievements').insert(inserts);
+  console.log(`[GameSeeder] Unlocked ${toUnlock.length} achievements for ${studentId}`);
+
+  // Notify student for each unlocked achievement
+  for (const item of toUnlock) {
+    const def = allAchs.find((a: any) => a.id === item.achievementId) as any;
+    if (def) {
+      // Fire-and-forget — don't await so unlock loop doesn't slow down
+      createNotification({
+        userId: studentId,
+        role: 'student',
+        title: `Conquista Desbloqueada! ${def.icon || '🏆'}`,
+        message: `Você conquistou "${def.title}" e ganhou ${def.rewardXp || 0} XP!`,
+        type: 'reward',
+        priority: 'high',
+        actionUrl: '/student/achievements',
+        skipMirroring: false,
+      }).catch(() => {});
     }
-    if (bonusXp > 0 || bonusCoins > 0) {
-      await supabase.from('gamification_stats').update({
-        xp: stats.xp + bonusXp,
-        coins: stats.coins + bonusCoins,
-      }).eq('id', studentId);
+  }
+
+  let bonusXp = 0;
+  let bonusCoins = 0;
+  for (const item of toUnlock) {
+    const def = allAchs.find((a: any) => a.id === item.achievementId) as any;
+    if (def) {
+      bonusXp += def.rewardXp || 0;
+      bonusCoins += def.rewardCoins || 0;
     }
+  }
+  if (bonusXp > 0 || bonusCoins > 0) {
+    await supabase.from('gamification_stats').update({
+      xp: stats.xp + bonusXp,
+      coins: stats.coins + bonusCoins,
+    }).eq('id', studentId);
   }
 }
 export async function ensureTestStudents(_userId?: string) {

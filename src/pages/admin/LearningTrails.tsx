@@ -4,7 +4,7 @@ import {
   ChevronRight, Trash2, Edit3, 
   Sparkles, Layers, GraduationCap, Calendar,
   AlertCircle, Trophy, X, CheckCircle2, History,
-  PenTool, BrainCircuit, Info
+  BrainCircuit, Upload, FileSpreadsheet, ArrowRight, CheckCircle
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { supabase } from '../../lib/supabase';
@@ -14,240 +14,169 @@ import { toast } from 'sonner';
 import { cn } from '../../lib/utils';
 import { createBulkNotifications } from '../../lib/notificationUtils';
 import { callAI, callGenerateTrailStep } from '../../ai/client';
+import { useAuthStore } from '../../store/auth.store';
+import { read, utils } from 'xlsx';
 
-// --- Modals ---
+// ── Grade normalization ────────────────────────────────────────────────────────
+// Returns canonical: "1º Ano"..."9º Ano" (EF) or "1º EM"..."3º EM" (EM).
+// Key rule: presence of "EM" in the string → Ensino Médio.
+const normalizeGrade = (g: string): string => {
+  if (!g) return '';
+  const s = g.trim().toUpperCase();
+  // Ensino Médio: string contains the letters E-M together
+  if (s.includes('EM')) {
+    const m = s.match(/[123]/);
+    return (m ? m[0] : '1') + 'º EM';
+  }
+  // Ensino Fundamental: extract first digit 1-9
+  const m = s.match(/([1-9])/);
+  if (m) return m[1] + 'º Ano';
+  return g.trim();
+};
 
-const TrailDetailModal: React.FC<{ trail: any; isOpen: boolean; onClose: () => void }> = ({ trail, isOpen, onClose }) => {
-  if (!isOpen || !trail) return null;
+// ── Constants ──────────────────────────────────────────────────────────────────
+const PHASE_TYPES = [
+  { type: 'intro',    label: 'Explicação' },
+  { type: 'video',    label: 'Conteúdo' },
+  { type: 'quiz',     label: 'Quiz' },
+  { type: 'practice', label: 'Prática' },
+  { type: 'boss',     label: 'Desafio Final' },
+];
 
-  const stepIcons: Record<string, any> = {
-    intro: <Info className="text-blue-500" />,
-    theory: <BrainCircuit className="text-indigo-500" />,
-    practice: <PenTool className="text-orange-500" />,
-    quiz: <CheckCircle2 className="text-emerald-500" />,
-    boss: <Trophy className="text-amber-500" />,
+const SUBJECTS = [
+  'Português', 'Matemática', 'História', 'Geografia', 'Ciências',
+  'Ed. Física', 'Artes', 'Inglês', 'Filosofia', 'Sociologia',
+];
+
+const GRADES = [
+  '1º Ano', '2º Ano', '3º Ano', '4º Ano', '5º Ano',
+  '6º Ano', '7º Ano', '8º Ano', '9º Ano',
+  '1º EM', '2º EM', '3º EM',
+];
+
+// ── CurricularImportModal: XLSX → AI Trail Generator ─────────────────────────
+const CurricularImportModal: React.FC<{
+  isOpen: boolean;
+  onClose: () => void;
+  onImport: (rows: { grade: string; subject: string; topic: string }[]) => void;
+}> = ({ isOpen, onClose, onImport }) => {
+  const [rows, setRows] = useState<{ grade: string; subject: string; topic: string }[]>([]);
+  const [fileName, setFileName] = useState('');
+  const [isParsing, setIsParsing] = useState(false);
+  const [isDragging, setIsDragging] = useState(false);
+
+  const parseFile = async (file: File) => {
+    setIsParsing(true);
+    setFileName(file.name);
+    try {
+      const buf = await file.arrayBuffer();
+      const wb = read(buf, { type: 'array' });
+      const ws = wb.Sheets[wb.SheetNames[0]];
+      const json: string[][] = utils.sheet_to_json(ws, { header: 1, defval: '' }) as string[][];
+      // Auto-detect header row vs data (skip rows where first col looks like a header)
+      const data = json.filter(r => r.length >= 3 && r[0] && typeof r[0] === 'string' && !r[0].toLowerCase().includes('série') && !r[0].toLowerCase().includes('serie'));
+      const parsed = data.map(r => ({
+        grade: String(r[0] || '').trim(),
+        subject: String(r[1] || '').trim(),
+        topic: String(r[2] || '').trim(),
+      })).filter(r => r.grade && r.subject && r.topic);
+      setRows(parsed);
+      if (parsed.length === 0) toast.error('Nenhuma linha válida encontrada. Use colunas: Série | Disciplina | Tópico');
+      else toast.success(`${parsed.length} linha(s) importadas!`);
+    } catch {
+      toast.error('Erro ao processar o arquivo. Certifique-se de que é um arquivo .xlsx ou .xls válido.');
+    } finally {
+      setIsParsing(false);
+    }
   };
 
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault(); setIsDragging(false);
+    const file = e.dataTransfer.files[0];
+    if (file && (file.name.endsWith('.xlsx') || file.name.endsWith('.xls'))) parseFile(file);
+    else toast.error('Use um arquivo .xlsx ou .xls');
+  };
+
+  if (!isOpen) return null;
   return (
-    <div className="fixed inset-0 z-[100] flex items-center justify-end bg-slate-900/40 backdrop-blur-sm">
-      <motion.div 
-        initial={{ x: '100%' }}
-        animate={{ x: 0 }}
-        exit={{ x: '100%' }}
-        className="w-full max-w-2xl h-full bg-white shadow-2xl overflow-y-auto"
-      >
-        <div className="p-10 space-y-8">
-           <header className="flex items-center justify-between">
-              <div className="space-y-1">
-                 <Badge variant="energy" className="uppercase tracking-widest text-[9px] italic">{trail.subject}</Badge>
-                 <h2 className="text-4xl font-black text-slate-800 tracking-tight">{trail.title}</h2>
-              </div>
-              <button onClick={onClose} className="p-3 bg-slate-100 rounded-2xl text-slate-400 hover:text-slate-800 transition-colors">
-                <X size={24} />
-              </button>
-           </header>
+    <div className="fixed inset-0 z-[200] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-md">
+      <motion.div initial={{ opacity: 0, scale: 0.95, y: 20 }} animate={{ opacity: 1, scale: 1, y: 0 }} className="bg-white rounded-[2.5rem] shadow-2xl w-full max-w-2xl overflow-hidden">
+        <div className="bg-gradient-to-br from-emerald-600 to-teal-700 p-8 text-white relative overflow-hidden">
+          <div className="absolute inset-0 bg-[url('https://www.transparenttextures.com/patterns/cubes.png')] opacity-5" />
+          <div className="relative z-10 flex items-center gap-4">
+            <div className="w-14 h-14 bg-white/20 rounded-2xl flex items-center justify-center"><FileSpreadsheet size={28} /></div>
+            <div>
+              <h2 className="text-2xl font-black">Importar Grade Curricular</h2>
+              <p className="text-white/70 text-sm mt-0.5">Carregue um .xlsx e a IA gera as trilhas automaticamente</p>
+            </div>
+          </div>
+        </div>
+        <div className="p-8 space-y-6">
+          {/* Drop zone */}
+          <div
+            onDragOver={e => { e.preventDefault(); setIsDragging(true); }}
+            onDragLeave={() => setIsDragging(false)}
+            onDrop={handleDrop}
+            className={cn('border-2 border-dashed rounded-2xl p-8 text-center transition-all cursor-pointer', isDragging ? 'border-emerald-400 bg-emerald-50' : 'border-slate-200 hover:border-emerald-300 hover:bg-emerald-50/30')}
+            onClick={() => document.getElementById('xls-file-input')?.click()}
+          >
+            <input id="xls-file-input" type="file" accept=".xlsx,.xls" className="hidden" onChange={e => { const f = e.target.files?.[0]; if (f) parseFile(f); }} />
+            <Upload size={40} className="mx-auto mb-3 text-slate-300" />
+            <p className="font-black text-slate-600">Arraste o arquivo aqui ou clique para selecionar</p>
+            <p className="text-xs text-slate-400 mt-1">Formato: Coluna A = Série &bull; Coluna B = Disciplina &bull; Coluna C = Tópico/Tema</p>
+            {fileName && <p className="text-emerald-600 font-bold text-sm mt-3 flex items-center justify-center gap-1"><CheckCircle size={14} /> {fileName}</p>}
+          </div>
 
-           <section className="bg-slate-50 border border-slate-100 p-8 rounded-[2.5rem] space-y-4">
-              <h4 className="text-[10px] font-black uppercase tracking-widest text-slate-400">Objetivo Pedagógico</h4>
-              <p className="text-slate-600 font-medium leading-relaxed">{trail.description}</p>
-              <div className="flex gap-4 pt-4">
-                 <div className="flex items-center gap-2 bg-white px-4 py-2 rounded-xl border border-slate-100 shadow-sm">
-                    <Trophy className="text-amber-500" size={16} />
-                    <span className="text-xs font-bold text-slate-700">{trail.rewardXp} XP</span>
-                 </div>
-                 <div className="flex items-center gap-2 bg-white px-4 py-2 rounded-xl border border-slate-100 shadow-sm">
-                    <History className="text-primary-500" size={16} />
-                    <span className="text-xs font-bold text-slate-700">{trail.steps.length} Etapas</span>
-                 </div>
-              </div>
-           </section>
+          {/* Template download hint */}
+          <div className="bg-slate-50 border border-slate-100 rounded-2xl p-4 text-sm text-slate-500">
+            <span className="font-black text-slate-700">Formato esperado: </span>Série (1º Ano, 2º EM...) │ Disciplina (Matemática...) │ Tópico (Frações...)
+          </div>
 
-           <section className="space-y-6">
-              <h4 className="text-[10px] font-black uppercase tracking-widest text-slate-400">Mapa de Aprendizagem</h4>
-              <div className="relative space-y-8 pl-10">
-                 <div className="absolute left-[20px] top-4 bottom-4 w-1 bg-slate-100 rounded-full" />
-                 {trail.steps.map((step: any, idx: number) => (
-                   <div key={step.id} className="relative group">
-                      <div className="absolute -left-[30px] w-10 h-10 bg-white border-4 border-slate-100 rounded-2xl flex items-center justify-center group-hover:border-primary-500 transition-all">
-                         {stepIcons[step.type] || <CheckCircle2 size={20} />}
-                      </div>
-                      <div className="bg-white p-6 rounded-3xl border border-slate-100 shadow-sm group-hover:shadow-md group-hover:bg-slate-50 transition-all">
-                         <div className="flex justify-between items-center mb-1">
-                            <span className="text-[9px] font-black uppercase text-slate-400 tracking-tighter">Fase {idx + 1}</span>
-                            <Badge variant="outline" className="text-[8px] uppercase">{step.type}</Badge>
-                         </div>
-                         <h5 className="text-lg font-black text-slate-800 tracking-tight">{step.title}</h5>
-                      </div>
-                   </div>
-                 ))}
-              </div>
-           </section>
+          {/* Preview table */}
+          {rows.length > 0 && (
+            <div className="max-h-56 overflow-y-auto rounded-2xl border border-slate-100">
+              <table className="w-full text-sm">
+                <thead className="bg-slate-50 sticky top-0">
+                  <tr>{['Série', 'Disciplina', 'Tópico'].map(h => <th key={h} className="px-4 py-3 text-left text-xs font-black uppercase text-slate-400 tracking-widest">{h}</th>)}</tr>
+                </thead>
+                <tbody>
+                  {rows.map((r, i) => (
+                    <tr key={i} className={i % 2 === 0 ? 'bg-white' : 'bg-slate-50/50'}>
+                      <td className="px-4 py-2 font-bold text-slate-700 text-xs">{r.grade}</td>
+                      <td className="px-4 py-2 text-slate-600 text-xs">{r.subject}</td>
+                      <td className="px-4 py-2 text-slate-600 text-xs">{r.topic}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          <div className="flex gap-3">
+            <Button variant="outline" className="flex-1 rounded-2xl" onClick={onClose}>Cancelar</Button>
+            <Button
+              variant="primary"
+              className="flex-[2] rounded-2xl bg-gradient-to-r from-emerald-600 to-teal-600 border-0"
+              disabled={rows.length === 0 || isParsing}
+              onClick={() => { onImport(rows); onClose(); }}
+            >
+              {isParsing ? 'Processando...' : <><ArrowRight size={16} className="mr-2" />Gerar {rows.length} Trilha{rows.length !== 1 ? 's' : ''} com IA</>}
+            </Button>
+          </div>
         </div>
       </motion.div>
     </div>
   );
 };
 
-const EditTrailModal: React.FC<{ trail: any; isOpen: boolean; onClose: () => void; onSave: (data: any) => void }> = ({ trail, isOpen, onClose, onSave }) => {
-  const [formData, setFormData] = React.useState({ ...trail });
-
-  React.useEffect(() => {
-    if (trail) setFormData({ ...trail });
-  }, [trail]);
-
-  if (!isOpen || !trail) return null;
-
-  return (
-    <div className="fixed inset-0 z-[110] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-md">
-       <motion.div initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }} className="bg-white rounded-[2.5rem] w-full max-w-lg p-10 space-y-6">
-          <div className="flex items-center justify-between">
-             <h3 className="text-2xl font-black text-slate-800">Editar Trilha</h3>
-             <button onClick={onClose} className="p-2 hover:bg-slate-100 rounded-xl transition-colors"><X size={20} /></button>
-          </div>
-          <div className="space-y-4">
-             <div className="space-y-1">
-                <label className="text-[10px] font-black uppercase text-slate-400 ml-1">Título</label>
-                <input 
-                  value={formData.title} 
-                  onChange={e => setFormData((p: any) => ({ ...p, title: e.target.value }))}
-                  className="w-full bg-slate-50 border border-slate-100 rounded-2xl px-5 py-4 font-bold outline-none focus:ring-4 focus:ring-primary-500/10" 
-                />
-             </div>
-             <div className="space-y-1">
-                <label className="text-[10px] font-black uppercase text-slate-400 ml-1">Descrição</label>
-                <textarea 
-                  rows={3}
-                  value={formData.description} 
-                  onChange={e => setFormData((p: any) => ({ ...p, description: e.target.value }))}
-                  className="w-full bg-slate-50 border border-slate-100 rounded-2xl px-5 py-4 font-bold outline-none focus:ring-4 focus:ring-primary-500/10 resize-none" 
-                />
-             </div>
-             <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-1">
-                   <label className="text-[10px] font-black uppercase text-slate-400 ml-1">Dificuldade</label>
-                   <select 
-                     value={formData.difficulty} 
-                     onChange={e => setFormData((p: any) => ({ ...p, difficulty: e.target.value as any }))}
-                     className="w-full bg-slate-50 border border-slate-100 rounded-2xl px-5 py-4 font-bold outline-none"
-                   >
-                     <option value="easy">Fácil</option>
-                     <option value="medium">Médio</option>
-                     <option value="hard">Difícil</option>
-                   </select>
-                </div>
-                <div className="space-y-1">
-                   <label className="text-[10px] font-black uppercase text-slate-400 ml-1">Série</label>
-                   <input 
-                     value={formData.grade} 
-                     onChange={e => setFormData((p: any) => ({ ...p, grade: e.target.value }))}
-                     className="w-full bg-slate-50 border border-slate-100 rounded-2xl px-5 py-4 font-bold outline-none" 
-                   />
-                </div>
-             </div>
-          </div>
-          <div className="flex gap-3 pt-4 border-t border-slate-50">
-             <Button variant="outline" className="flex-1 rounded-2xl" onClick={onClose}>Cancelar</Button>
-             <Button variant="primary" className="flex-1 rounded-2xl" onClick={() => { onSave(formData); onClose(); }}>Salvar Alterações</Button>
-          </div>
-       </motion.div>
-    </div>
-  );
-};
-
-const LinkClassModal: React.FC<{ trail: any; isOpen: boolean; onClose: () => void; onLink: (classId: string, year: string) => void }> = ({ trail, isOpen, onClose, onLink }) => {
-  const [selectedSchool, setSelectedSchool] = useState('');
-  const [selectedClass, setSelectedClass] = useState('');
-  const [year, setYear] = useState(new Date().getFullYear().toString());
-
-  const [schools, setSchools] = useState<any[]>([]);
-  const [classes, setClasses] = useState<any[]>([]);
-
-  React.useEffect(() => {
-    supabase.from('schools').select('*').then(({ data }) => setSchools(data || []));
-  }, []);
-
-  React.useEffect(() => {
-    if (!selectedSchool) {
-      setClasses([]);
-      return;
-    }
-    supabase.from('classes').select('*').eq('schoolId', selectedSchool).then(({ data }) => setClasses(data || []));
-  }, [selectedSchool]);
-
-  if (!isOpen || !trail) return null;
-
-  return (
-    <div className="fixed inset-0 z-[110] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-md">
-       <motion.div initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }} className="bg-white rounded-[2.5rem] w-full max-w-md p-10 space-y-6">
-          <div className="flex items-center justify-between">
-             <div className="space-y-1">
-                <h3 className="text-2xl font-black text-slate-800">Vincular Turma</h3>
-                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">{trail.title}</p>
-             </div>
-             <button onClick={onClose} className="p-2 hover:bg-slate-100 rounded-xl transition-colors"><X size={20} /></button>
-          </div>
-          
-          <div className="space-y-5">
-             <div className="space-y-1">
-                <label className="text-[10px] font-black uppercase text-slate-400 ml-1">Escola</label>
-                <select 
-                  value={selectedSchool} onChange={e => setSelectedSchool(e.target.value)}
-                  className="w-full bg-slate-50 border border-slate-100 rounded-2xl px-5 py-4 font-bold outline-none"
-                >
-                   <option value="">Selecione a Escola</option>
-                   {schools.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
-                </select>
-             </div>
-
-             <div className="space-y-1">
-                <label className="text-[10px] font-black uppercase text-slate-400 ml-1">Turma Destino</label>
-                <select 
-                  disabled={!selectedSchool}
-                  value={selectedClass} onChange={e => setSelectedClass(e.target.value)}
-                  className="w-full disabled:opacity-50 bg-slate-50 border border-slate-100 rounded-2xl px-5 py-4 font-bold outline-none"
-                >
-                   <option value="">Selecione a Turma</option>
-                   {classes.map(c => <option key={c.id} value={c.id}>{c.name} ({c.grade})</option>)}
-                </select>
-             </div>
-
-             <div className="space-y-1">
-                <label className="text-[10px] font-black uppercase text-slate-400 ml-1">Ano Letivo</label>
-                <select 
-                  value={year} onChange={e => setYear(e.target.value)}
-                  className="w-full bg-slate-50 border border-slate-100 rounded-2xl px-5 py-4 font-bold outline-none"
-                >
-                   {[2024, 2025, 2026, 2027].map(y => <option key={y} value={y.toString()}>{y}</option>)}
-                </select>
-             </div>
-          </div>
-
-          <div className="flex gap-3 pt-4 border-t border-slate-50">
-             <Button variant="outline" className="flex-1 rounded-2xl" onClick={onClose}>Cancelar</Button>
-             <Button 
-               variant="primary" 
-               className="flex-1 rounded-2xl" 
-               disabled={!selectedClass}
-               onClick={() => { onLink(selectedClass, year); onClose(); }}
-             >
-                Confirmar Vínculo
-             </Button>
-          </div>
-       </motion.div>
-    </div>
-  );
-};
-
-
-const PHASE_TYPES = [
-  { type: 'intro',    label: 'Introdução' },
-  { type: 'theory',  label: 'Teoria' },
-  { type: 'practice',label: 'Prática' },
-  { type: 'quiz',    label: 'Quiz' },
-  { type: 'boss',    label: 'Desafio Final' },
-];
-
-const AIGeneratorModal: React.FC<{ isOpen: boolean; onClose: () => void; onGenerate: (data: any) => void }> = ({ isOpen, onClose, onGenerate }) => {
+const AIGeneratorModal: React.FC<{
+  isOpen: boolean;
+  onClose: () => void;
+  onGenerate: (data: any) => void;
+  classes: any[];
+  schools: any[];
+  isAdminMaster?: boolean;
+}> = ({ isOpen, onClose, onGenerate, classes, schools, isAdminMaster }) => {
   const [isGenerating, setIsGenerating] = useState(false);
   const [generatedPhases, setGeneratedPhases] = useState(0);
   const [formData, setFormData] = useState({
@@ -255,6 +184,20 @@ const AIGeneratorModal: React.FC<{ isOpen: boolean; onClose: () => void; onGener
     topic: '',
     grade: '',
     difficulty: 'medium'
+  });
+  const [selectedClassId, setSelectedClassId] = useState('');
+  const [schoolFilter, setSchoolFilter] = useState('');
+  const [yearFilter, setYearFilter] = useState('');
+
+  // Unique school years from the classes list
+  const yearOptionsAI = Array.from(new Set(classes.map(c => c.year || c.schoolYear).filter(Boolean))).sort().reverse();
+
+  // Filter classes by grade match + school filter + year filter
+  const filteredClassesAI = classes.filter(c => {
+    const matchGrade = !formData.grade || normalizeGrade(c.grade || '') === normalizeGrade(formData.grade);
+    const matchSchool = !schoolFilter || c.schoolId === schoolFilter;
+    const matchYear = !yearFilter || (c.year || c.schoolYear || '') === yearFilter;
+    return matchGrade && matchSchool && matchYear;
   });
 
   const handleGenerate = async () => {
@@ -307,11 +250,14 @@ const AIGeneratorModal: React.FC<{ isOpen: boolean; onClose: () => void; onGener
         subject: formData.subject,
         grade: formData.grade,
         difficulty: formData.difficulty,
+        classId: selectedClassId || null,
         isAIGenerated: true,
         createdAt: new Date().toISOString()
       };
 
       onGenerate(newTrail);
+      setSelectedClassId('');
+      setSchoolFilter('');
       onClose();
       toast.success('Trilha completa gerada com IA! ✨');
     } catch (err: any) {
@@ -372,10 +318,56 @@ const AIGeneratorModal: React.FC<{ isOpen: boolean; onClose: () => void; onGener
                   <label className="text-[10px] font-black uppercase text-slate-400 ml-1">Série</label>
                   <select className="w-full bg-slate-50 border border-slate-200 rounded-2xl px-5 py-4 font-bold outline-none" value={formData.grade} onChange={e => setFormData(prev => ({ ...prev, grade: e.target.value }))}>
                     <option value="">Selecione...</option>
-                    {['1º Ano', '2º Ano', '3º Ano', '4º Ano', '5º Ano', '6º Ano', '7º Ano', '8º Ano', '9º Ano', 'EM'].map(g => <option key={g} value={g}>{g}</option>)}
+                    {['1º Ano', '2º Ano', '3º Ano', '4º Ano', '5º Ano', '6º Ano', '7º Ano', '8º Ano', '9º Ano', '1º EM', '2º EM', '3º EM'].map(g => <option key={g} value={g}>{g}</option>)}
                   </select>
                 </div>
               </div>
+              {/* ── Vincular Turma (Opcional) ─────────── */}
+              <div className="space-y-2 border-t border-slate-100 pt-4">
+                <div className="flex items-center justify-between">
+                  <label className="text-[10px] font-black uppercase text-slate-400 ml-1 tracking-widest">Vincular Turma (Opcional)</label>
+                  {selectedClassId && (
+                    <button onClick={() => setSelectedClassId('')} className="text-[9px] font-black uppercase text-red-400 hover:text-red-600 transition-colors">✕ Remover</button>
+                  )}
+                </div>
+                {isAdminMaster && schools.length > 0 && (
+                  <select
+                    value={schoolFilter} onChange={e => { setSchoolFilter(e.target.value); setSelectedClassId(''); }}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-2xl px-5 py-3 font-bold outline-none text-sm focus:border-primary-400 transition-colors"
+                  >
+                    <option value="">Todas as escolas</option>
+                    {schools.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+                  </select>
+                )}
+                {/* Ano letivo filter */}
+                {yearOptionsAI.length > 0 && (
+                  <select
+                    value={yearFilter} onChange={e => { setYearFilter(e.target.value); setSelectedClassId(''); }}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-2xl px-5 py-3 font-bold outline-none text-sm focus:border-primary-400 transition-colors"
+                  >
+                    <option value="">📅 Todos os anos letivos</option>
+                    {yearOptionsAI.map(y => <option key={y} value={y}>📅 Ano Letivo: {y}</option>)}
+                  </select>
+                )}
+                <select
+                  value={selectedClassId} onChange={e => setSelectedClassId(e.target.value)}
+                  className="w-full bg-slate-50 border border-slate-200 rounded-2xl px-5 py-3 font-bold outline-none text-sm focus:border-primary-400 transition-colors"
+                >
+                  <option value="">Sem turma (livremente acessível)</option>
+                  {filteredClassesAI.length === 0 && formData.grade && (
+                    <option disabled>Nenhuma turma com essa série</option>
+                  )}
+                  {filteredClassesAI.map(c => (
+                    <option key={c.id} value={c.id}>{c.name} — {c.grade}</option>
+                  ))}
+                </select>
+                {selectedClassId && (
+                  <p className="text-[10px] text-emerald-600 font-black ml-1 uppercase tracking-wide flex items-center gap-1">
+                    <GraduationCap size={11} /> Alunos serão notificados automaticamente
+                  </p>
+                )}
+              </div>
+
               <div className="flex gap-3 pt-4">
                 <Button variant="outline" className="flex-1 rounded-2xl" onClick={onClose}>Cancelar</Button>
                 <Button disabled={!formData.topic || !formData.subject || !formData.grade} variant="primary" className="flex-1 rounded-2xl" onClick={handleGenerate}>Gerar com IA</Button>
@@ -390,85 +382,113 @@ const AIGeneratorModal: React.FC<{ isOpen: boolean; onClose: () => void; onGener
 
 // ─── Bulk AI Generator Modal ─────────────────────────────────────────────────
 
-const GRADES = ['1º Ano', '2º Ano', '3º Ano', '4º Ano', '5º Ano', '6º Ano', '7º Ano', '8º Ano', '9º Ano', 'EM - 1º', 'EM - 2º', 'EM - 3º'];
-const SUBJECTS = ['Português', 'Matemática', 'História', 'Geografia', 'Ciências', 'Física', 'Química', 'Biologia', 'Artes', 'Educação Física'];
-
 const BulkAIGeneratorModal: React.FC<{
   isOpen: boolean;
   onClose: () => void;
   onBulkGenerate: (trails: any[]) => void;
-}> = ({ isOpen, onClose, onBulkGenerate }) => {
+  classes: any[];
+  schools: any[];
+  isAdminMaster?: boolean;
+}> = ({ isOpen, onClose, onBulkGenerate, classes, schools, isAdminMaster }) => {
   const [grade, setGrade] = useState('');
   const [subject, setSubject] = useState('');
-  const [quantity, setQuantity] = useState(3);
+  const [quantity, setQuantity] = useState(1);
   const [isGenerating, setIsGenerating] = useState(false);
   const [currentTrail, setCurrentTrail] = useState(0);
   const [currentPhase, setCurrentPhase] = useState(0);
+  const [currentSubjectIdx, setCurrentSubjectIdx] = useState(0);
+  const [totalGenerated, setTotalGenerated] = useState(0);
   const [status, setStatus] = useState('');
+  const [selectedClassId, setSelectedClassId] = useState('');
+  const [schoolFilter, setSchoolFilter] = useState('');
+  const [yearFilter, setYearFilter] = useState('');
 
-  const handleGenerate = async () => {
-    if (!grade || !subject) {
-      toast.error('Selecione a série e a disciplina.');
-      return;
+  // Unique school years for the year filter
+  const yearOptionsBulk = Array.from(new Set(classes.map(c => c.year || c.schoolYear).filter(Boolean))).sort().reverse();
+
+  // Filter classes by grade match + school filter + year filter
+  const filteredClassesBulk = classes.filter(c => {
+    const matchGrade = !grade || normalizeGrade(c.grade || '') === normalizeGrade(grade);
+    const matchSchool = !schoolFilter || c.schoolId === schoolFilter;
+    const matchYear = !yearFilter || (c.year || c.schoolYear || '') === yearFilter;
+    return matchGrade && matchSchool && matchYear;
+  });
+
+  // Derived: when "all" is selected, cap slider at 3, show real total
+  const isAllSubjects = subject === 'all';
+  const activeSubjects = isAllSubjects ? SUBJECTS : (subject ? [subject] : []);
+  const maxQty = isAllSubjects ? 3 : 10;
+  const totalTrails = activeSubjects.length * quantity;
+
+  // ── Retry helper: retries fn up to maxAttempts times on failure ─────────────
+  const withRetry = async (fn: () => Promise<any>, maxAttempts = 3, delayMs = 2000): Promise<any> => {
+    let lastErr: any;
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        return await fn();
+      } catch (err: any) {
+        lastErr = err;
+        if (attempt < maxAttempts) {
+          const wait = delayMs * attempt; // 2s, 4s, 6s
+          setStatus(prev => prev + ` (retry ${attempt}/${maxAttempts - 1}, aguardando ${wait / 1000}s...)`);
+          await new Promise(r => setTimeout(r, wait));
+        }
+      }
     }
-    if (quantity < 1 || quantity > 10) {
-      toast.error('Quantidade deve ser entre 1 e 10 trilhas.');
-      return;
-    }
+    throw lastErr;
+  };
 
-    setIsGenerating(true);
-    setCurrentTrail(0);
-    setCurrentPhase(0);
-
-    // Fetch existing trail titles to build the forbidden list
-    const { data: existingTrails } = await supabase.from('learning_paths').select('title');
-    const existingTitles = (existingTrails || []).map((t: any) => t.title).filter(Boolean);
-    const forbiddenNote = existingTitles.length > 0
-      ? `\n\nATENÇÃO CRÍTICO: As trilhas abaixo JÁ EXISTEM no sistema. É ABSOLUTAMENTE PROIBIDO gerar contúedo igual, similar, parecido ou que sobreponha qualquer um desses tópicos. Cada nova trilha DEVE ser 100% única e distinta:\n${existingTitles.map(t => `- "${t}"`).join('\n')}`
+  // ── Core function to generate N trails for a SINGLE subject ──────────────
+  const generateForSubject = async (
+    subj: string,
+    qty: number,
+    existingTitles: string[],
+    accumulatedTitles: string[],
+    subjectIndex: number,
+    subjectTotal: number,
+  ): Promise<any[]> => {
+    const forbiddenBase = [...existingTitles, ...accumulatedTitles];
+    const forbiddenNote = forbiddenBase.length > 0
+      ? `\n\nATENÇÃO CRÍTICO: As trilhas abaixo JÁ EXISTEM no sistema. É PROIBIDO gerar conteúdo igual, similar ou que sobreponha qualquer um desses tópicos:\n${forbiddenBase.map(t => `- "${t}"`).join('\n')}`
       : '';
 
-    // Build the master curriculum prompt to get N unique topics
     const topicsPrompt = `Você é um especialista em currículo escolar brasileiro (BNCC).
-Gere exatamente ${quantity} tópicos/temas distintos e progressivos para trilhas de aprendizagem da disciplina "${subject}" para a série "${grade}" do Ensino Básico/Médio.
+Gere exatamente ${qty} tópicos/temas distintos e progressivos para trilhas de aprendizagem da disciplina "${subj}" para a série "${grade}" do Ensino Básico/Médio.
 Regras obrigatórias:
 - Cada tópico deve ser diferente e não repetitivo
 - Respeitar rigorosamente o currículo da BNCC para ${grade}
 - Progressividade: do mais simples ao mais complexo
-- Linguagem adequada ao nível do aluno
-- Cada tópico deve ser uma string curta e descritiva (ex: "Frações Equivalentes", "Ecossistemas Brasileiros")${forbiddenNote}
-Retorne APENAS um array JSON com ${quantity} strings. Exemplo: ["Tópico 1", "Tópico 2", ...]`;
+- Cada tópico deve ser uma string curta e descritiva (ex: "Frações Equivalentes")${forbiddenNote}
+Retorne APENAS um array JSON com ${qty} strings. Exemplo: ["Tópico 1", "Tópico 2", ...]`;
 
     let topics: string[] = [];
     try {
-      setStatus('Analisando currículo BNCC e verificando conteúdo existente...');
-      const res = await fetch('/.netlify/functions/ai-proxy', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ feature: 'generate-trail-meta', prompt: topicsPrompt }),
+      setStatus(`[${subjectIndex}/${subjectTotal}] Analisando currículo BNCC: ${subj}...`);
+      const raw = await withRetry(async () => {
+        const res = await fetch('/.netlify/functions/ai-proxy', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ feature: 'generate-topics', prompt: topicsPrompt }),
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        return res.text();
       });
-      const raw = await res.text();
       const match = raw.match(/\[.*\]/s);
       if (match) {
         const parsed = JSON.parse(match[0]);
-        if (Array.isArray(parsed)) topics = parsed.slice(0, quantity);
+        if (Array.isArray(parsed)) topics = parsed.slice(0, qty);
       }
-    } catch (_) {
-      // fallback: generic topics
-    }
+    } catch (_) { /* fallback below */ }
 
-    while (topics.length < quantity) {
-      topics.push(`${subject} - Tópico ${topics.length + 1} (${grade})`);
+    while (topics.length < qty) {
+      topics.push(`${subj} - Tópico ${topics.length + 1} (${grade})`);
     }
 
     const generated: any[] = [];
 
-    for (let i = 0; i < quantity; i++) {
+    for (let i = 0; i < qty; i++) {
       const topic = topics[i];
-      // Build the accumulated forbidden list (existing + already-generated in this batch)
-      const allForbidden = [
-        ...existingTitles,
-        ...generated.map(g => g.title),
-      ];
+      const allForbidden = [...forbiddenBase, ...accumulatedTitles, ...generated.map(g => g.title)];
       const batchForbiddenNote = allForbidden.length > 0
         ? `\n\nATENÇÃO CRÍTICO: NÃO gere conteúdo igual ou similar a:\n${allForbidden.map(t => `- "${t}"`).join('\n')}`
         : '';
@@ -476,30 +496,34 @@ Retorne APENAS um array JSON com ${quantity} strings. Exemplo: ["Tópico 1", "T�
 
       setCurrentTrail(i + 1);
       setCurrentPhase(0);
-      setStatus(`Gerando trilha ${i + 1}/${quantity}: "${topic}"...`);
+      setStatus(`[${subjectIndex}/${subjectTotal}] ${subj} — Trilha ${i + 1}/${qty}: "${topic}"...`);
 
       try {
-        const metaPromise = callAI({
+        // Generate meta with retry
+        const metaRes = await withRetry(() => callAI({
           feature: 'generate-trail-meta',
           topic: topicWithContext,
-          subject,
+          subject: subj,
           grade,
-        });
-        const stepPromises = PHASE_TYPES.map((phase, idx) =>
-          callGenerateTrailStep({
+        }));
+        const meta = (metaRes as any).result || metaRes;
+
+        // Generate each step sequentially with retry to avoid overwhelming the API
+        const steps: any[] = [];
+        for (let phaseIdx = 0; phaseIdx < PHASE_TYPES.length; phaseIdx++) {
+          const phase = PHASE_TYPES[phaseIdx];
+          const step = await withRetry(() => callGenerateTrailStep({
             topic: topicWithContext,
-            subject,
+            subject: subj,
             grade,
             difficulty: 'medium',
-            phaseIndex: idx,
+            phaseIndex: phaseIdx,
             phaseType: phase.type,
-          }).then(result => {
-            setCurrentPhase(prev => prev + 1);
-            return result;
-          })
-        );
-        const [metaRes, ...steps] = await Promise.all([metaPromise, ...stepPromises]);
-        const meta = (metaRes as any).result || metaRes;
+          }));
+          setCurrentPhase(prev => prev + 1);
+          steps.push(step);
+        }
+
         generated.push({
           id: crypto.randomUUID(),
           title: (meta as any).title || topic,
@@ -507,34 +531,85 @@ Retorne APENAS um array JSON com ${quantity} strings. Exemplo: ["Tópico 1", "T�
           rewardXp: (meta as any).rewardXp || 600,
           rewardCoins: (meta as any).rewardCoins || 250,
           steps: steps.map((s, si) => ({ ...s, id: String(si + 1) })),
-          subject,
+          subject: subj,
           grade,
           difficulty: 'medium',
+          classId: selectedClassId || null,
           isAIGenerated: true,
           createdAt: new Date().toISOString(),
         });
+        setTotalGenerated(prev => prev + 1);
       } catch (err: any) {
-        toast.error(`Erro na trilha "${topic}": ${err.message}`);
+        toast.error(`Erro na trilha "${topic}" após 3 tentativas: ${err.message || 'timeout'}`);
       }
     }
 
-    onBulkGenerate(generated);
+    return generated;
+  };
+
+  const handleGenerate = async () => {
+    if (!grade || !subject) {
+      toast.error('Selecione a série e a disciplina.');
+      return;
+    }
+
+    setIsGenerating(true);
+    setCurrentTrail(0);
+    setCurrentPhase(0);
+    setCurrentSubjectIdx(0);
+    setTotalGenerated(0);
+
+    // Fetch existing trails once for the whole batch
+    const { data: existingTrailsData } = await supabase.from('learning_paths').select('title');
+    const existingTitles = (existingTrailsData || []).map((t: any) => t.title).filter(Boolean);
+
+    const subjectsToProcess = isAllSubjects ? SUBJECTS : [subject];
+    const allGenerated: any[] = [];
+
+    for (let si = 0; si < subjectsToProcess.length; si++) {
+      const subj = subjectsToProcess[si];
+      setCurrentSubjectIdx(si + 1);
+      setCurrentTrail(0);
+      setCurrentPhase(0);
+
+      const results = await generateForSubject(
+        subj,
+        quantity,
+        existingTitles,
+        allGenerated.map(g => g.title),
+        si + 1,
+        subjectsToProcess.length,
+      );
+      allGenerated.push(...results);
+    }
+
+    onBulkGenerate(allGenerated);
     onClose();
-    toast.success(`${generated.length} trilha(s) gerada(s) com sucesso! ✨`);
+    toast.success(`${allGenerated.length} trilha(s) gerada(s) com sucesso! ✨`);
     setIsGenerating(false);
     setCurrentTrail(0);
     setCurrentPhase(0);
+    setCurrentSubjectIdx(0);
+    setTotalGenerated(0);
     setStatus('');
     setGrade('');
     setSubject('');
-    setQuantity(3);
+    setQuantity(1);
+    setSelectedClassId('');
+    setSchoolFilter('');
+    setYearFilter('');
   };
 
   if (!isOpen) return null;
 
-  const totalPhases = quantity * 5;
-  const donePhases = (currentTrail > 0 ? (currentTrail - 1) * 5 : 0) + currentPhase;
-  const overallPct = totalPhases > 0 ? Math.round((donePhases / totalPhases) * 100) : 0;
+  // Progress calculation accounts for multi-subject mode
+  // subjectsToProcess drives the progress bar (derived from isAllSubjects)
+  const totalPhasesOverall = totalTrails * 5;
+  const donePhasesOverall =
+    (currentSubjectIdx > 1 ? (currentSubjectIdx - 1) * quantity * 5 : 0) +
+    (currentTrail > 0 ? (currentTrail - 1) * 5 : 0) +
+    currentPhase;
+  const overallPct = totalPhasesOverall > 0 ? Math.round((donePhasesOverall / totalPhasesOverall) * 100) : 0;
 
   return (
     <div className="fixed inset-0 z-[200] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-md">
@@ -571,7 +646,7 @@ Retorne APENAS um array JSON com ${quantity} strings. Exemplo: ["Tópico 1", "T�
               {/* Trail progress */}
               <div className="space-y-3">
                 <div className="flex justify-between text-[10px] font-black uppercase tracking-widest text-slate-400">
-                  <span>Trilha {currentTrail}/{quantity}</span>
+                  <span>{isAllSubjects ? `Disciplina ${currentSubjectIdx}/${SUBJECTS.length} · Trilha ${currentTrail}/${quantity}` : `Trilha ${currentTrail}/${quantity}`}</span>
                   <span>{overallPct}%</span>
                 </div>
                 <div className="w-full bg-slate-100 rounded-full h-3 overflow-hidden">
@@ -588,7 +663,7 @@ Retorne APENAS um array JSON com ${quantity} strings. Exemplo: ["Tópico 1", "T�
                     </div>
                   ))}
                 </div>
-                <p className="text-center text-[10px] text-slate-400 font-bold">{currentPhase}/5 fases da trilha atual</p>
+                <p className="text-center text-[10px] text-slate-400 font-bold">{currentPhase}/5 fases da trilha atual · {totalGenerated}/{totalTrails} trilhas concluídas</p>
               </div>
             </div>
           ) : (
@@ -609,20 +684,29 @@ Retorne APENAS um array JSON com ${quantity} strings. Exemplo: ["Tópico 1", "T�
               <div className="space-y-1.5">
                 <label className="text-[10px] font-black uppercase text-slate-400 ml-1 tracking-widest">Disciplina</label>
                 <select
-                  value={subject} onChange={e => setSubject(e.target.value)}
+                  value={subject} onChange={e => { setSubject(e.target.value); if (e.target.value === 'all' && quantity > 3) setQuantity(3); }}
                   className="w-full bg-slate-50 border border-slate-200 rounded-2xl px-5 py-4 font-bold outline-none focus:border-indigo-400 transition-colors"
                 >
                   <option value="">Selecione a disciplina...</option>
+                  <option value="all">✨ TODAS AS DISCIPLINAS ({SUBJECTS.length} matérias)</option>
+                  <option disabled>──────────────</option>
                   {SUBJECTS.map(s => <option key={s} value={s}>{s}</option>)}
                 </select>
+                {isAllSubjects && (
+                  <p className="text-[10px] font-black text-indigo-600 ml-1 mt-1 uppercase tracking-wide">
+                    IA gerará trilhas para todas as {SUBJECTS.length} disciplinas automaticamente
+                  </p>
+                )}
               </div>
 
               {/* Quantity */}
               <div className="space-y-1.5">
-                <label className="text-[10px] font-black uppercase text-slate-400 ml-1 tracking-widest">Quantidade de Trilhas</label>
+                <label className="text-[10px] font-black uppercase text-slate-400 ml-1 tracking-widest">
+                  {isAllSubjects ? 'Trilhas por Disciplina' : 'Quantidade de Trilhas'}
+                </label>
                 <div className="flex items-center gap-4">
                   <input
-                    type="range" min={1} max={10} value={quantity}
+                    type="range" min={1} max={maxQty} value={Math.min(quantity, maxQty)}
                     onChange={e => setQuantity(Number(e.target.value))}
                     className="flex-1 accent-indigo-600"
                   />
@@ -630,19 +714,73 @@ Retorne APENAS um array JSON com ${quantity} strings. Exemplo: ["Tópico 1", "T�
                     {quantity}
                   </div>
                 </div>
-                <p className="text-[10px] text-slate-400 font-bold ml-1">≈ {quantity * 5} fases no total &bull; Tempo estimado: ~{Math.ceil(quantity * 0.5)} min
-                </p>
+                {isAllSubjects ? (
+                  <p className="text-[10px] text-indigo-600 font-black ml-1">
+                    {SUBJECTS.length} disciplinas × {quantity} trilha{quantity > 1 ? 's' : ''} = <strong>{totalTrails} trilhas no total</strong> &bull; ~{Math.ceil(totalTrails * 0.5)} min
+                  </p>
+                ) : (
+                  <p className="text-[10px] text-slate-400 font-bold ml-1">≈ {quantity * 5} fases no total &bull; Tempo estimado: ~{Math.ceil(quantity * 0.5)} min</p>
+                )}
               </div>
 
               {/* Info box */}
               {grade && subject && (
-                <div className="bg-indigo-50 border border-indigo-100 rounded-2xl p-4 flex items-start gap-3">
-                  <BrainCircuit size={18} className="text-indigo-500 mt-0.5 flex-shrink-0" />
-                  <p className="text-xs text-indigo-700 font-bold leading-relaxed">
-                    A IA irá analisar o currículo BNCC para <strong>{grade}</strong> em <strong>{subject}</strong>, gerar {quantity} tópicos progressivos distintos e criar trilhas pedagógicas completas com teoria, prática e quiz para cada fase.
+                <div className={cn("border rounded-2xl p-4 flex items-start gap-3", isAllSubjects ? "bg-purple-50 border-purple-100" : "bg-indigo-50 border-indigo-100")}>
+                  <BrainCircuit size={18} className={cn("mt-0.5 flex-shrink-0", isAllSubjects ? "text-purple-500" : "text-indigo-500")} />
+                  <p className={cn("text-xs font-bold leading-relaxed", isAllSubjects ? "text-purple-700" : "text-indigo-700")}>
+                    {isAllSubjects
+                      ? <>A IA irá analisar o currículo BNCC para <strong>{grade}</strong> em <strong>todas as {SUBJECTS.length} disciplinas</strong>, gerando {quantity} trilha{quantity > 1 ? 's' : ''} pedagógica{quantity > 1 ? 's' : ''} distinta{quantity > 1 ? 's' : ''} por matéria — <strong>{totalTrails} trilhas completas no total</strong>.</>
+                      : <>A IA irá analisar o currículo BNCC para <strong>{grade}</strong> em <strong>{subject}</strong>, gerar {quantity} tópico{quantity > 1 ? 's' : ''} progressivo{quantity > 1 ? 's' : ''} distinto{quantity > 1 ? 's' : ''} e criar trilhas pedagógicas completas com teoria, prática e quiz para cada fase.</>
+                    }
                   </p>
                 </div>
               )}
+
+              {/* ── Vincular Turma (Opcional) ─────────── */}
+              <div className="space-y-2 border-t border-slate-100 pt-4">
+                <div className="flex items-center justify-between">
+                  <label className="text-[10px] font-black uppercase text-slate-400 ml-1 tracking-widest">Vincular Turma (Opcional)</label>
+                  {selectedClassId && (
+                    <button onClick={() => setSelectedClassId('')} className="text-[9px] font-black uppercase text-red-400 hover:text-red-600 transition-colors">✕ Remover</button>
+                  )}
+                </div>
+                {isAdminMaster && schools.length > 0 && (
+                  <select
+                    value={schoolFilter} onChange={e => { setSchoolFilter(e.target.value); setSelectedClassId(''); }}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-2xl px-5 py-3 font-bold outline-none text-sm focus:border-indigo-400 transition-colors"
+                  >
+                    <option value="">Todas as escolas</option>
+                    {schools.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+                  </select>
+                )}
+                {/* Ano letivo filter */}
+                {yearOptionsBulk.length > 0 && (
+                  <select
+                    value={yearFilter} onChange={e => { setYearFilter(e.target.value); setSelectedClassId(''); }}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-2xl px-5 py-3 font-bold outline-none text-sm focus:border-indigo-400 transition-colors"
+                  >
+                    <option value="">📅 Todos os anos letivos</option>
+                    {yearOptionsBulk.map(y => <option key={y} value={y}>📅 Ano Letivo: {y}</option>)}
+                  </select>
+                )}
+                <select
+                  value={selectedClassId} onChange={e => setSelectedClassId(e.target.value)}
+                  className="w-full bg-slate-50 border border-slate-200 rounded-2xl px-5 py-3 font-bold outline-none text-sm focus:border-indigo-400 transition-colors"
+                >
+                  <option value="">Sem turma (livremente acessível)</option>
+                  {filteredClassesBulk.length === 0 && grade && (
+                    <option disabled>Nenhuma turma com essa série</option>
+                  )}
+                  {filteredClassesBulk.map(c => (
+                    <option key={c.id} value={c.id}>{c.name} — {c.grade}</option>
+                  ))}
+                </select>
+                {selectedClassId && (
+                  <p className="text-[10px] text-emerald-600 font-black ml-1 uppercase tracking-wide flex items-center gap-1">
+                    <GraduationCap size={11} /> Alunos serão notificados ao concluir a geração
+                  </p>
+                )}
+              </div>
 
               <div className="flex gap-3 pt-2">
                 <Button variant="outline" className="flex-1 rounded-2xl" onClick={onClose}>Cancelar</Button>
@@ -653,7 +791,10 @@ Retorne APENAS um array JSON com ${quantity} strings. Exemplo: ["Tópico 1", "T�
                   onClick={handleGenerate}
                 >
                   <Sparkles size={16} className="mr-2" />
-                  Gerar {quantity} Trilha{quantity > 1 ? 's' : ''} com IA
+                  {isAllSubjects
+                    ? `Gerar ${totalTrails} Trilhas (Todas as Matérias)`
+                    : `Gerar ${quantity} Trilha${quantity > 1 ? 's' : ''} com IA`
+                  }
                 </Button>
               </div>
             </div>
@@ -664,11 +805,221 @@ Retorne APENAS um array JSON com ${quantity} strings. Exemplo: ["Tópico 1", "T�
   );
 };
 
+// ── TrailDetailModal ───────────────────────────────────────────────────────────
+const TrailDetailModal: React.FC<{ trail: any; isOpen: boolean; onClose: () => void }> = ({ trail, isOpen, onClose }) => {
+  if (!isOpen || !trail) return null;
+  return (
+    <div className="fixed inset-0 z-[200] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-md" onClick={onClose}>
+      <motion.div
+        initial={{ opacity: 0, scale: 0.95, y: 20 }}
+        animate={{ opacity: 1, scale: 1, y: 0 }}
+        className="bg-white rounded-[2.5rem] shadow-2xl w-full max-w-2xl max-h-[85vh] overflow-y-auto"
+        onClick={e => e.stopPropagation()}
+      >
+        <div className="bg-gradient-to-br from-slate-900 to-slate-800 p-8 text-white rounded-t-[2.5rem] relative overflow-hidden">
+          <div className="absolute top-0 right-0 w-64 h-64 bg-primary-500/10 rounded-full blur-3xl -mr-32 -mt-32" />
+          <button onClick={onClose} className="absolute top-6 right-6 p-2 bg-white/10 hover:bg-white/20 rounded-xl transition-all"><X size={18} /></button>
+          <div className="relative z-10">
+            <Badge variant="ai" className="mb-3 bg-primary-500/20 border-primary-400/30 text-primary-300 text-[9px] uppercase tracking-widest">{trail.subject || 'Trilha IA'}</Badge>
+            <h2 className="text-2xl font-black tracking-tight mb-2">{trail.title}</h2>
+            <p className="text-slate-400 text-sm">{trail.description}</p>
+            <div className="flex items-center gap-4 mt-4 text-xs font-bold text-slate-400">
+              {trail.grade && <span className="flex items-center gap-1"><GraduationCap size={12} />{normalizeGrade(trail.grade)}</span>}
+              {trail.difficulty && <span className="flex items-center gap-1"><Target size={12} />{trail.difficulty}</span>}
+              <span className="flex items-center gap-1"><Trophy size={12} />{trail.rewardXp || 0} XP</span>
+            </div>
+          </div>
+        </div>
+        <div className="p-8 space-y-4">
+          <h3 className="text-xs font-black uppercase tracking-widest text-slate-400">Etapas da Trilha</h3>
+          {(trail.steps || []).map((step: any, i: number) => (
+            <div key={i} className="flex items-start gap-4 p-4 bg-slate-50 rounded-2xl border border-slate-100">
+              <div className="w-8 h-8 bg-primary-500 text-white rounded-xl flex items-center justify-center font-black text-xs shrink-0">{i + 1}</div>
+              <div className="min-w-0 flex-1">
+                <p className="font-black text-slate-800 text-sm">{step.title}</p>
+                {step.content && <p className="text-slate-500 text-xs mt-1 line-clamp-3">{step.content}</p>}
+                {step.question && <p className="text-primary-600 text-xs mt-1 font-bold italic">❓ {step.question}</p>}
+              </div>
+            </div>
+          ))}
+          {(!trail.steps || trail.steps.length === 0) && (
+            <p className="text-center text-slate-400 py-8">Nenhuma etapa disponível.</p>
+          )}
+        </div>
+      </motion.div>
+    </div>
+  );
+};
+
+// ── EditTrailModal ─────────────────────────────────────────────────────────────
+const EditTrailModal: React.FC<{ trail: any; isOpen: boolean; onClose: () => void; onSave: (data: any) => void }> = ({ trail, isOpen, onClose, onSave }) => {
+  const [form, setForm] = React.useState({ title: '', description: '', subject: '', grade: '', difficulty: 'medium' });
+  React.useEffect(() => {
+    if (trail) setForm({ title: trail.title || '', description: trail.description || '', subject: trail.subject || '', grade: trail.grade || '', difficulty: trail.difficulty || 'medium' });
+  }, [trail]);
+  if (!isOpen || !trail) return null;
+  const GRADES_EDIT = ['1º Ano', '2º Ano', '3º Ano', '4º Ano', '5º Ano', '6º Ano', '7º Ano', '8º Ano', '9º Ano', '1º EM', '2º EM', '3º EM'];
+  const SUBJECTS_EDIT = ['Português', 'Matemática', 'História', 'Geografia', 'Ciências', 'Ed. Física', 'Artes', 'Inglês', 'Filosofia', 'Sociologia'];
+  return (
+    <div className="fixed inset-0 z-[200] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-md" onClick={onClose}>
+      <motion.div
+        initial={{ opacity: 0, scale: 0.95, y: 20 }}
+        animate={{ opacity: 1, scale: 1, y: 0 }}
+        className="bg-white rounded-[2.5rem] shadow-2xl w-full max-w-lg overflow-hidden"
+        onClick={e => e.stopPropagation()}
+      >
+        <div className="bg-gradient-to-br from-indigo-600 to-purple-700 p-8 text-white">
+          <Edit3 className="mb-3 text-indigo-200" size={28} />
+          <h2 className="text-xl font-black">Editar Trilha</h2>
+        </div>
+        <div className="p-8 space-y-4">
+          <div className="space-y-1">
+            <label className="text-[10px] font-black uppercase text-slate-400">Título</label>
+            <input className="w-full bg-slate-50 border border-slate-200 rounded-2xl px-4 py-3 font-bold outline-none focus:border-primary-300" value={form.title} onChange={e => setForm(p => ({ ...p, title: e.target.value }))} />
+          </div>
+          <div className="space-y-1">
+            <label className="text-[10px] font-black uppercase text-slate-400">Descrição</label>
+            <textarea rows={3} className="w-full bg-slate-50 border border-slate-200 rounded-2xl px-4 py-3 font-bold outline-none focus:border-primary-300 resize-none" value={form.description} onChange={e => setForm(p => ({ ...p, description: e.target.value }))} />
+          </div>
+          <div className="grid grid-cols-2 gap-4">
+            <div className="space-y-1">
+              <label className="text-[10px] font-black uppercase text-slate-400">Disciplina</label>
+              <select className="w-full bg-slate-50 border border-slate-200 rounded-2xl px-4 py-3 font-bold outline-none appearance-none" value={form.subject} onChange={e => setForm(p => ({ ...p, subject: e.target.value }))}>
+                <option value="">Selecione</option>
+                {SUBJECTS_EDIT.map(s => <option key={s} value={s}>{s}</option>)}
+              </select>
+            </div>
+            <div className="space-y-1">
+              <label className="text-[10px] font-black uppercase text-slate-400">Série</label>
+              <select className="w-full bg-slate-50 border border-slate-200 rounded-2xl px-4 py-3 font-bold outline-none appearance-none" value={form.grade} onChange={e => setForm(p => ({ ...p, grade: e.target.value }))}>
+                <option value="">Selecione</option>
+                {GRADES_EDIT.map(g => <option key={g} value={g}>{g}</option>)}
+              </select>
+            </div>
+          </div>
+          <div className="flex gap-3 pt-2">
+            <Button variant="outline" className="flex-1 rounded-2xl" onClick={onClose}>Cancelar</Button>
+            <Button variant="primary" className="flex-1 rounded-2xl" onClick={() => { onSave({ id: trail.id, ...form }); onClose(); }}>
+              <CheckCircle2 size={16} className="mr-2" /> Salvar
+            </Button>
+          </div>
+        </div>
+      </motion.div>
+    </div>
+  );
+};
+
+// ── LinkClassModal ─────────────────────────────────────────────────────────────
+const LinkClassModal: React.FC<{ trail: any; isOpen: boolean; onClose: () => void; onLink: (classId: string, year: string) => void }> = ({ trail, isOpen, onClose, onLink }) => {
+  const [selectedClassId, setSelectedClassId] = React.useState('');
+  const [yearFilter, setYearFilter] = React.useState('');
+  const [classes, setClasses] = React.useState<any[]>([]);
+  React.useEffect(() => {
+    if (isOpen) {
+      supabase.from('classes').select('*').then(({ data }) => { if (data) setClasses(data); });
+      setSelectedClassId(trail?.classId || '');
+      setYearFilter('');
+    }
+  }, [isOpen, trail]);
+  if (!isOpen || !trail) return null;
+
+  // Unique school years from loaded classes
+  const yearOptionsLink = Array.from(new Set(classes.map(c => c.year || c.schoolYear).filter(Boolean))).sort().reverse();
+
+  // Filter classes by year if selected
+  const filteredClassesLink = classes.filter(c => {
+    const matchYear = !yearFilter || (c.year || c.schoolYear || '') === yearFilter;
+    return matchYear;
+  });
+
+  const selectedClass = filteredClassesLink.find(c => c.id === selectedClassId)
+    || classes.find(c => c.id === selectedClassId); // fallback: find in all
+
+  return (
+    <div className="fixed inset-0 z-[200] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-md" onClick={onClose}>
+      <motion.div
+        initial={{ opacity: 0, scale: 0.95, y: 20 }}
+        animate={{ opacity: 1, scale: 1, y: 0 }}
+        className="bg-white rounded-[2.5rem] shadow-2xl w-full max-w-md overflow-hidden"
+        onClick={e => e.stopPropagation()}
+      >
+        <div className="bg-gradient-to-br from-emerald-600 to-teal-700 p-8 text-white">
+          <Target className="mb-3 text-emerald-200" size={28} />
+          <h2 className="text-xl font-black">Vincular Turma</h2>
+          <p className="text-emerald-100/80 text-sm mt-1 font-medium">"{trail.title}"</p>
+        </div>
+        <div className="p-8 space-y-3">
+          {/* Ano letivo filter */}
+          {yearOptionsLink.length > 0 && (
+            <div className="space-y-1">
+              <label className="text-[10px] font-black uppercase text-slate-400 ml-1 tracking-widest">📅 Ano Letivo</label>
+              <select
+                value={yearFilter} onChange={e => { setYearFilter(e.target.value); setSelectedClassId(''); }}
+                className="w-full bg-slate-50 border border-slate-200 rounded-2xl px-4 py-3 font-bold outline-none appearance-none focus:border-emerald-300 transition-colors text-sm"
+              >
+                <option value="">Todos os anos letivos</option>
+                {yearOptionsLink.map(y => <option key={y} value={y}>📅 {y}</option>)}
+              </select>
+            </div>
+          )}
+
+          {/* Class selector */}
+          <div className="space-y-1">
+            <label className="text-[10px] font-black uppercase text-slate-400 ml-1 tracking-widest">
+              🎓 Turma {yearFilter ? `— ${yearFilter}` : ''}
+              <span className="ml-2 text-slate-300 normal-case font-medium">({filteredClassesLink.length} disponíve{filteredClassesLink.length !== 1 ? 'is' : 'l'})</span>
+            </label>
+            <select
+              className="w-full bg-slate-50 border border-slate-200 rounded-2xl px-4 py-3 font-bold outline-none appearance-none focus:border-emerald-300 transition-colors text-sm"
+              value={selectedClassId}
+              onChange={e => setSelectedClassId(e.target.value)}
+            >
+              <option value="">Nenhuma (desvincular)</option>
+              {filteredClassesLink.length === 0 && yearFilter && (
+                <option disabled>Nenhuma turma neste ano letivo</option>
+              )}
+              {filteredClassesLink.map(c => (
+                <option key={c.id} value={c.id}>
+                  {c.name} {c.grade ? `— ${normalizeGrade(c.grade)}` : ''} {c.year ? `(${c.year})` : ''}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {/* Selected class preview */}
+          {selectedClass && (
+            <div className="bg-emerald-50 border border-emerald-100 rounded-2xl p-4 flex items-center gap-3">
+              <CheckCircle2 className="text-emerald-500 shrink-0" size={20} />
+              <div>
+                <p className="font-black text-emerald-800 text-sm">{selectedClass.name}</p>
+                <p className="text-emerald-600 text-[10px] font-bold uppercase">
+                  {normalizeGrade(selectedClass.grade || '')} · {selectedClass.year || 'Ano não informado'} · {(selectedClass.studentIds || []).length} aluno(s)
+                </p>
+              </div>
+            </div>
+          )}
+
+          <div className="flex gap-3 pt-1">
+            <Button variant="outline" className="flex-1 rounded-2xl" onClick={onClose}>Cancelar</Button>
+            <Button variant="primary" className="flex-1 rounded-2xl bg-emerald-600 hover:bg-emerald-500 border-0" onClick={() => { onLink(selectedClassId, selectedClass?.year || ''); onClose(); }}>
+              <Target size={16} className="mr-2" /> Vincular
+            </Button>
+          </div>
+        </div>
+      </motion.div>
+    </div>
+  );
+};
+
 // --- Main Page ---
 
 export const AdminLearningTrails: React.FC = () => {
+  const { user } = useAuthStore();
+  const isAdminMaster = !!(user as any)?.isMaster;
+
   const [showAIModal, setShowAIModal] = useState(false);
   const [showBulkAIModal, setShowBulkAIModal] = useState(false);
+  const [showImportModal, setShowImportModal] = useState(false);
   const [search, setSearch] = useState('');
   const [filterYear, setFilterYear] = useState('');
   const [filterSubject, setFilterSubject] = useState('');
@@ -681,53 +1032,113 @@ export const AdminLearningTrails: React.FC = () => {
 
   const [trails, setTrails] = useState<any[]>([]);
   const [classes, setClasses] = useState<any[]>([]);
+  const [schools, setSchools] = useState<any[]>([]);
+  const [students, setStudents] = useState<any[]>([]);
 
-  const fetchData = async () => {
-    const { data: tData } = await supabase.from('learning_paths').select('*');
-    const { data: cData } = await supabase.from('classes').select('*');
-    if (tData) setTrails(tData);
-    if (cData) setClasses(cData);
-  };
+  // ── Fetch helpers (called on mount + by realtime) ──────────────────────────
+  const fetchTrails = React.useCallback(async () => {
+    const { data } = await supabase.from('learning_paths').select('*');
+    if (data) setTrails(data);
+  }, []);
+
+  const fetchClasses = React.useCallback(async () => {
+    const { data } = await supabase.from('classes').select('*');
+    if (data) setClasses(data);
+  }, []);
+
+  const fetchSchools = React.useCallback(async () => {
+    const { data } = await supabase.from('schools').select('*');
+    if (data) setSchools(data);
+  }, []);
+
+  const fetchStudents = React.useCallback(async () => {
+    const { data } = await supabase.from('users').select('id, classId').eq('role', 'student');
+    if (data) setStudents(data);
+  }, []);
 
   React.useEffect(() => {
-    fetchData();
-    const ch = supabase.channel('admin_trails')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'learning_paths' }, fetchData)
+    fetchTrails();
+    fetchClasses();
+    fetchSchools();
+    fetchStudents();
+
+    // Realtime: learning_paths changes → always refetch for accuracy
+    const trailsCh = supabase
+      .channel('admin_trails_realtime')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'learning_paths' }, fetchTrails)
       .subscribe();
-    return () => { supabase.removeChannel(ch); };
-  }, []);
+
+    // Realtime: classes changes (vinculo de turmas) → refetch classes
+    const classesCh = supabase
+      .channel('admin_classes_realtime')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'classes' }, fetchClasses)
+      .subscribe();
+
+    // Realtime: users changes → refetch students for engagement
+    const usersCh = supabase
+      .channel('admin_users_trails_realtime')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'users' }, fetchStudents)
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(trailsCh);
+      supabase.removeChannel(classesCh);
+      supabase.removeChannel(usersCh);
+    };
+  }, [fetchTrails, fetchClasses, fetchSchools, fetchStudents]);
 
   const filteredTrails = trails.filter(t => {
     const q = search.toLowerCase();
     const matchSearch = !q || t.title.toLowerCase().includes(q) || (t.subject || '').toLowerCase().includes(q);
     const matchYear = !filterYear || (t.schoolYear || '') === filterYear;
     const matchSubject = !filterSubject || (t.subject || '') === filterSubject;
-    const matchGrade = !filterGrade || (t.grade || '') === filterGrade;
+    const matchGrade = !filterGrade || normalizeGrade(t.grade || '') === normalizeGrade(filterGrade);
     return matchSearch && matchYear && matchSubject && matchGrade;
   });
 
   // Dynamic options derived from loaded data
   const yearOptions = Array.from(new Set(trails.map(t => t.schoolYear).filter(Boolean))).sort();
   const subjectOptions = Array.from(new Set(trails.map(t => t.subject).filter(Boolean))).sort();
-  const gradeOptions = Array.from(new Set(trails.map(t => t.grade).filter(Boolean))).sort();
+  const gradeOptions = Array.from(new Set(trails.map(t => normalizeGrade(t.grade || '')).filter(Boolean))).sort((a, b) => {
+    const emA = a.includes('EM'), emB = b.includes('EM');
+    if (emA !== emB) return emA ? 1 : -1;
+    return a.localeCompare(b, 'pt-BR');
+  });
 
   const handleDelete = async (e: React.MouseEvent, id: string) => {
     e.stopPropagation();
     if (window.confirm('Excluir esta trilha permanentemente?')) {
-      await supabase.from('learning_paths').delete().eq('id', id);
-      toast.success('Trilha removida');
+      // Optimistic: remove from UI immediately
+      setTrails(prev => prev.filter(t => t.id !== id));
+      const { error } = await supabase.from('learning_paths').delete().eq('id', id);
+      if (error) {
+        toast.error('Erro ao excluir trilha.');
+        fetchTrails(); // rollback
+      } else {
+        toast.success('Trilha removida');
+      }
     }
   };
 
   const handleUpdateTrail = async (data: any) => {
     if (!data.id) return;
-    await supabase.from('learning_paths').update(data).eq('id', data.id);
-    toast.success('Trilha atualizada com sucesso!');
+    // Optimistic: update UI immediately
+    setTrails(prev => prev.map(t => t.id === data.id ? { ...t, ...data } : t));
+    const { error } = await supabase.from('learning_paths').update(data).eq('id', data.id);
+    if (error) {
+      toast.error('Erro ao atualizar trilha.');
+      fetchTrails(); // rollback
+    } else {
+      toast.success('Trilha atualizada com sucesso!');
+    }
   };
 
   const handleLinkTrail = async (classId: string, year: string) => {
     if (!trailToLink) return;
-    await supabase.from('learning_paths').update({ classId, schoolYear: year }).eq('id', trailToLink.id);
+    // Optimistic: reflect link immediately
+    setTrails(prev => prev.map(t => t.id === trailToLink.id ? { ...t, classId, schoolYear: year } : t));
+    const { error: linkError } = await supabase.from('learning_paths').update({ classId, schoolYear: year }).eq('id', trailToLink.id);
+    if (linkError) { toast.error('Erro ao vincular turma.'); fetchTrails(); return; }
     const { data: cls } = await supabase.from('classes').select('*').eq('id', classId).single();
     if (cls && cls.studentIds && cls.studentIds.length > 0) {
       // Notify students (and Guardians automatically via mirroring)
@@ -754,6 +1165,7 @@ export const AdminLearningTrails: React.FC = () => {
            <p className="text-slate-400 font-bold max-w-xl text-lg tracking-tight leading-relaxed">Gerencie roteiros dinâmicos e utilize <span className="text-primary-500">IA</span> educativa.</p>
         </div>
         <div className="flex items-center gap-3 flex-wrap">
+           <Button variant="outline" className="rounded-2xl border-2 border-emerald-200 text-emerald-700 hover:bg-emerald-50" onClick={() => setShowImportModal(true)}><FileSpreadsheet className="mr-2" size={18} />Importar Grade XLSX</Button>
            <Button variant="outline" className="rounded-2xl border-2 border-slate-200" onClick={() => setShowAIModal(true)}><Zap className="mr-2 text-amber-500" size={18} />Gerar individual com IA</Button>
            <Button variant="primary" className="rounded-2xl px-8 bg-gradient-to-r from-indigo-600 to-purple-600 border-0" onClick={() => setShowBulkAIModal(true)}><Layers size={18} className="mr-2" /> Criar em lote com IA</Button>
         </div>
@@ -761,10 +1173,17 @@ export const AdminLearningTrails: React.FC = () => {
 
       <section className="grid grid-cols-1 md:grid-cols-4 gap-6">
         {[
-          { label: 'Total de Trilhas', val: trails.length, icon: Layers, color: 'text-blue-600', bg: 'bg-blue-50' },
-          { label: 'Classes Atendidas', val: Array.from(new Set(trails.map(t => t.classId).filter(Boolean))).length, icon: Target, color: 'text-indigo-600', bg: 'bg-indigo-50' },
-          { label: 'IA Generated', val: trails.filter(t => t.isAIGenerated).length, icon: Sparkles, color: 'text-amber-600', bg: 'bg-amber-50' },
-          { label: 'Engajamento', val: '84%', icon: Trophy, color: 'text-emerald-600', bg: 'bg-emerald-50' },
+          { label: 'Total de Trilhas', val: filteredTrails.length, icon: Layers, color: 'text-blue-600', bg: 'bg-blue-50' },
+          { label: 'Classes Atendidas', val: Array.from(new Set(filteredTrails.map(t => t.classId).filter(Boolean))).length, icon: Target, color: 'text-indigo-600', bg: 'bg-indigo-50' },
+          { label: 'IA Generated', val: filteredTrails.filter(t => t.isAIGenerated).length, icon: Sparkles, color: 'text-amber-600', bg: 'bg-amber-50' },
+          (() => {
+            // Engajamento real: alunos que pertencem a uma turma que tem trilha vinculada
+            const classIdsWithTrail = new Set(trails.filter(t => t.classId).map(t => t.classId));
+            const totalStudents = students.length;
+            const engagedStudents = students.filter((s: any) => s.classId && classIdsWithTrail.has(s.classId)).length;
+            const pct = totalStudents > 0 ? Math.round((engagedStudents / totalStudents) * 100) : 0;
+            return { label: 'Engajamento', val: `${pct}%`, icon: Trophy, color: 'text-emerald-600', bg: 'bg-emerald-50' };
+          })(),
         ].map((s, i) => (
           <div key={i} className="bg-white p-6 rounded-[2.5rem] border border-slate-100 shadow-sm flex items-center gap-4">
             <div className={cn("w-14 h-14 rounded-2xl flex items-center justify-center", s.bg, s.color)}><s.icon size={24} /></div>
@@ -892,17 +1311,116 @@ export const AdminLearningTrails: React.FC = () => {
       <TrailDetailModal trail={activeTrailDetail} isOpen={!!activeTrailDetail} onClose={() => setActiveTrailDetail(null)} />
       <EditTrailModal trail={trailToEdit} isOpen={!!trailToEdit} onClose={() => setTrailToEdit(null)} onSave={handleUpdateTrail} />
       <LinkClassModal trail={trailToLink} isOpen={!!trailToLink} onClose={() => setTrailToLink(null)} onLink={handleLinkTrail} />
-      <AIGeneratorModal isOpen={showAIModal} onClose={() => setShowAIModal(false)} onGenerate={async (t) => { await supabase.from('learning_paths').insert(t); toast.success('Trilha gerada'); }} />
+      <AIGeneratorModal
+        isOpen={showAIModal}
+        onClose={() => setShowAIModal(false)}
+        classes={classes}
+        schools={schools}
+        isAdminMaster={isAdminMaster}
+        onGenerate={async (t) => {
+          // Optimistic: add to UI immediately
+          setTrails(prev => [t, ...prev]);
+          const { error } = await supabase.from('learning_paths').insert(t);
+          if (error) { toast.error('Erro ao salvar trilha.'); fetchTrails(); return; }
+          toast.success('Trilha gerada com sucesso! ✨');
+          // If linked to a class, notify students
+          if (t.classId) {
+            const cls = classes.find(c => c.id === t.classId);
+            if (cls?.studentIds?.length > 0) {
+              await createBulkNotifications(
+                cls.studentIds, 'student',
+                'Nova Trilha de Aprendizagem! 🚀',
+                `Uma nova trilha foi liberada para sua turma: "${t.title}".`,
+                'success', 'high', '/student/learning'
+              );
+            }
+          }
+        }}
+      />
       <BulkAIGeneratorModal
         isOpen={showBulkAIModal}
         onClose={() => setShowBulkAIModal(false)}
-        onBulkGenerate={async (trails) => {
-          if (trails.length === 0) return;
-          const { error } = await supabase.from('learning_paths').insert(trails);
-          if (error) toast.error('Erro ao salvar trilhas: ' + error.message);
-          else toast.success(`${trails.length} trilha(s) salva(s) com sucesso!`);
+        classes={classes}
+        schools={schools}
+        isAdminMaster={isAdminMaster}
+        onBulkGenerate={async (newTrails) => {
+          if (newTrails.length === 0) return;
+          // Optimistic: add all to UI immediately
+          setTrails(prev => [...newTrails, ...prev]);
+          // Chunk inserts (Supabase limit)
+          const chunkSize = 50;
+          let saveError = false;
+          for (let i = 0; i < newTrails.length; i += chunkSize) {
+            const chunk = newTrails.slice(i, i + chunkSize);
+            const { error } = await supabase.from('learning_paths').insert(chunk);
+            if (error) {
+              toast.error('Erro ao salvar trilhas: ' + error.message);
+              fetchTrails();
+              saveError = true;
+              break;
+            }
+          }
+          if (saveError) return;
+          toast.success(`${newTrails.length} trilha(s) salva(s) com sucesso! ✨`);
+          // Notify students if a class was linked (send one notification per class)
+          const linkedClassId = newTrails[0]?.classId;
+          if (linkedClassId) {
+            const cls = classes.find(c => c.id === linkedClassId);
+            if (cls?.studentIds?.length > 0) {
+              await createBulkNotifications(
+                cls.studentIds, 'student',
+                'Novas Trilhas de Aprendizagem! 🚀',
+                `${newTrails.length} novas trilhas foram liberadas para sua turma!`,
+                'success', 'high', '/student/learning'
+              );
+            }
+          }
+        }}
+      />
+      <CurricularImportModal
+        isOpen={showImportModal}
+        onClose={() => setShowImportModal(false)}
+        onImport={async (rows) => {
+          if (rows.length === 0) return;
+          toast('🤖 Gerando trilhas a partir da grade...', { description: `${rows.length} linha(s) encontradas. Isso pode levar alguns minutos.`, duration: 5000 });
+          const generated: any[] = [];
+          for (const row of rows) {
+            try {
+              const [metaRes, ...steps] = await Promise.all([
+                callAI({ feature: 'generate-trail-meta', topic: row.topic, subject: row.subject, grade: row.grade }),
+                ...(['intro','video','quiz','practice','boss'] as const).map((type, idx) =>
+                  callGenerateTrailStep({ topic: row.topic, subject: row.subject, grade: row.grade, difficulty: 'medium', phaseIndex: idx, phaseType: type })
+                ),
+              ]);
+              const meta = (metaRes as any).result || metaRes;
+              generated.push({
+                id: crypto.randomUUID(),
+                title: (meta as any).title || row.topic,
+                description: (meta as any).description || '',
+                rewardXp: (meta as any).rewardXp || 600,
+                rewardCoins: (meta as any).rewardCoins || 250,
+                steps: steps.map((s, i) => ({ ...s, id: String(i + 1) })),
+                subject: row.subject,
+                grade: row.grade,
+                difficulty: 'medium',
+                classId: null,
+                isAIGenerated: true,
+                createdAt: new Date().toISOString(),
+              });
+            } catch (err: any) {
+              toast.error(`Erro na trilha "${row.topic}": ${err.message || 'timeout'}`);
+            }
+          }
+          if (generated.length === 0) return;
+          setTrails(prev => [...generated, ...prev]);
+          for (let i = 0; i < generated.length; i += 50) {
+            const { error } = await supabase.from('learning_paths').insert(generated.slice(i, i + 50));
+            if (error) { toast.error('Erro ao salvar trilhas: ' + error.message); fetchTrails(); return; }
+          }
+          toast.success(`${generated.length} trilha(s) gerada(s) e salvas com sucesso! ✨`);
         }}
       />
     </div>
+
   );
 };

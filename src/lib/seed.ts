@@ -59,6 +59,7 @@ export async function seedDatabase(force?: boolean) {
     {
       id: 'default-student',
       name: 'Capivara Estudante',
+      description: 'O avatar padrão do IMPACTO-IA. Todo aluno começa aqui!',
       assetUrl: '/avatars/default-impacto.png',
       type: 'avatar',
       rarity: 'comum',
@@ -74,6 +75,7 @@ export async function seedDatabase(force?: boolean) {
     {
       id: 'bg-simple-blue',
       name: 'Azul Premium',
+      description: 'Um fundo azul gradiente limpo e profissional.',
       assetUrl: '/avatars/bg/blue_gradient.svg',
       type: 'background',
       rarity: 'comum',
@@ -87,12 +89,39 @@ export async function seedDatabase(force?: boolean) {
     {
       id: 'bg-classroom',
       name: 'Sala de Aula',
+      description: 'O ambiente clássico dos estudantes dedicados.',
       assetUrl: '/avatars/bg/blue_gradient.svg',
       type: 'background',
       rarity: 'comum',
-      priceCoins: 100,
+      priceCoins: 150,          // ~1.5 dias ativo
       isActive: 1,
       sortOrder: 2,
+      createdAt: now,
+      updatedAt: now
+    },
+    {
+      id: 'bg-galaxy',
+      name: 'Galáxia do Saber',
+      description: 'Para mentes que pensam grande e exploram o infinito.',
+      assetUrl: '/avatars/bg/blue_gradient.svg',
+      type: 'background',
+      rarity: 'incomum',
+      priceCoins: 400,          // ~4 dias ativo
+      isActive: 1,
+      sortOrder: 3,
+      createdAt: now,
+      updatedAt: now
+    },
+    {
+      id: 'bg-neon-city',
+      name: 'Cidade Neon',
+      description: 'Luzes futuristas para os alunos mais modernos.',
+      assetUrl: '/avatars/bg/blue_gradient.svg',
+      type: 'background',
+      rarity: 'raro',
+      priceCoins: 900,          // ~1.5 semanas ativo
+      isActive: 1,
+      sortOrder: 4,
       createdAt: now,
       updatedAt: now
     },
@@ -101,6 +130,7 @@ export async function seedDatabase(force?: boolean) {
     {
       id: 'border-simple',
       name: 'Moldura Simples',
+      description: 'Uma borda discreta para todo estudante.',
       assetUrl: '/avatars/borders/simple.svg',
       type: 'border',
       rarity: 'comum',
@@ -112,14 +142,41 @@ export async function seedDatabase(force?: boolean) {
       updatedAt: now
     },
     {
+      id: 'border-silver',
+      name: 'Moldura de Prata',
+      description: 'Elegante e refinada. Para alunos com estilo.',
+      assetUrl: '/avatars/borders/simple.svg',
+      type: 'border',
+      rarity: 'incomum',
+      priceCoins: 350,          // ~3.5 dias ativo
+      isActive: 1,
+      sortOrder: 2,
+      createdAt: now,
+      updatedAt: now
+    },
+    {
       id: 'border-gold',
       name: 'Moldura de Ouro',
+      description: 'Só os melhores alunos ostentam essa. Brilhante e rara.',
       assetUrl: '/avatars/borders/simple.svg',
       type: 'border',
       rarity: 'épico',
-      priceCoins: 1000,
+      priceCoins: 2500,         // ~24 dias ativo — só quem é dedicado
       isActive: 1,
-      sortOrder: 2,
+      sortOrder: 3,
+      createdAt: now,
+      updatedAt: now
+    },
+    {
+      id: 'border-diamond',
+      name: 'Moldura Diamante',
+      description: 'A mais rara de todas. Exibe com orgulho, você merece.',
+      assetUrl: '/avatars/borders/simple.svg',
+      type: 'border',
+      rarity: 'lendário',
+      priceCoins: 8000,         // ~76 dias ativo — trofeu de longo prazo
+      isActive: 1,
+      sortOrder: 4,
       createdAt: now,
       updatedAt: now
     },
@@ -128,27 +185,55 @@ export async function seedDatabase(force?: boolean) {
     {
       id: 'st-star',
       name: 'Estrela Brilhante',
+      description: 'Um clássico! Para os alunos que brilham na sala.',
       assetUrl: '/avatars/stickers/star.svg',
       type: 'sticker',
       rarity: 'comum',
-      priceCoins: 50,
+      priceCoins: 75,           // <1 dia ativo
       isActive: 1,
       sortOrder: 1,
       createdAt: now,
       updatedAt: now
     },
     {
-      id: 'st-medal',
-      name: 'Medalha do Saber',
+      id: 'st-rocket',
+      name: 'Foguete do Conhecimento',
+      description: 'Aprendizado na velocidade da luz!',
       assetUrl: '/avatars/stickers/star.svg',
       type: 'sticker',
-      rarity: 'raro',
-      priceCoins: 200,
+      rarity: 'incomum',
+      priceCoins: 280,          // ~3 dias ativo
       isActive: 1,
       sortOrder: 2,
       createdAt: now,
       updatedAt: now
-    }
+    },
+    {
+      id: 'st-medal',
+      name: 'Medalha do Saber',
+      description: 'Conquista que só os estudiosos mais dedicados carregam.',
+      assetUrl: '/avatars/stickers/star.svg',
+      type: 'sticker',
+      rarity: 'raro',
+      priceCoins: 750,          // ~1 semana ativo
+      isActive: 1,
+      sortOrder: 3,
+      createdAt: now,
+      updatedAt: now
+    },
+    {
+      id: 'st-crown',
+      name: 'Coroa do Campeão',
+      description: 'Para os líderes do ranking. Reza a lenda que traz boa sorte nas provas.',
+      assetUrl: '/avatars/stickers/star.svg',
+      type: 'sticker',
+      rarity: 'épico',
+      priceCoins: 3200,         // ~1 mês ativo
+      isActive: 1,
+      sortOrder: 4,
+      createdAt: now,
+      updatedAt: now
+    },
   ]);
 
   // 4. Initial Owned Items (Optional basics)

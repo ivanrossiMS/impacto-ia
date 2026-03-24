@@ -11,6 +11,7 @@ const TABLE_TO_DEXIE: Record<string, keyof typeof db> = {
   'support_tickets': 'supportTickets',
   'notifications': 'notifications',
   'avatar_catalog': 'avatarCatalog',
+  'student_avatar_profiles': 'studentAvatarProfiles', // added so teacher pages get live profile data
   'student_activity_results': 'studentActivityResults',
   'student_achievements': 'studentAchievements',
   'student_missions': 'studentMissions',
@@ -27,20 +28,32 @@ const SYNC_TABLES = Object.keys(TABLE_TO_DEXIE);
  */
 export const syncEngine = {
   isSubscribed: false,
-  
+  _pullPromise: null as Promise<void> | null,
+
   /**
    * Performs an initial pull of all data from Supabase to Dexie.
+   * Promise lock prevents parallel double-pulls (React StrictMode).
    */
   async pullData() {
+    if (this._pullPromise) return this._pullPromise;
+    this._pullPromise = this._doPull().finally(() => { this._pullPromise = null; });
+    return this._pullPromise;
+  },
+
+  async _doPull() {
     console.log('[SyncEngine] Pulling data from Supabase...');
     for (const table of SYNC_TABLES) {
       const dexieKey = TABLE_TO_DEXIE[table];
       if (!dexieKey) continue;
-      
       try {
-        const { data, error } = await supabase.from(table).select('*');
+        let data: any[] | null = null;
+        let error: any = null;
+        if (table === 'avatar_catalog') {
+          ({ data, error } = await supabase.rpc('get_avatar_catalog'));
+        } else {
+          ({ data, error } = await supabase.from(table).select('*'));
+        }
         if (error) throw error;
-        
         if (data && data.length > 0) {
           await (db[dexieKey] as any).bulkPut(data);
           console.log(`[SyncEngine] Synced ${data.length} records for ${table} => db.${dexieKey}`);
@@ -53,9 +66,11 @@ export const syncEngine = {
 
   /**
    * Initializes the engine: pulls data AND sets up subscriptions.
-   * Safe to call multiple times.
+   * Guard on isSubscribed prevents React StrictMode double-init.
    */
   async initialize() {
+    if (this.isSubscribed) return; // already running — skip double-mount
+    this.isSubscribed = true; // set synchronously — prevents race with StrictMode remount
     console.log('[SyncEngine] Initializing sync engine...');
     await this.pullData();
     this.setupSubscriptions();

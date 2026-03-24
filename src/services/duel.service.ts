@@ -1,5 +1,5 @@
 import { supabase } from '../lib/supabase';
-import type { Duel, DuelQuestion, DuelTheme, DuelDifficulty, DuelStatus } from '../types/duel';
+import type { Duel, DuelQuestion, DuelTheme, DuelDifficulty, DuelStatus, DuelAnswerData } from '../types/duel';
 import { createNotification, createBulkNotifications } from '../lib/notificationUtils';
 import { updateGamificationStats } from '../lib/gamificationUtils';
 import { callGenerateDuel } from '../ai/client';
@@ -34,7 +34,11 @@ export class DuelService {
       createdAt: new Date().toISOString(),
     };
 
-    await supabase.from('duels').insert(duel);
+    const { error: insertError } = await supabase.from('duels').insert(duel);
+    if (insertError) {
+      console.error('[DuelService] Failed to create duel:', insertError);
+      throw new Error(`Falha ao criar duelo: ${insertError.message}`);
+    }
 
     // Generate questions using real Gemini, with grade context
     await this.generateQuestions(duel, grade);
@@ -61,7 +65,7 @@ export class DuelService {
       const data = await callGenerateDuel({
         theme: duel.theme,
         difficulty: duel.difficulty,
-        count: duel.questionCount,
+        count: duel.questionCount + 1,   // +1 = reserve for Swap power
         grade: grade || '',
       });
 
@@ -95,25 +99,29 @@ export class DuelService {
   static async submitTurn(
     duelId: string,
     userId: string,
-    answers: { questionId: string; selectedOptionId: string }[]
+    answerData: DuelAnswerData[],
+    pressureUsed: boolean = false,
   ): Promise<Duel> {
     const { data: duel } = await supabase.from('duels').select('*').eq('id', duelId).single();
     if (!duel) throw new Error('Duel not found');
 
     const { data: questionsArr } = await supabase.from('duel_questions').select('*').eq('duelId', duelId);
     const questions = questionsArr || [];
-    let score = 0;
 
-    for (const answer of answers) {
-      const question = questions.find((q: DuelQuestion) => q.id === answer.questionId);
+    // Compute correct-count score (legacy) and detailed point score (new)
+    let score = 0;
+    let detailedScore = 0;
+
+    for (const ad of answerData) {
+      const question = questions.find((q: DuelQuestion) => q.id === ad.questionId);
       if (question) {
-        const isCorrect = question.options.find((o: any) => o.id === answer.selectedOptionId)?.isCorrect;
-        if (isCorrect) score++;
+        if (ad.isCorrect) score++;
+        detailedScore += ad.pointsEarned;
 
         if (userId === duel.challengerId) {
-          await supabase.from('duel_questions').update({ challengerAnswerId: answer.selectedOptionId }).eq('id', question.id);
+          await supabase.from('duel_questions').update({ challengerAnswerId: ad.selectedOptionId }).eq('id', question.id);
         } else {
-          await supabase.from('duel_questions').update({ challengedAnswerId: answer.selectedOptionId }).eq('id', question.id);
+          await supabase.from('duel_questions').update({ challengedAnswerId: ad.selectedOptionId }).eq('id', question.id);
         }
       }
     }
@@ -121,38 +129,70 @@ export class DuelService {
     const updates: Partial<Duel> = {};
     if (userId === duel.challengerId) {
       updates.challengerScore = score;
+      updates.challengerDetailedScore = detailedScore;
+      updates.challengerAnswerData = answerData;
+      updates.challengerPressureUsed = pressureUsed;
       updates.challengerTurnCompleted = true;
-      if (duel.status === 'pending') updates.status = 'active';
+      if (duel.status === 'pending') {
+        updates.status = 'active';
+        await createNotification({
+          userId: duel.challengedId,
+          role: 'student',
+          title: 'É a sua vez no Duelo! ⚔️',
+          message: 'Seu oponente já jogou. Entre e responda para ver quem vence!',
+          type: 'alert',
+          priority: 'high',
+          actionUrl: `/student/duels/${duelId}`,
+        });
+      }
     } else {
       updates.challengedScore = score;
+      updates.challengedDetailedScore = detailedScore;
+      updates.challengedAnswerData = answerData;
+      updates.challengedPressureUsed = pressureUsed;
       updates.challengedTurnCompleted = true;
+      // ✅ Bug fix: when challenged plays first on a pending duel,
+      //    advance status → 'active' so it leaves "Convites" → "Ativos"
+      if (duel.status === 'pending') {
+        updates.status = 'active';
+        await createNotification({
+          userId: duel.challengerId,
+          role: 'student',
+          title: 'É a sua vez no Duelo! ⚔️',
+          message: 'O desafiado já jogou. Entre e responda para decidir o vencedor!',
+          type: 'alert',
+          priority: 'high',
+          actionUrl: `/student/duels/${duelId}`,
+        });
+      }
     }
 
     const finalDuel = { ...duel, ...updates };
+
     if (finalDuel.challengerTurnCompleted && finalDuel.challengedTurnCompleted) {
       finalDuel.status = 'completed';
       finalDuel.completedAt = new Date().toISOString();
 
-      if (finalDuel.challengerScore > finalDuel.challengedScore) {
+      // Prefer detailed (point-based) score; fall back to correct count
+      const cScore = finalDuel.challengerDetailedScore ?? finalDuel.challengerScore;
+      const dScore = finalDuel.challengedDetailedScore ?? finalDuel.challengedScore;
+
+      if (cScore > dScore) {
         finalDuel.winnerId = finalDuel.challengerId;
-      } else if (finalDuel.challengedScore > finalDuel.challengerScore) {
+      } else if (dScore > cScore) {
         finalDuel.winnerId = finalDuel.challengedId;
       } else {
         finalDuel.winnerId = 'draw';
       }
 
       const rewards = calcDuelRewards(finalDuel.difficulty, finalDuel.questionCount);
-
       const awardRewards = async (uid: string, isWinner: boolean, isDraw: boolean, correctCount: number) => {
         const winXP = isWinner ? rewards.winXP : isDraw ? rewards.drawXP : rewards.loseXP;
         const answerXP = correctCount * rewards.xpPerCorrect;
         const winCoins = isWinner ? rewards.winCoins : isDraw ? rewards.drawCoins : rewards.loseCoins;
         const answerCoins = correctCount * rewards.coinsPerCorrect;
         try {
-          await updateGamificationStats(uid, {
-            xpToAdd: winXP + answerXP,
-            coinsToAdd: winCoins + answerCoins,
-          });
+          await updateGamificationStats(uid, { xpToAdd: winXP + answerXP, coinsToAdd: winCoins + answerCoins });
         } catch (error) {
           console.error('Error updating duel rewards:', error);
         }
@@ -172,9 +212,22 @@ export class DuelService {
       );
     }
 
-    await supabase.from('duels').update(finalDuel).eq('id', duelId);
+    // Only send columns that exist in the current duels table schema.
+    // New columns (detailedScore, answerData, pressureUsed) require a SQL migration
+    // before they can be persisted. The in-memory finalDuel still has the right data
+    // for winner logic and return value — the DB just won't store the new fields yet.
+    const DB_COLS: (keyof Duel)[] = [
+      'id','challengerId','challengedId','theme','difficulty','questionCount',
+      'status','challengerScore','challengedScore','winnerId',
+      'challengerTurnCompleted','challengedTurnCompleted','createdAt','completedAt',
+    ];
+    const dbPayload = Object.fromEntries(
+      Object.entries(finalDuel).filter(([k]) => DB_COLS.includes(k as keyof Duel))
+    );
+    await supabase.from('duels').update(dbPayload).eq('id', duelId);
     return finalDuel;
   }
+
 
   /**
    * forfeit — the surrendering player instantly loses.
@@ -218,6 +271,34 @@ export class DuelService {
       `/student/duels/${duelId}`
     );
   }
+
+  /**
+   * declineDuel — the challenged player refuses the invite.
+   * No XP or coins awarded. Both players see it in Histórico as "Recusado".
+   */
+  static async declineDuel(duelId: string, declinedByUserId: string): Promise<void> {
+    const { data: duel } = await supabase.from('duels').select('*').eq('id', duelId).single();
+    if (!duel) throw new Error('Duel not found');
+
+    await supabase.from('duels').update({
+      status: 'declined',
+      completedAt: new Date().toISOString(),
+    }).eq('id', duelId);
+
+    // Notify the challenger that their invite was declined
+    const { data: decliner } = await supabase.from('users').select('name').eq('id', declinedByUserId).single();
+    await createNotification({
+      userId: duel.challengerId,
+      role: 'student',
+      title: 'Convite Recusado ❌',
+      message: `${decliner?.name || 'Um colega'} recusou seu desafio de duelo de ${duel.theme}.`,
+      type: 'info',
+      priority: 'normal',
+      actionUrl: `/student/duels`,
+    });
+  }
+
+
 
   // ─── SOLO MODE ───────────────────────────────────────────────
 

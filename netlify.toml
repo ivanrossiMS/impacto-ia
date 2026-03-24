@@ -5,6 +5,9 @@
 [functions]
   node_bundler = "esbuild"
 
+[functions."ai-proxy"]
+  timeout = 60
+
 [dev]
   command = "npm run dev"
   targetPort = 5173

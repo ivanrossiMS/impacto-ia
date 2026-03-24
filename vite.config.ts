@@ -13,11 +13,9 @@ export default defineConfig({
   },
   server: {
     proxy: {
-      // Forward /.netlify/functions/* to the Netlify Functions server
-      // Run: netlify functions:serve  (starts on port 9999 by default)
-      // Then: npm run dev  (starts Vite on port 5173)
+      // Forward /.netlify/functions/* to netlify dev (port 8888)
       '/.netlify/functions': {
-        target: 'http://localhost:9999',
+        target: 'http://localhost:8888',
         changeOrigin: true,
       },
     },

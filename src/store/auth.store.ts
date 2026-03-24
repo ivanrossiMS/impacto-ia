@@ -17,9 +17,9 @@ export const useAuthStore = create<AuthState>()(
       isAuthenticated: false,
       login: (user) => {
         set({ user, isAuthenticated: true });
-        // Trigger a fresh sync pull now that we're authenticated
+        // Trigger a fresh sync if not already running (respects isSubscribed lock)
         import('../lib/syncEngine').then(({ syncEngine }) => {
-          syncEngine.pullData().catch(err => console.error('[AuthStore] Sync pull failed:', err));
+          syncEngine.initialize().catch(err => console.error('[AuthStore] Sync init failed:', err));
         });
       },
       logout: async () => {

@@ -24,13 +24,15 @@ const FEATURE_REGISTRY: Record<string, { model: keyof typeof MODELS; requiresJso
   "generate-trail":     { model: "flash", requiresJson: true  },
   "generate-trail-step":{ model: "flash", requiresJson: true  },
   "generate-trail-meta":{ model: "flash", requiresJson: true  },
-  "generate-duel":      { model: "flash", requiresJson: true  },
+  "generate-duel":      { model: "flash", requiresJson: true  }, // callGeminiDuel bypasses this
   "parent-tips":        { model: "flash", requiresJson: false },
   "parent-qa":          { model: "flash", requiresJson: false },
   "admin-insights":     { model: "pro",   requiresJson: true  },
   "teacher-feedback":   { model: "flash", requiresJson: true  },
   "teacher-lesson-plan":{ model: "pro",   requiresJson: true  },
   "guardian-summary":   { model: "flash", requiresJson: false },
+  "generate-topics":    { model: "flash", requiresJson: true  },
+  "generate-avatar-meta": { model: "flash", requiresJson: true },
 };
 
 interface GeminiRequest {
@@ -53,6 +55,59 @@ function sanitizeInput(text: string): string {
 }
 
 /**
+ * Call the Gemini REST API with multimodal content (text + inline image).
+ */
+async function callGeminiMultimodal(
+  modelKey: keyof typeof MODELS,
+  textPrompt: string,
+  imageBase64: string,
+  imageMimeType: string,
+  retries = 2
+): Promise<string> {
+  const model = MODELS[modelKey];
+  const url = `${GEMINI_BASE_URL}/${model}:generateContent?key=${GEMINI_API_KEY}`;
+  const body = {
+    contents: [{ parts: [
+      { inlineData: { mimeType: imageMimeType, data: imageBase64 } },
+      { text: textPrompt },
+    ]}],
+    generationConfig: { temperature: 0.7, maxOutputTokens: 8192 },
+    safetySettings: [
+      { category: "HARM_CATEGORY_HARASSMENT",        threshold: "BLOCK_MEDIUM_AND_ABOVE" },
+      { category: "HARM_CATEGORY_HATE_SPEECH",       threshold: "BLOCK_MEDIUM_AND_ABOVE" },
+      { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold: "BLOCK_MEDIUM_AND_ABOVE" },
+      { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "BLOCK_MEDIUM_AND_ABOVE" },
+    ],
+  };
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 45000);
+      const response = await fetch(url, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body), signal: controller.signal,
+      });
+      clearTimeout(timeout);
+      if (!response.ok) {
+        const errText = await response.text();
+        console.error(`[AI-Proxy] Multimodal error (attempt ${attempt + 1}):`, errText);
+        if (attempt === retries) throw new Error(`Gemini API error: ${response.status}`);
+        await new Promise(r => setTimeout(r, 1000 * (attempt + 1)));
+        continue;
+      }
+      const data = await response.json();
+      const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+      if (!text) throw new Error("Empty response from Gemini");
+      return text;
+    } catch (err: any) {
+      if (attempt === retries) throw err;
+      await new Promise(r => setTimeout(r, 1000 * (attempt + 1)));
+    }
+  }
+  throw new Error("All Gemini retries failed");
+}
+
+/**
  * Call the Gemini REST API.
  */
 async function callGemini(
@@ -68,7 +123,7 @@ async function callGemini(
     contents: [{ parts: [{ text: prompt }] }],
     generationConfig: {
       temperature: 0.7,
-      maxOutputTokens: requiresJson ? 16384 : 8192,
+      maxOutputTokens: requiresJson ? 8192 : 4096, // Capped to avoid timeouts
     },
     safetySettings: [
       { category: "HARM_CATEGORY_HARASSMENT",        threshold: "BLOCK_MEDIUM_AND_ABOVE" },
@@ -81,7 +136,7 @@ async function callGemini(
   for (let attempt = 0; attempt <= retries; attempt++) {
     try {
       const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 45000); // 45s timeout
+      const timeout = setTimeout(() => controller.abort(), 25000); // 25s — safely under Netlify's 30s dev limit
 
       const response = await fetch(url, {
         method: "POST",
@@ -113,6 +168,138 @@ async function callGemini(
   }
 
   throw new Error("All Gemini retries failed");
+}
+
+/**
+ * Compact, fast Gemini call for duel question generation.
+ * Uses gemini-2.5-flash on v1beta (the ONLY confirmed working combo for this API key).
+ * Short inline prompt keeps response time under 15s, safely within lambda-local's 30s limit.
+ */
+async function callGeminiDuel(
+  theme: string,
+  difficulty: string,
+  count: number,
+  grade: string,
+  opponentGrade?: string,
+  seed?: number
+): Promise<string> {
+  const url = `${GEMINI_BASE_URL}/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`;  // 1.5-flash: stable, fast (~10-15s), confirmed available
+
+  // ── Grade balancing: use the lower serie as reference ──────────────────────
+  const gradeToYear = (g: string): number => {
+    const lower = g.toLowerCase();
+    const isEM = lower.includes('em') || lower.includes('médio');
+    const match = lower.match(/(\d+)/);
+    const y = match ? parseInt(match[1]) : 6;
+    return isEM ? y + 9 : y;
+  };
+  let referenceGrade = grade || '6º Ano';
+  let gradeContext = `Série do aluno: ${referenceGrade}`;
+  if (opponentGrade && opponentGrade !== grade) {
+    const y1 = gradeToYear(grade);
+    const y2 = gradeToYear(opponentGrade);
+    referenceGrade = y2 < y1 ? opponentGrade : grade;
+    gradeContext = `Duelo entre séries diferentes (${grade} vs ${opponentGrade}). Use a MENOR série "${referenceGrade}" como base para garantir equilíbrio e justiça para ambos os jogadores.`;
+  }
+
+  // ── Difficulty calibration ─────────────────────────────────────────────────
+  const diffMap: Record<string, { label: string; bloom: string; rules: string; distrib: string }> = {
+    easy:   {
+      label: 'FÁCIL',
+      bloom: 'Lembrar / Reconhecer (Bloom nível 1-2)',
+      rules: 'Conceito único direto. Enunciado sem ambiguidade. Resposta de memorização ou reconhecimento imediato. Distraidores claramente errados. Vocabulário muito simples.',
+      distrib: `Todas as ${count} questões no nível fácil. Varie os SUBTEMAS para evitar repetição temática.`,
+    },
+    medium: {
+      label: 'MÉDIO',
+      bloom: 'Compreender / Aplicar (Bloom nível 2-3)',
+      rules: 'Exige interpretação simples e aplicação de conceito. Contexto breve no enunciado (1-2 frases). Distraidores parcialmente plausíveis. Não deve ser resolvível apenas por memorização.',
+      distrib: count <= 3
+        ? `Todas as questões no nível médio.`
+        : `Questões 1-${Math.ceil(count * 0.3)}: levemente mais simples (aquecimento). Questões ${Math.ceil(count * 0.3) + 1}-${count}: dificuldade plena. 70% médio, 20% fácil leve, 10% difícil suave.`,
+    },
+    hard:   {
+      label: 'DIFÍCIL / MESTRE',
+      bloom: 'Analisar / Avaliar / Criar (Bloom nível 4-6)',
+      rules: 'Alto raciocínio lógico. Situação-problema ou análise em 2+ etapas. TODOS os distraidores tecnicamente plausíveis mas inequivocamente errados. Pode conter pegadinhas inteligentes sem ambiguidade. Exige domínio real do conteúdo.',
+      distrib: count <= 3
+        ? `Todas as questões no nível difícil.`
+        : `Questões 1-${Math.ceil(count * 0.25)}: médio-alto (aquecimento). Questões ${Math.ceil(count * 0.25) + 1}-${count}: dificuldade plena/mestre. 70% difícil, 20% médio, 10% extra-difícil.`,
+    },
+  };
+  const diff = diffMap[difficulty] || diffMap.medium;
+
+  // ── Theme guidance ─────────────────────────────────────────────────────────
+  const themeGuideMap: Record<string, string> = {
+    historia:       'Eventos históricos, personagens, causas/consequências e linhas do tempo adequados à série. Perguntas sobre fatos verificáveis.',
+    geografia:      'Localização, biomas, geopolítica, clima e relações humano-ambiente adequados ao nível. Evite dados numéricos excessivamente específicos.',
+    ciencias:       'Fenômenos naturais, corpo humano, ecologia, física e química básicas compatíveis com a série.',
+    matematica:     'Raciocínio lógico, operações, geometria ou álgebra compatíveis. Garanta precisão numérica absoluta.',
+    portugues:      'Gramática, interpretação de texto, ortografia e produção textual. Inclua trecho curto para interpretação quando pertinente.',
+    arte:           'Movimentos artísticos, artistas brasileiros/mundiais, linguagens artísticas compatíveis com o nível.',
+    esportes:       'Regras, história, recordes, atletas e cultura esportiva. Inclua esportes olímpicos e populares no Brasil.',
+    entretenimento: 'TV, séries, filmes, animes, games e cultura pop. Foque em séries/programas populares entre jovens, personagens icônicos, enredos marcantes, franquias e fenômenos audiovisuais. Inclua referências nacionais e internacionais adequadas à faixa etária.',
+    aleatorio:      `Distribua OBRIGATORIAMENTE entre áreas distintas (máx. 2 questões por área):
+ • Ciências / Biologia  • História  • Geografia  • Matemática básica  • Português / Literatura  • Esportes / Arte / Cultura  • Curiosidade fascinante / Conhecimento Geral
+ Nunca concentre mais de 2 perguntas em uma única área temática.`,
+  };
+  // Map internal IDs to human-readable names for the Gemini prompt topic
+  // (Gemini should never see raw IDs like "aleatorio" or "entretenimento" as the topic)
+  const THEME_DISPLAY: Record<string, string> = {
+    historia:       'História',
+    geografia:      'Geografia',
+    ciencias:       'Ciências',
+    matematica:     'Matemática',
+    portugues:      'Português',
+    arte:           'Arte',
+    esportes:       'Esportes',
+    entretenimento: 'TV, Séries e Cultura Pop',
+    logica:         'Lógica e Raciocínio Lógico',
+    quem_sou_eu:    'Conhecimento Geral e Atualidades',
+    aleatorio:      'Mistura de Temas Educacionais Variados (Conhecimento Geral)',
+  };
+  const displayTheme = THEME_DISPLAY[theme.toLowerCase()] || theme;
+  const themeGuide = themeGuideMap[theme.toLowerCase()] || themeGuideMap.aleatorio;
+
+  const sessionSeed = seed ?? Date.now();
+  const angles = ['aspectos curiosos e pouco conhecidos','aplicacoes praticas do cotidiano','personagens e eventos especificos','conexoes interdisciplinares','dimensao historica e evolucao','comparacoes e contrastes','aspectos regionais brasileiros','impactos na sociedade e ciencia'];
+  const angle = angles[sessionSeed % angles.length];
+  const gradeRef = referenceGrade || grade || '6 Ano';
+  const crossGrade = opponentGrade && opponentGrade !== grade ? ` Duelo entre series (${grade} x ${opponentGrade}): use ${gradeRef} como base.` : '';
+  const prompt = `Voce e professor especialista brasileiro. Gere ${count} questoes de multipla escolha sobre "${displayTheme}" para alunos do ${gradeRef}.${crossGrade} Dificuldade: ${diff.label} (${diff.rules}). Tema: ${themeGuide} Foco desta sessao #${sessionSeed}: ${angle}. Regras: questoes com subtemas distintos; linguagem adequada para ${gradeRef}; distraidores plausiveis; explicacao 1-2 frases; sem erros factuais; sem repeticao de estrutura. Responda SOMENTE com JSON valido: {"questions":[{"id":"1","questionText":"?","options":[{"id":"a","text":"Correta","isCorrect":true},{"id":"b","text":"Errada","isCorrect":false},{"id":"c","text":"Errada","isCorrect":false},{"id":"d","text":"Errada","isCorrect":false}],"explanation":"..."}]} Alternativa a SEMPRE correta. Gere exatamente ${count} questoes.`;
+
+  const body = {
+    contents: [{ parts: [{ text: prompt }] }],
+    generationConfig: {
+      temperature: 0.4,
+      maxOutputTokens: 8192,
+      thinkingConfig: { thinkingBudget: 0 },  // Disable 2.5-flash thinking — CONFIRMED works inside generationConfig (200 OK in 14s)
+    },
+  };
+
+  const controller = new AbortController();
+  const t = setTimeout(() => controller.abort(), 24000);  // 24s: leaves 6s buffer for lambda-local hard 30s limit
+  try {
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    });
+    clearTimeout(t);
+    if (!res.ok) {
+      const errBody = await res.text().catch(() => '');
+      throw new Error(`Gemini duel ${res.status}: ${errBody.slice(0, 200)}`);
+    }
+    const data = await res.json();
+    const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+    if (!text) throw new Error("Empty Gemini duel response");
+    return text;
+  } catch (err: any) {
+    clearTimeout(t);
+    console.error('[AI-Proxy] callGeminiDuel failed:', err.message);
+    throw err;
+  }
 }
 
 // ============================================================
@@ -1088,7 +1275,7 @@ Responda SOMENTE com JSON válido, sem texto antes ou depois:
 `.trim();
 }
 
-function buildDuelPrompt(theme: string, difficulty: string, count: number, grade: string, opponentGrade?: string): string {
+function buildDuelPrompt(theme: string, difficulty: string, count: number, grade: string, opponentGrade?: string, seed?: number): string {
 
   // ─── Duelo Equilibrado: always use the lower grade as reference ───
   let referenceGrade = grade || '';
@@ -1155,7 +1342,13 @@ function buildDuelPrompt(theme: string, difficulty: string, count: number, grade
     arte:           'Movimentos artísticos, artistas brasileiros e mundiais, linguagens artísticas e expressão cultural compatíveis com o nível.',
     esportes:       'Regras, história, recordes, atletas importantes e cultura esportiva. Inclua esportes olímpicos e populares no Brasil.',
     entretenimento: `Cultura pop, filmes, músicas, jogos e fenômenos culturais reconhecíveis e adequados para ${gradeProfile.age}.`,
-    aleatorio:      'Distribua as perguntas equilibradamente: 2 de ciências/história, 1 de geografia, 1 de esportes/arte, 1 de conhecimentos gerais. Evite concentrar em uma única área.',
+    aleatorio:      `Distribua as perguntas de forma OBRIGATORIAMENTE variada entre as seguintes áreas (nenhuma área pode ter mais de 2 perguntas):
+  • 1-2 perguntas de Ciências ou Biologia
+  • 1-2 perguntas de História
+  • 1 pergunta de Geografia ou Geopolítica
+  • 1 pergunta de Esportes, Arte ou Cultura
+  • 1 pergunta de conhecimento geral ou curiosidade fascinante
+  Nunca concentre todas as perguntas em uma única área temática.`,
   };
   const themeContext = themeGuide[theme.toLowerCase()] || themeGuide.aleatorio;
 
@@ -1176,10 +1369,31 @@ function buildDuelPrompt(theme: string, difficulty: string, count: number, grade
   - Perguntas ${half + 1}–${count}: dificuldade plena do nível "${difficulty}" (pico pedagógico)
   NÃO use dificuldades fora do nível "${difficulty}". Apenas calibre a complexidade do contexto.`;
 
+  // ─── Freshness & topic dispersion seed ───
+  const freshSeed = seed || Date.now();
+  // Force varied subtopics even within the same theme
+  const subtopicVariant = [
+    'Explore aspectos POUCO CONHECIDOS ou CURIOSOS do tema — evite conceitos que costumam aparecer sempre.',
+    'Foque em APLICAÇÕES PRÁTICAS e CONTEXTOS DO COTIDIANO relacionados ao tema.',
+    'Priorize perguntas sobre PERSONAGENS, EVENTOS ou DESCOBERTAS específicos dentro do tema.',
+    'Aborde CONEXÕES INTERDISCIPLINARES do tema com outras áreas do conhecimento.',
+    'Explore a DIMENSÃO HISTÓRICA ou EVOLUÇÃO TEMPORAL do tema ao longo do tempo.',
+    'Foque em COMPARAÇÕES e CONTRASTES dentro do tema — semelhanças, diferenças, casos especiais.',
+    'Priorize aspectos REGIONAIS ou BRASILEIROS do tema sempre que possível.',
+    'Explore IMPACTOS e CONSEQUÊNCIAS do tema na sociedade, natureza ou ciência.',
+  ][freshSeed % 8];
+
   return `
 Você é um(a) professor(a) especialista no currículo brasileiro BNCC com 20 anos de experiência em avaliações educacionais gamificadas e rigor pedagógico absoluto.
 
 Sua missão: Criar ${count} perguntas de Duelo Educacional IMPECÁVEIS — curtas, claras, pedagógicas e 100% coerentes com a série e o tema definidos.
+
+╔═══ CHAVE DE FRESCOR ════════════════════════════════╗
+Seed único de geração: #${freshSeed}
+Esta chave garante que esta série de perguntas seja COMPLETAMENTE DIFERENTE de qualquer outra gerada anteriormente. Use-a como inspiração para escolher ângulos, exemplos e contextos que você NÃO usaria normalmente.
+
+Foco de variedade desta geração: ${subtopicVariant}
+╚═══════════════════════════════════════════╗
 
 ═══ CONTEXTO DO DUELO ═══
 ${duelMode}
@@ -1205,15 +1419,17 @@ ${progressionPlan}
 2. SEM ERROS: zero erros conceituais, gramaticais ou de conteúdo.
 3. TEMA EXCLUSIVO: cada pergunta deve ser 100% dentro do tema "${theme}". Zero desvios.
 4. SÉRIE RESPEITADA: NUNCA gere conteúdo acima do nível de ${referenceGrade}.
-5. SEM REPETIÇÃO: nenhum conceito repetido entre as ${count} perguntas.
-6. DISTRAIDORES COERENTES: 3 alternativas erradas mas plausíveis para o nível — sem respostas absurdas e sem pegar em palavras.
-7. EXPLICAÇÃO DIDÁTICA: 1-2 frases, ensina algo real, linguagem adequada para ${gradeProfile.age}.
-8. ANTES DE FINALIZAR cada pergunta, valide internamente:
+5. SEM REPETIÇÃO INTERNA: nenhum conceito ou aspecto repetido entre as ${count} perguntas desta sessão.
+6. SEM REPETIÇÃO ENTRE SESSÕES: as perguntas desta geração devem cobrir FACETAS DIFERENTES do tema — não os conceitos mais óbvios ou mais comuns. Use o Seed #${freshSeed} como guia de originalidade.
+7. DISPERSÃO TEMÁTICA: cada pergunta deve abordar um SUBTÓPICO ou ÂNGULO DIFERENTE dentro de "${theme}" — nunca o mesmo conceito de formas ligeiramente diferentes.
+8. DISTRAIDORES COERENTES: 3 alternativas erradas mas plausíveis para o nível — sem respostas absurdas e sem pegar em palavras.
+9. EXPLICAÇÃO DIDÁTICA: 1-2 frases, ensina algo real, linguagem adequada para ${gradeProfile.age}.
+10. ANTES DE FINALIZAR cada pergunta, valide internamente:
    ✓ O enunciado está claro e curto?
    ✓ O conteúdo é compatível com ${referenceGrade}?
    ✓ Os distraidores são plausíveis mas claramente errados?
    ✓ A explicação ensina algo?
-   ✓ Esta pergunta é diferente das anteriores?
+   ✓ Esta pergunta aborda um ASPECTO DIFERENTE das anteriores (não apenas muda o contexto superficialmente)?
 
 ═══ FORMATO DE SAÍDA (JSON puro, sem texto antes ou depois) ═══
 {
@@ -1384,13 +1600,22 @@ export const handler: Handler = async (event: HandlerEvent) => {
   let finalPrompt = "";
   try {
     switch (feature) {
-      case "tutor-chat":
-        finalPrompt = buildTutorPrompt(
+      case "tutor-chat": {
+        const tutorPrompt = buildTutorPrompt(
           sanitizeInput(featureData.message),
           sanitizeInput(featureData.userName),
           featureData.grade ? sanitizeInput(featureData.grade) : undefined
         );
+        // If image is attached, use multimodal path
+        if (featureData.imageBase64 && featureData.imageMimeType) {
+          const imgResult = await callGeminiMultimodal(
+            model, tutorPrompt, featureData.imageBase64, featureData.imageMimeType
+          );
+          return { statusCode: 200, headers, body: JSON.stringify({ result: imgResult }) };
+        }
+        finalPrompt = tutorPrompt;
         break;
+      }
 
       case "generate-activity":
         finalPrompt = buildActivityPrompt(
@@ -1423,6 +1648,12 @@ export const handler: Handler = async (event: HandlerEvent) => {
         );
         break;
 
+      case "generate-topics":
+        // Generic pass-through: the caller provides a fully-built prompt.
+        // Used by BulkAIGeneratorModal to get N unique curriculum topics.
+        finalPrompt = sanitizeInput(rawPrompt || "");
+        break;
+
       case "generate-trail-step":
         finalPrompt = buildTrailStepPrompt(
           sanitizeInput(featureData.topic),
@@ -1438,18 +1669,48 @@ export const handler: Handler = async (event: HandlerEvent) => {
       case "generate-duel": {
         const duelTheme = sanitizeInput(featureData.theme);
         const duelDifficulty = featureData.difficulty || "medium";
-        const duelCount = Math.min(featureData.count || 5, 10);
+        const duelCount = Math.min(featureData.count || 5, 12); // cap at 12: allows questionCount(10) + 1 reserve for Swap power
         const duelGrade = sanitizeInput(featureData.grade || "");
         const duelOpponentGrade = featureData.opponentGrade ? sanitizeInput(featureData.opponentGrade) : undefined;
+        const duelSeed = featureData.seed ? parseInt(featureData.seed as string) : Date.now();
 
         if (duelTheme === "quem_sou_eu") {
           finalPrompt = buildWhoAmIPrompt(duelDifficulty, duelCount, duelGrade, duelOpponentGrade);
         } else if (duelTheme === "logica") {
           finalPrompt = buildLogicPrompt(duelDifficulty, duelCount, duelGrade, duelOpponentGrade);
         } else {
-          finalPrompt = buildDuelPrompt(duelTheme, duelDifficulty, duelCount, duelGrade, duelOpponentGrade);
+          finalPrompt = buildDuelPrompt(duelTheme, duelDifficulty, duelCount, duelGrade, duelOpponentGrade, duelSeed);
         }
-        break;
+
+        // Use compact, fast duel call (no large prompt builders — builds inline prompt)
+        try {
+          const duelRaw = await callGeminiDuel(duelTheme, duelDifficulty, duelCount, duelGrade, duelOpponentGrade, duelSeed);
+
+          console.log('[AI-Proxy] Raw duel response (first 300 chars):', duelRaw.slice(0, 300));
+
+          // Balanced-brace walker: finds the FIRST complete JSON object, ignoring trailing text
+          const start = duelRaw.indexOf('{');
+          if (start === -1) throw new Error('No JSON object found in Gemini duel response');
+          let depth = 0;
+          let end = -1;
+          let inString = false;
+          let escaped = false;
+          for (let i = start; i < duelRaw.length; i++) {
+            const ch = duelRaw[i];
+            if (escaped) { escaped = false; continue; }
+            if (ch === '\\' && inString) { escaped = true; continue; }
+            if (ch === '"') { inString = !inString; continue; }
+            if (inString) continue;
+            if (ch === '{') depth++;
+            else if (ch === '}') { depth--; if (depth === 0) { end = i; break; } }
+          }
+          if (end === -1) throw new Error('Unbalanced JSON braces in Gemini duel response');
+          const parsed = JSON.parse(duelRaw.slice(start, end + 1));
+          return { statusCode: 200, headers: { "Content-Type": "application/json" }, body: JSON.stringify({ result: parsed }) };
+        } catch (duelErr: any) {
+          console.error("[AI-Proxy] Duel generation failed:", duelErr.message);
+          return { statusCode: 500, headers: { "Content-Type": "application/json" }, body: JSON.stringify({ error: "Falha ao gerar perguntas do duelo. Tente novamente." }) };
+        }
       }
 
       case "parent-tips":

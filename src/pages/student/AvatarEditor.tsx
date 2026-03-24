@@ -47,7 +47,7 @@ export const AvatarEditor: React.FC = () => {
 
   useEffect(() => {
     const fetchCatalog = async () => {
-      const { data: items } = await supabase.from('avatar_catalog').select('*');
+      const { data: items } = await supabase.rpc('get_avatar_catalog');
       setFullCatalog((items || []) as AvatarLayer[]);
     };
 

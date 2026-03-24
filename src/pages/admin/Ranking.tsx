@@ -7,7 +7,10 @@ import {
   TrendingUp,
   Filter,
   ChevronRight,
-  Globe
+  Globe,
+  GraduationCap,
+  Calendar,
+  X
 } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
 import { cn } from '../../lib/utils';
@@ -23,22 +26,39 @@ export const AdminRanking: React.FC = () => {
   const userSchoolId = user?.schoolId;
 
   const [selectedSchoolId, setSelectedSchoolId] = useState<string>(isAdminMaster ? 'all' : (userSchoolId || ''));
+  const [selectedClassId, setSelectedClassId] = useState<string>('all');
+  const [selectedYear, setSelectedYear] = useState<string>('all');
   const [searchTerm, setSearchTerm] = useState('');
   const [activeTab, setActiveTab] = useState<'students' | 'schools'>('students');
 
   const [schools, setSchools] = useState<any[]>([]);
+  const [classes, setClasses] = useState<any[]>([]);
   const [studentsRanking, setStudentsRanking] = useState<any[]>([]);
   const [schoolsRanking, setSchoolsRanking] = useState<any[]>([]);
+
+  // ── Grade normalization ────────────────────────────────────────────────────────
+  // Returns canonical: "1º Ano"..."9º Ano" (EF) or "1º EM"..."3º EM" (EM).
+  // Key rule: presence of "EM" in the string → Ensino Médio.
+  const normalizeGrade = (g: string): string => {
+    if (!g) return '';
+    const s = g.trim().toUpperCase();
+    // Ensino Médio: string contains the letters E-M together
+    if (s.includes('EM')) {
+      const m = s.match(/[123]/);
+      return (m ? m[0] : '1') + 'º EM';
+    }
+    // Ensino Fundamental: extract first digit 1-9
+    const m = s.match(/([1-9])/);
+    if (m) return m[1] + 'º Ano';
+    return g.trim();
+  };
+
 
   const fetchData = async () => {
     // 1. Schools
     const { data: allSchools } = await supabase.from('schools').select('*');
     if (allSchools) {
       setSchools(allSchools);
-      // For Demo purposes, calculating globalScore on the fly if not present in DB.
-      // Usually you'd use a derived value or calculate it here based on users' XP.
-      // Easiest is to attach a dummy score or compute securely. In the DB some schools had "globalScore" field.
-      // Let's compute it.
       const { data: allStudentsData } = await supabase.from('users').select('id, schoolId').eq('role', 'student');
       const { data: allStatsData } = await supabase.from('gamification_stats').select('id, xp');
       
@@ -59,33 +79,48 @@ export const AdminRanking: React.FC = () => {
       setSchoolsRanking(schoolsRanked.sort((a, b) => (b.globalScore || 0) - (a.globalScore || 0)));
     }
 
-    // 2. Students
+    // 2. Classes
+    const { data: classesData } = await supabase.from('classes').select('*');
+    if (classesData) setClasses(classesData);
+
+    // 3. Students
     let query = supabase.from('users').select('*').eq('role', 'student');
     if (selectedSchoolId !== 'all') {
       query = query.eq('schoolId', selectedSchoolId);
     }
     const { data: usersData } = await query;
-    const { data: statsData } = await supabase.from('gamification_stats').select('*');
-    const { data: classesData } = await supabase.from('classes').select('*');
+    const [{ data: statsData }, { data: profilesData }, { data: catalogData }] = await Promise.all([
+      supabase.from('gamification_stats').select('*'),
+      supabase.from('student_avatar_profiles').select('studentId, selectedAvatarId'),
+      supabase.rpc('get_avatar_catalog'),
+    ]);
 
     if (usersData && statsData && allSchools && classesData) {
-      let filteredStudents = usersData;
-      if (searchTerm) {
-        filteredStudents = filteredStudents.filter(s => s.name.toLowerCase().includes(searchTerm.toLowerCase()));
-      }
-
-      const studentsWithStats = filteredStudents.map((s): Student & { xp: number; coins: number; level: number; schoolName: string; className: string } => {
+      const studentsWithStats = usersData.map((s): Student & {
+        xp: number; coins: number; level: number; avatar: string | null;
+        schoolName: string; className: string; classYear: string; classGrade: string;
+      } => {
         const stats = statsData.find(st => st.id === s.id);
         const school = allSchools.find(sch => sch.id === s.schoolId);
-        const studentClass = classesData.find(c => c.id === s.classId);
-        
+        // Match by classId field first, then by studentIds array fallback
+        const studentClass = classesData.find(c =>
+          c.id === (s as any).classId ||
+          (Array.isArray(c.studentIds) && c.studentIds.includes(s.id))
+        );
+        const derivedGrade = normalizeGrade(studentClass?.grade || (s as any).grade || '');
+        // Resolve real avatar from profile + catalog
+        const profile = (profilesData || []).find((p: any) => p.studentId === s.id);
+        const avatarItem = (catalogData || []).find((c: any) => c.id === profile?.selectedAvatarId);
         return { 
           ...s as Student, 
           xp: stats?.xp || 0, 
           coins: stats?.coins || 0, 
           level: stats?.level || 1,
+          avatar: avatarItem?.assetUrl || (s as any).avatar || null, // real avatar
           schoolName: school?.name || 'Sem Escola',
-          className: studentClass?.name || (s as any).grade || 'S/ Turma'
+          className: studentClass?.name || derivedGrade || 'S/ Turma',
+          classYear: studentClass?.year || (studentClass as any)?.schoolYear || '',
+          classGrade: derivedGrade,
         };
       });
 
@@ -105,6 +140,37 @@ export const AdminRanking: React.FC = () => {
      return () => { supabase.removeChannel(ch); };
   }, [selectedSchoolId, searchTerm]);
 
+  // ── Derived options for dropdowns ─────────────────────────────────────────
+  // Classes filtered by school scope
+  const classOptions = classes.filter(c => {
+    if (selectedSchoolId !== 'all') return c.schoolId === selectedSchoolId;
+    return true;
+  });
+
+  // Unique school years from classes
+  const yearOptions = Array.from(new Set(
+    classes.map(c => c.year || c.schoolYear).filter(Boolean)
+  )).sort().reverse();
+
+  // ── Apply client-side filters ──────────────────────────────────────────────
+  const displayedStudents = studentsRanking.filter(s => {
+    const matchName = !searchTerm || s.name.toLowerCase().includes(searchTerm.toLowerCase());
+    const sc = s as any;
+    const byClassId = sc.classId === selectedClassId;
+    const byStudentIds = classes.some(c => c.id === selectedClassId && Array.isArray(c.studentIds) && c.studentIds.includes(s.id));
+    const matchClass = selectedClassId === 'all' || byClassId || byStudentIds;
+    const matchYear = selectedYear === 'all' || sc.classYear === selectedYear;
+    return matchName && matchClass && matchYear;
+  }).map((s, idx) => ({ ...s, position: idx + 1 }));
+
+  // Active filter count
+  const activeFilters = [
+    selectedSchoolId !== 'all',
+    selectedClassId !== 'all',
+    selectedYear !== 'all',
+    !!searchTerm,
+  ].filter(Boolean).length;
+
   return (
     <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
       
@@ -114,7 +180,7 @@ export const AdminRanking: React.FC = () => {
         <div className="relative z-10 flex flex-col md:flex-row md:items-center justify-between gap-6">
           <div className="space-y-3">
              <Badge variant="ai" className="bg-white/10 border-white/20 text-white border-0 py-1.5 px-4 tracking-[0.2em]">
-               GAMIFICAÇÃO & DESEMPENHO
+               GAMIFICAÇÃO &amp; DESEMPENHO
              </Badge>
              <h1 className="text-4xl font-black tracking-tight">
                Hall da <span className="text-primary-400">Fama</span>
@@ -146,48 +212,130 @@ export const AdminRanking: React.FC = () => {
       </header>
 
       {/* Filters Bar */}
-      <Card className="p-4 border-slate-100 flex flex-wrap items-center gap-4 bg-white/80 backdrop-blur-sm sticky top-4 z-20 shadow-sm">
-        {isAdminMaster && (
-          <div className="flex-1 min-w-[200px]">
-             <div className="relative">
-                <SchoolIcon className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
+      <Card className="p-4 border-slate-100 bg-white/80 backdrop-blur-sm sticky top-4 z-20 shadow-sm">
+        <div className="flex flex-wrap items-center gap-3">
+          
+          {/* School filter — admin master only */}
+          {isAdminMaster && (
+            <div className="min-w-[180px] flex-1">
+              <div className="relative">
+                <SchoolIcon className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={15} />
                 <select 
                   value={selectedSchoolId}
-                  onChange={(e) => setSelectedSchoolId(e.target.value)}
-                  className="w-full pl-10 pr-4 py-2.5 bg-slate-50 border border-slate-100 rounded-xl text-xs font-bold text-slate-600 appearance-none focus:outline-none focus:border-primary-300 transition-colors"
+                  onChange={(e) => { setSelectedSchoolId(e.target.value); setSelectedClassId('all'); }}
+                  className="w-full pl-9 pr-4 py-2.5 bg-slate-50 border border-slate-100 rounded-xl text-xs font-bold text-slate-600 appearance-none focus:outline-none focus:border-primary-300 transition-colors"
                 >
                   <option value="all">Todas as Escolas</option>
                   {schools.map(s => (
                     <option key={s.id} value={s.id}>{s.name}</option>
                   ))}
                 </select>
-             </div>
+              </div>
+            </div>
+          )}
+
+          {/* Class filter */}
+          <div className="min-w-[180px] flex-1">
+            <div className="relative">
+              <GraduationCap className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={15} />
+              <select 
+                value={selectedClassId}
+                onChange={(e) => setSelectedClassId(e.target.value)}
+                className="w-full pl-9 pr-4 py-2.5 bg-slate-50 border border-slate-100 rounded-xl text-xs font-bold text-slate-600 appearance-none focus:outline-none focus:border-primary-300 transition-colors"
+              >
+                <option value="all">Todas as Turmas</option>
+                {classOptions.map(c => (
+                  <option key={c.id} value={c.id}>{c.name} {c.grade ? `(${c.grade})` : ''}</option>
+                ))}
+              </select>
+            </div>
           </div>
-        )}
-        
-        <div className="flex-1 min-w-[250px]">
-           <div className="relative">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
+
+          {/* School year filter */}
+          <div className="min-w-[150px] flex-1">
+            <div className="relative">
+              <Calendar className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={15} />
+              <select 
+                value={selectedYear}
+                onChange={(e) => setSelectedYear(e.target.value)}
+                className="w-full pl-9 pr-4 py-2.5 bg-slate-50 border border-slate-100 rounded-xl text-xs font-bold text-slate-600 appearance-none focus:outline-none focus:border-primary-300 transition-colors"
+              >
+                <option value="all">Todos os Anos</option>
+                {yearOptions.map(y => (
+                  <option key={y} value={y}>{y}</option>
+                ))}
+              </select>
+            </div>
+          </div>
+
+          {/* Search */}
+          <div className="min-w-[220px] flex-[2]">
+            <div className="relative">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={15} />
               <input 
                 type="text" 
                 placeholder="Buscar por nome..."
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
-                className="w-full pl-10 pr-4 py-2.5 bg-slate-50 border border-slate-100 rounded-xl text-xs font-bold text-slate-600 focus:outline-none focus:border-primary-300 transition-colors"
+                className="w-full pl-9 pr-4 py-2.5 bg-slate-50 border border-slate-100 rounded-xl text-xs font-bold text-slate-600 focus:outline-none focus:border-primary-300 transition-colors"
               />
-           </div>
+            </div>
+          </div>
+
+          {/* Filter count + clear */}
+          <div className="flex items-center gap-2">
+            {activeFilters > 0 && (
+              <button
+                onClick={() => { setSelectedSchoolId(isAdminMaster ? 'all' : (userSchoolId || '')); setSelectedClassId('all'); setSelectedYear('all'); setSearchTerm(''); }}
+                className="flex items-center gap-1.5 px-3 py-2 bg-red-50 text-red-500 border border-red-100 rounded-xl text-[10px] font-black uppercase hover:bg-red-100 transition-colors"
+              >
+                <X size={12} /> Limpar ({activeFilters})
+              </button>
+            )}
+            <div className="flex items-center gap-1.5 px-3 py-2 text-slate-400">
+              <Filter size={13} />
+              <span className="text-[10px] font-black uppercase tracking-widest">
+                {displayedStudents.length} aluno{displayedStudents.length !== 1 ? 's' : ''}
+              </span>
+            </div>
+          </div>
         </div>
 
-        <div className="flex items-center gap-2 px-2 text-slate-400">
-           <Filter size={14} />
-           <span className="text-[10px] font-black uppercase tracking-widest">Filtros Ativos</span>
-        </div>
+        {/* Active filter chips */}
+        {activeFilters > 0 && (
+          <div className="flex flex-wrap gap-2 mt-3 pt-3 border-t border-slate-50">
+            {selectedSchoolId !== 'all' && (
+              <span className="inline-flex items-center gap-1.5 px-3 py-1 bg-primary-50 text-primary-700 rounded-xl text-[10px] font-black uppercase">
+                <SchoolIcon size={10} />{schools.find(s => s.id === selectedSchoolId)?.name}
+                <button onClick={() => { setSelectedSchoolId(isAdminMaster ? 'all' : (userSchoolId || '')); setSelectedClassId('all'); }} className="hover:text-primary-900 ml-0.5"><X size={9} /></button>
+              </span>
+            )}
+            {selectedClassId !== 'all' && (
+              <span className="inline-flex items-center gap-1.5 px-3 py-1 bg-indigo-50 text-indigo-700 rounded-xl text-[10px] font-black uppercase">
+                <GraduationCap size={10} />{classOptions.find(c => c.id === selectedClassId)?.name}
+                <button onClick={() => setSelectedClassId('all')} className="hover:text-indigo-900 ml-0.5"><X size={9} /></button>
+              </span>
+            )}
+            {selectedYear !== 'all' && (
+              <span className="inline-flex items-center gap-1.5 px-3 py-1 bg-emerald-50 text-emerald-700 rounded-xl text-[10px] font-black uppercase">
+                <Calendar size={10} />Ano {selectedYear}
+                <button onClick={() => setSelectedYear('all')} className="hover:text-emerald-900 ml-0.5"><X size={9} /></button>
+              </span>
+            )}
+            {searchTerm && (
+              <span className="inline-flex items-center gap-1.5 px-3 py-1 bg-slate-100 text-slate-600 rounded-xl text-[10px] font-black">
+                <Search size={10} />"{searchTerm}"
+                <button onClick={() => setSearchTerm('')} className="hover:text-slate-900 ml-0.5"><X size={9} /></button>
+              </span>
+            )}
+          </div>
+        )}
       </Card>
 
       {activeTab === 'students' ? (
         <div className="grid grid-cols-1 gap-4">
-          {studentsRanking && studentsRanking.length > 0 ? (
-            studentsRanking.map((student, i) => (
+          {displayedStudents && displayedStudents.length > 0 ? (
+            displayedStudents.map((student, i) => (
               <Card key={student.id} className={cn(
                 "p-5 border-slate-100 hover:border-primary-100 transition-all flex items-center gap-6 group relative overflow-hidden",
                 i === 0 && "bg-gradient-to-r from-amber-50/50 to-transparent border-amber-200"
@@ -200,7 +348,7 @@ export const AdminRanking: React.FC = () => {
                   i === 2 ? "bg-orange-50 text-orange-400" :
                   "bg-slate-50 text-slate-300"
                 )}>
-                  {i + 1}º
+                  {student.position}º
                 </div>
 
                 {/* Avatar Placeholder */}
@@ -218,9 +366,12 @@ export const AdminRanking: React.FC = () => {
                       <h4 className="text-lg font-black text-slate-800 truncate">{student.name}</h4>
                       {i === 0 && <Badge variant="ai" className="bg-amber-400 text-white border-0 py-0.5 px-2 text-[8px]">CAMPEÃO</Badge>}
                    </div>
-                   <div className="flex items-center gap-4 mt-1">
+                   <div className="flex items-center gap-3 mt-1 flex-wrap">
                       <span className="text-[10px] font-black uppercase text-primary-500 tracking-widest">{student.schoolName}</span>
-                      <span className="text-[10px] font-bold text-slate-400">{(student as any).className}</span>
+                      <span className="text-[10px] font-bold text-slate-400 flex items-center gap-1"><GraduationCap size={10} />{(student as any).className}</span>
+                      {(student as any).classYear && (
+                        <span className="text-[10px] font-bold text-slate-400 flex items-center gap-1"><Calendar size={10} />{(student as any).classYear}</span>
+                      )}
                    </div>
                 </div>
 
