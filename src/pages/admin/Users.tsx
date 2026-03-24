@@ -482,16 +482,6 @@ export const Users: React.FC = () => {
   const schools = useLiveQuery(() => db.schools.toArray()) || [];
   const classes = useLiveQuery(() => db.classes.toArray()) || [];
   const stats = useLiveQuery(() => db.gamificationStats.toArray()) || [];
-  const allAvatarProfiles = useLiveQuery(() => db.studentAvatarProfiles.toArray()) || [];
-  const allCatalog = useLiveQuery(() => db.avatarCatalog.toArray()) || [];
-
-  // Resolve real avatar URL from profile system (for students)
-  const getAvatarUrl = (u: any): string | null => {
-    if (u.role !== 'student') return (u as any).avatar || null;
-    const profile = allAvatarProfiles.find((p: any) => p.studentId === u.id);
-    const item = allCatalog.find((c: any) => c.id === (profile as any)?.selectedAvatarId);
-    return (item as any)?.assetUrl || (u as any).avatar || null;
-  };
 
   const filteredUsers = users.filter(u => {
     const matchesRole = activeRole === 'all' || u.role === activeRole;

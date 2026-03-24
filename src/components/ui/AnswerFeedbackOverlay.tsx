@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { motion, AnimatePresence, useAnimation } from 'framer-motion';
+import { motion, AnimatePresence } from 'framer-motion';
 import { ArrowRight, FlagTriangleRight } from 'lucide-react';
 
 export type FeedbackType = 'correct' | 'wrong' | 'timeout';
@@ -154,7 +154,7 @@ const CONFIGS = {
 } as const;
 
 // ── Random float particles ────────────────────────────────────────────────────
-const FLOAT_PARTICLES = Array.from({ length: 22 }, (_, i) => ({
+const FLOAT_PARTICLES = Array.from({ length: 22 }, (_) => ({
   x: 5 + Math.random() * 90,
   y: 10 + Math.random() * 80,
   size: 4 + Math.random() * 10,
@@ -230,7 +230,7 @@ export const AnswerFeedbackOverlay: React.FC<AnswerFeedbackOverlayProps> = ({
           {/* ── Starburst (correct only) ── */}
           {isCorrect && (
             <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-              <StarBurst count={28} colors={cfg.particles} />
+              <StarBurst count={28} colors={[...cfg.particles]} />
             </div>
           )}
 

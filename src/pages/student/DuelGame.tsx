@@ -2,7 +2,7 @@ import React, { useEffect, useState, useRef, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useAuthStore } from '../../store/auth.store';
 import { supabase } from '../../lib/supabase';
-import { Sword, CheckCircle2, XCircle, Timer, Flame, Zap, Shield } from 'lucide-react';
+import { Sword, CheckCircle2, XCircle, Flame, Zap, Shield } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import { DuelService } from '../../services/duel.service';
 import type { Duel, DuelQuestion, DuelAnswerData } from '../../types/duel';
@@ -46,7 +46,6 @@ const POWERS_INFO: Record<string, {
   queima:         { emoji:'🔥', label:'Queima de Energia',desc:'Cada energia gasta = +20% de pontos na próxima questão', color:'text-yellow-300',  bg:'from-yellow-950 to-orange-950',  border:'border-yellow-500/60',  glow:'rgba(251,191,36,0.55)',   cat:'boost',    cost:1 },
 };
 
-const DICA_ENABLED = true; // dica uses explanation as hint fallback
 const ALL_POWERS = ['shield','dica','freeze','turbo','swap','eliminate','segunda_chance','queima'] as const;
 
 function shuffle<T>(arr: T[]): T[] {
@@ -141,7 +140,7 @@ export const DuelGame: React.FC = () => {
   const [eliminatedOptionIds, setEliminatedOptionIds] = useState<string[]>([]);
   const [reserveQuestion, setReserveQuestion] = useState<DuelQuestion|null>(null); // Trocar Questão reserve
   const [swappedQuestions, setSwappedQuestions] = useState<Record<number,DuelQuestion>>({});
-  const [generatingSwap, setGeneratingSwap] = useState(false);
+  const [, setGeneratingSwap] = useState(false);
   const [showPowerPanel, setShowPowerPanel] = useState(false);
   const [secondChanceAvailable, setSecondChanceAvailable] = useState(false);
   const [showHint, setShowHint] = useState(false);
@@ -620,8 +619,6 @@ const MAX_POWERS_PER_DUEL = 3; // Maximum power activations per duel
   const isAmChallenger = duel?.challengerId === user?.id;
   const alreadyActivatedThisQ = !!activePowerPerQ;
   const timerPercent = (timeLeft / effectiveTime) * 100;
-  const timerColor = timeLeft > 15 ? 'bg-emerald-500' : timeLeft > 7 ? 'bg-amber-500' : 'bg-red-500';
-  const timerTextColor = timeLeft > 15 ? 'text-emerald-600' : timeLeft > 7 ? 'text-amber-600' : 'text-red-600';
   const myScore = isAmChallenger ? duel?.challengerScore??0 : duel?.challengedScore??0;
   const oppScore = isAmChallenger ? duel?.challengedScore??0 : duel?.challengerScore??0;
   const isDuelWon = duel?.status==='completed' && duel?.winnerId===user?.id;

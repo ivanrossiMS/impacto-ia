@@ -298,12 +298,13 @@ export const AvatarStudio: React.FC = () => {
                     ? profile.equippedStickerIds.includes(item.id)
                     : (activeTab === 'avatar' ? profile.selectedAvatarId : activeTab === 'background' ? profile.selectedBackgroundId : profile.selectedBorderId) === item.id;
 
-                const rarityColor = {
+                const rarityColor = ({
                   'comum': 'bg-slate-400',
+                  'incomum': 'bg-green-500',
                   'raro': 'bg-blue-500',
                   'épico': 'bg-purple-500',
                   'lendário': 'bg-amber-500 shadow-[0_0_10px_rgba(245,158,11,0.4)]'
-                }[item.rarity || 'comum'];
+                } as Record<string, string>)[item.rarity || 'comum'] || 'bg-slate-400';
 
                 return (
                     <motion.div

@@ -12,7 +12,6 @@ import { supabase } from '../../lib/supabase';
 import { DuelService } from '../../services/duel.service';
 import type { DuelTheme, DuelDifficulty, DuelQuestion } from '../../types/duel';
 import { calcDuelRewards } from '../../lib/duelRewards';
-import { cn } from '../../lib/utils';
 import { toast } from 'sonner';
 import { incrementMissionProgress } from '../../lib/missionUtils';
 import { AnswerFeedbackOverlay, type FeedbackType } from '../../components/ui/AnswerFeedbackOverlay';
@@ -182,7 +181,6 @@ export const SoloDuelGame: React.FC = () => {
   const timerPct   = (timeLeft / TIME_PER_Q) * 100;
   const starCount  = stars(questions.length > 0 ? finalScore / questions.length : 0);
   const activeTheme = THEMES.find(t => t.id === theme)!;
-  const activeDiff  = DIFFS.find(d => d.id === diff)!;
 
   return (
     <div style={{ maxWidth: 640, margin: '0 auto', padding: '0 16px 96px' }}>

@@ -1,4 +1,4 @@
-﻿import React, { useState } from 'react';
+import React, { useState } from 'react';
 import {
   School, Plus, ArrowUpRight, Search, X, Users, GraduationCap,
   BookOpen, Trophy, TrendingUp, Activity,
@@ -196,15 +196,6 @@ const SchoolDashboard: React.FC<{ school: SchoolRecord; onClose: () => void }> =
   const allUsers = useLiveQuery(() => db.users.toArray()) || [];
   const allClasses = useLiveQuery(() => db.classes.toArray()) || [];
   const gamStats = useLiveQuery(() => db.gamificationStats.toArray()) || [];
-  const allAvatarProfiles = useLiveQuery(() => db.studentAvatarProfiles.toArray()) || [];
-  const allCatalog = useLiveQuery(() => db.avatarCatalog.toArray()) || [];
-
-  // Resolve real avatar for students via profile + catalog system
-  const getAvatarUrl = (userId: string): string | null => {
-    const profile = allAvatarProfiles.find((p: any) => p.studentId === userId);
-    const item = allCatalog.find((c: any) => c.id === (profile as any)?.selectedAvatarId);
-    return (item as any)?.assetUrl || null;
-  };
 
   const users = allUsers.filter(u => u.schoolId === school.id);
   const classes = allClasses.filter(c => c.schoolId === school.id);
