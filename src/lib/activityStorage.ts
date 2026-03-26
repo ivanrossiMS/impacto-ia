@@ -7,9 +7,10 @@ export const ACTIVITIES_STORAGE_KEY = 'teacher_activities'; // Kept for referenc
 const META_SEP = '||META:';
 
 function encodeActivityMeta(activity: any): any {
-  const { noExitAllowed, ...rest } = activity;
+  const { noExitAllowed, pinnedToClass, ...rest } = activity;
   const meta: Record<string, any> = {};
   if (noExitAllowed) meta.noExitAllowed = true;
+  if (pinnedToClass) meta.pinnedToClass = true;
   if (Object.keys(meta).length > 0) {
     rest.description = (rest.description || '') + META_SEP + JSON.stringify(meta);
   }

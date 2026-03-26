@@ -598,6 +598,7 @@ const MAX_POWERS_PER_DUEL = 3; // Maximum power activations per duel
         setEarnedCoins((isWinner?rewards.winCoins:isDraw?rewards.drawCoins:rewards.loseCoins) + totals.correctCount * rewards.coinsPerCorrect);
         setPhase('finished');
         await incrementMissionProgress(user.id, 'duel_completed');
+        await incrementMissionProgress(user.id, 'duel_challenge_completed');
         if (finalDuel.status==='completed') toast.success('🏆 Duelo finalizado!');
         else toast.success('⚔️ Turno enviado! Aguardando o oponente...');
       } catch(e) { toast.error('Erro ao salvar resultado.'); }
@@ -654,108 +655,119 @@ const MAX_POWERS_PER_DUEL = 3; // Maximum power activations per duel
   const shuffledOptions = (shuffledOptionsMap[currentQuestion?.id]||currentQuestion?.options||[]).filter((o:any)=>!eliminatedOptionIds.includes(o.id));
 
 
-  // \u2500\u2500\u2500\u2500 LOBBY \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+  // ──── LOBBY ─────────────────────────────────────────────────────────────────────────────────
   if (phase === 'lobby') return (
-    <div className="max-w-2xl mx-auto pb-24 pt-2 space-y-4">
+    <div className="max-w-[480px] mx-auto pb-24 pt-4 space-y-4">
       <motion.div initial={{opacity:0,y:-16}} animate={{opacity:1,y:0}} transition={{duration:0.5}}
-        className="relative overflow-hidden rounded-[2.5rem] shadow-2xl"
-        style={{background:'linear-gradient(135deg,#0f172a 0%,#1e1b4b 50%,#0f172a 100%)'}}>
+        className="relative overflow-hidden rounded-[2rem] shadow-2xl bg-[#0b1021]">
 
-        {/* Background glow blobs */}
-        <div className="absolute -top-12 -left-12 w-48 h-48 rounded-full opacity-20 blur-3xl pointer-events-none" style={{background:'radial-gradient(circle,#6366f1,transparent)'}} />
-        <div className="absolute -bottom-12 -right-12 w-48 h-48 rounded-full opacity-20 blur-3xl pointer-events-none" style={{background:'radial-gradient(circle,#ef4444,transparent)'}} />
-
-        <div className="relative z-10 p-7">
+        <div className="relative z-10 p-6">
           {/* Theme badge */}
           {duel?.theme && (() => {
-            const t = DUEL_THEMES[duel.theme] ?? { emoji:'\ud83c\udfb2', label: duel.theme, color:'#a78bfa' };
+            const t = DUEL_THEMES[duel.theme] ?? { emoji:'🎲', label: duel.theme, color:'#a78bfa' };
             return (
-              <div className="flex justify-center mb-5">
-                <div className="flex items-center gap-2 px-5 py-2 rounded-2xl border"
-                  style={{background:`${t.color}18`, borderColor:`${t.color}44`}}>
-                  <span className="text-2xl">{t.emoji}</span>
-                  <span className="text-base font-black uppercase tracking-[0.15em]"
-                    style={{color:t.color, fontFamily:"'Rajdhani', sans-serif"}}>{t.label}</span>
+              <div className="flex justify-center mb-6">
+                <div className="flex items-center gap-2 px-4 py-1.5 rounded-full bg-[#161b2c] border border-transparent/5">
+                  <span className="text-sm">{t.emoji}</span>
+                  <span className="text-xs font-black uppercase tracking-[0.1em]" style={{color:t.color, fontFamily:"'Rajdhani', sans-serif"}}>{t.label}</span>
                 </div>
               </div>
             );
           })()}
 
           {/* Players */}
-          <div className="flex items-center justify-between gap-4 mb-6">
+          <div className="flex items-center justify-between gap-2 mb-8 px-2">
             <motion.div initial={{x:-30,opacity:0}} animate={{x:0,opacity:1}} transition={{delay:0.15}}
               className="flex-1 flex flex-col items-center gap-2">
-              <div className="rounded-[1.5rem] overflow-hidden shadow-xl"><MyAvatar /></div>
-              <span className="text-xs font-black text-indigo-300 uppercase tracking-widest">Você</span>
-              <span className="text-base font-black text-white text-center leading-tight" style={{fontFamily:"'Rajdhani', sans-serif"}}>
-                {(() => { const p = (user?.name||'').split(' '); return p.length>=2?`${p[0]} ${p[1]}`:p[0]||'—'; })()}
-              </span>
-              <div className="flex items-center gap-1 flex-wrap justify-center">
-                {myGrade && <span className="text-[13px] font-bold text-white/50 bg-white/5 px-2 py-1 rounded-lg">{myGrade}</span>}
-                <span className="text-[13px] font-black text-indigo-300 bg-indigo-500/20 px-2 py-1 rounded-lg">Nív. {myLevel}</span>
+              <div className="w-[110px] h-[110px] rounded-[1.5rem] overflow-hidden shadow-lg border-[3px] border-[#161b2c] bg-[#161b2c] relative">
+                {myAvatarCompose?.avatarUrl ? (
+                  <AvatarComposer avatarUrl={myAvatarCompose.avatarUrl} backgroundUrl={myAvatarCompose.backgroundUrl} borderUrl={myAvatarCompose.borderUrl} size="md" animate={false} isFloating={false} className="w-[110px] h-[110px] scale-110 origin-center"/>
+                ) : (
+                  <img src={myAvatarUrl} className="w-full h-full object-cover" onError={e=>{(e.target as any).src='/avatars/default-impacto.png'}} />
+                )}
+              </div>
+              <div className="text-center mt-1">
+                <span className="text-[10px] font-black text-indigo-300 uppercase tracking-widest block mb-1">VOCÊ</span>
+                <span className="text-[14px] font-black text-white block leading-tight" style={{fontFamily:"'Rajdhani', sans-serif"}}>
+                  {(() => { const p = (user?.name||'').split(' '); return p.length>=2?`${p[0]} ${p[1]}`:p[0]||'—'; })()}
+                </span>
+                <div className="flex items-center justify-center gap-1.5 mt-2">
+                  {myGrade && <span className="text-[10px] font-bold text-[#c7d2fe] bg-[#312e81] px-2 py-0.5 rounded-md">{myGrade}</span>}
+                  <span className="text-[10px] font-black text-[#c7d2fe] bg-indigo-600 px-2 py-0.5 rounded-md">Nív. {myLevel}</span>
+                </div>
               </div>
             </motion.div>
 
             <motion.div initial={{scale:0}} animate={{scale:1}} transition={{delay:0.3,type:'spring',bounce:0.6}}
-              className="flex flex-col items-center gap-1.5 shrink-0">
-              <div className="w-12 h-12 bg-red-500/20 border-2 border-red-400/40 rounded-2xl flex items-center justify-center shadow-lg shadow-red-900/30">
-                <Sword size={22} className="text-red-400" />
+              className="flex flex-col items-center gap-1.5 shrink-0 pb-10">
+              <div className="w-10 h-10 bg-[#2d1b2e] border-[1px] border-[#4a2233] rounded-full flex items-center justify-center shadow-lg">
+                <Sword size={18} className="text-[#fb7185]" />
               </div>
-              <span className="text-base font-black text-red-400 uppercase tracking-widest" style={{fontFamily:"'Rajdhani', sans-serif"}}>VS</span>
+              <span className="text-[12px] font-black text-[#fb7185] uppercase tracking-widest" style={{fontFamily:"'Rajdhani', sans-serif"}}>VS</span>
             </motion.div>
 
             <motion.div initial={{x:30,opacity:0}} animate={{x:0,opacity:1}} transition={{delay:0.15}}
               className="flex-1 flex flex-col items-center gap-2">
-              <OppAvatar />
-              <span className="text-xs font-black text-red-300 uppercase tracking-widest">Rival</span>
-              <span className="text-base font-black text-white text-center leading-tight" style={{fontFamily:"'Rajdhani', sans-serif"}}>
-                {(() => { const p = (opponent?.name||'').split(' '); return p.length>=2?`${p[0]} ${p[1]}`:p[0]||'...'; })()}
-              </span>
+              <div className="w-[110px] h-[110px] rounded-[1.5rem] overflow-hidden shadow-lg border-[3px] border-[#161b2c] bg-[#161b2c] relative">
+                {oppAvatarCompose?.avatarUrl ? (
+                  <AvatarComposer avatarUrl={oppAvatarCompose.avatarUrl} backgroundUrl={oppAvatarCompose.backgroundUrl} borderUrl={oppAvatarCompose.borderUrl} size="md" animate={false} isFloating={false} className="w-[110px] h-[110px] scale-110 origin-center"/>
+                ) : (
+                  <img src={opponentAvatarUrl} className="w-full h-full object-cover" onError={e=>{(e.target as any).src='/avatars/default-impacto.png'}} />
+                )}
+              </div>
+              <div className="text-center mt-1">
+                <span className="text-[10px] font-black text-[#fda4af] uppercase tracking-widest block mb-1">RIVAL</span>
+                <span className="text-[14px] font-black text-white block leading-tight uppercase" style={{fontFamily:"'Rajdhani', sans-serif"}}>
+                  {(() => { const p = (opponent?.name||'').split(' '); return p.length>=2?`${p[0]} ${p[1]}`:p[0]||'...'; })()}
+                </span>
+              </div>
             </motion.div>
           </div>
 
           {/* Info pills */}
-          <div className="grid grid-cols-3 gap-2 mb-5">
+          <div className="grid grid-cols-3 gap-3 mb-6">
             {[
-              { icon: DUEL_THEMES[duel.theme]?.emoji||'🎲', label:'Tema', val:(DUEL_THEMES[duel.theme]?.label||duel.theme) },
+              { icon: DUEL_THEMES[duel.theme]?.emoji||'🎯', label:'Tema', val:(DUEL_THEMES[duel.theme]?.label||duel.theme) },
               { icon: duel.difficulty==='hard'?'🔥':duel.difficulty==='medium'?'⚡':'🌱', label:'Dificuldade', val:duel.difficulty==='hard'?'Difícil':duel.difficulty==='medium'?'Médio':'Fácil' },
               { icon:'❓', label:'Questões', val:`${duel.questionCount}` },
             ].map(item=>(
-              <div key={item.label} className="bg-white/5 border border-white/10 rounded-2xl p-4 text-center">
-                <div className="text-2xl mb-1">{item.icon}</div>
-                <div className="text-[11px] font-black text-white/40 uppercase tracking-wide">{item.label}</div>
-                <div className="text-sm font-black text-white mt-1">{item.val}</div>
+              <div key={item.label} className="bg-[#161b2c] rounded-[1.25rem] p-3 text-center flex flex-col items-center justify-center h-[85px] border border-[#1e253c]">
+                <div className="text-[20px] mb-1.5 leading-none drop-shadow-md">{item.icon}</div>
+                <div className="text-[8px] font-black text-[#64748b] uppercase tracking-widest leading-none mb-1">{item.label}</div>
+                <div className="text-[12px] font-black text-[#f1f5f9] leading-none">{item.val}</div>
               </div>
             ))}
           </div>
 
-          {/* Energy starts at 0 */}
-          <div className="bg-yellow-500/10 border border-yellow-500/20 rounded-2xl p-5 mb-4">
-            <div className="flex items-center gap-3 mb-3">
-              <Zap size={22} className="text-yellow-400 shrink-0" />
-              <span className="text-sm font-black text-yellow-400 uppercase tracking-widest">Energia</span>
-              <span className="text-xs font-bold text-white/30 ml-auto">Começa em 0</span>
-            </div>
+          {/* Energy Container */}
+          <div className="bg-[#161b2c] rounded-[1.25rem] p-4.5 mb-6 border border-[#1e253c]">
             <div className="flex items-center gap-2 mb-3">
+              <Zap size={16} className="text-yellow-400 shrink-0" strokeWidth={2.5}/>
+              <span className="text-[11px] font-black text-yellow-400 uppercase tracking-widest">Energia</span>
+              <span className="text-[10px] font-bold text-[#64748b] ml-auto">Começa em 0</span>
+            </div>
+            <div className="flex items-center gap-1.5 mb-2.5">
               {Array.from({length:MAX_ENERGY}).map((_,i)=>(
-                <div key={i} className="flex-1 h-5 rounded-xl bg-white/10 border border-white/15" />
+                <div key={i} className="flex-1 h-3 rounded-full bg-[#1e253c] border border-black/20" />
               ))}
             </div>
-            <p className="text-xs text-white/40">Acerte questões para ganhar ⚡ e ativar poderes durante a batalha.</p>
+            <p className="text-[10px] text-[#64748b] font-bold">Acerte questões para ganhar ⚡ e ativar poderes durante a batalha.</p>
           </div>
 
           {/* Powers grid - 3 per row */}
-          <div className="mb-5">
-            <div className="text-xs font-black text-white/40 uppercase tracking-widest mb-3">Poderes Disponíveis</div>
-            <div className="grid grid-cols-3 gap-2">
+          <div className="mb-6">
+            <div className="text-[10px] font-black text-[#64748b] uppercase tracking-widest mb-3">Poderes Disponíveis</div>
+            <div className="grid grid-cols-3 gap-2.5">
               {(ALL_POWERS as readonly string[]).map((p) => {
                 const info = POWERS_INFO[p as keyof typeof POWERS_INFO];
                 return (
-                  <div key={p} className="flex flex-col items-center gap-2 bg-white/5 border border-white/10 rounded-2xl px-3 py-4 text-center">
-                    <span className="text-5xl">{info.emoji}</span>
-                    <span className={cn('text-sm font-black leading-tight', info.color)} style={{fontFamily:"'Rajdhani', sans-serif"}}>{info.label}</span>
-                    <span className="text-[11px] text-white/35 leading-snug">{info.desc}</span>
-                    <span className="text-sm font-black text-yellow-400/80">⚡{info.cost}</span>
+                  <div key={p} className="flex flex-col items-center bg-[#161b2c] border border-[#1e253c] rounded-[1.25rem] p-3 text-center justify-between min-h-[125px]">
+                    <span className="text-[32px] drop-shadow-md mb-2">{info.emoji}</span>
+                    <div className="flex flex-col items-center flex-1 w-full gap-1.5">
+                      <span className={cn('text-[12px] font-black leading-[1.1] drop-shadow-sm', info.color)} style={{fontFamily:"'Rajdhani', sans-serif"}}>{info.label}</span>
+                      <span className="text-[9px] text-[#64748b] leading-[1.1] font-bold px-1">{info.desc}</span>
+                    </div>
+                    <span className="text-[11px] font-black text-yellow-500/90 flex items-center gap-0.5 mt-2"><Zap size={12} fill="currentColor"/> {info.cost}</span>
                   </div>
                 );
               })}
@@ -763,11 +775,17 @@ const MAX_POWERS_PER_DUEL = 3; // Maximum power activations per duel
           </div>
 
           {/* Rewards */}
-          <div className="bg-emerald-500/10 border border-emerald-500/20 rounded-2xl p-4 mb-4">
-            <div className="text-[9px] font-black text-emerald-400 uppercase tracking-widest mb-2 text-center">Recompensa 🏆</div>
-            <div className="flex justify-center gap-8">
-              <div className="text-center"><div className="text-lg font-black text-white">+{rewards.winXP} XP</div><div className="text-[9px] text-white/40">vitória</div></div>
-              <div className="text-center"><div className="text-lg font-black text-amber-300">+{rewards.winCoins} 💰</div><div className="text-[9px] text-white/40">moedas</div></div>
+          <div className="bg-[#161b2c] rounded-[1.25rem] py-3 pb-4 mb-6 border border-[#1e253c]">
+            <div className="text-[9px] font-black text-[#10b981] uppercase tracking-widest mb-2 flex items-center justify-center gap-1">Recompensa 🏆</div>
+            <div className="flex justify-center items-center gap-8">
+              <div className="text-center">
+                <div className="text-[18px] font-black text-[#f8fafc] leading-none mb-1 drop-shadow-sm">+{rewards.winXP} XP</div>
+                <div className="text-[9px] text-[#64748b] font-bold tracking-[0.1em] uppercase">vitória</div>
+              </div>
+              <div className="text-center">
+                <div className="text-[18px] font-black text-[#fde047] leading-none mb-1 drop-shadow-sm">+{rewards.winCoins} <span className="text-sm">🪙</span></div>
+                <div className="text-[9px] text-[#64748b] font-bold tracking-[0.1em] uppercase">moedas</div>
+              </div>
             </div>
           </div>
 
@@ -821,10 +839,10 @@ const MAX_POWERS_PER_DUEL = 3; // Maximum power activations per duel
             <motion.div
               animate={{y:[0,-10,0]}} transition={{duration:2.2,repeat:Infinity,ease:'easeInOut',delay:0.5}}
               className="rounded-[2.5rem] overflow-hidden border-2 border-indigo-400/70 shadow-[0_0_40px_rgba(99,102,241,0.4)]"
-              style={{width:200,height:200}}>
+              style={{width:170,height:170}}>
               {myAvatarCompose?.avatarUrl
-                ? <AvatarComposer avatarUrl={myAvatarCompose.avatarUrl} backgroundUrl={myAvatarCompose.backgroundUrl} borderUrl={myAvatarCompose.borderUrl} size="md" animate={false} isFloating={false} className="w-[200px] h-[200px]"/>
-                : <div className="w-[200px] h-[200px] overflow-hidden bg-gradient-to-br from-indigo-400 to-purple-600"><img src={myAvatarUrl} className="w-full h-full object-cover" onError={e=>{(e.target as any).src='/avatars/default-impacto.png'}}/></div>}
+                ? <AvatarComposer avatarUrl={myAvatarCompose.avatarUrl} backgroundUrl={myAvatarCompose.backgroundUrl} borderUrl={myAvatarCompose.borderUrl} size="md" animate={false} isFloating={false} className="w-[170px] h-[170px]"/>
+                : <div className="w-[170px] h-[170px] overflow-hidden bg-gradient-to-br from-indigo-400 to-purple-600"><img src={myAvatarUrl} className="w-full h-full object-cover" onError={e=>{(e.target as any).src='/avatars/default-impacto.png'}}/></div>}
             </motion.div>
             <motion.div initial={{opacity:0,y:12}} animate={{opacity:1,y:0}} transition={{delay:0.55}} className="text-center">
               <div className="text-[13px] font-black text-indigo-400 uppercase tracking-widest mb-1">Você</div>
@@ -859,10 +877,10 @@ const MAX_POWERS_PER_DUEL = 3; // Maximum power activations per duel
             <motion.div
               animate={{y:[0,-10,0]}} transition={{duration:2.2,repeat:Infinity,ease:'easeInOut',delay:1.1}}
               className="rounded-[2.5rem] overflow-hidden border-2 border-red-400/70 shadow-[0_0_40px_rgba(239,68,68,0.4)]"
-              style={{width:200,height:200}}>
+              style={{width:170,height:170}}>
               {oppAvatarCompose?.avatarUrl
-                ? <AvatarComposer avatarUrl={oppAvatarCompose.avatarUrl} backgroundUrl={oppAvatarCompose.backgroundUrl} borderUrl={oppAvatarCompose.borderUrl} size="md" animate={false} isFloating={false} className="w-[200px] h-[200px]"/>
-                : <div className="w-[200px] h-[200px] overflow-hidden bg-gradient-to-br from-red-400 to-orange-500"><img src={opponentAvatarUrl} className="w-full h-full object-cover" onError={e=>{(e.target as any).src='/avatars/default-impacto.png'}}/></div>}
+                ? <AvatarComposer avatarUrl={oppAvatarCompose.avatarUrl} backgroundUrl={oppAvatarCompose.backgroundUrl} borderUrl={oppAvatarCompose.borderUrl} size="md" animate={false} isFloating={false} className="w-[170px] h-[170px]"/>
+                : <div className="w-[170px] h-[170px] overflow-hidden bg-gradient-to-br from-red-400 to-orange-500"><img src={opponentAvatarUrl} className="w-full h-full object-cover" onError={e=>{(e.target as any).src='/avatars/default-impacto.png'}}/></div>}
             </motion.div>
             <motion.div initial={{opacity:0,y:12}} animate={{opacity:1,y:0}} transition={{delay:0.55}} className="text-center">
               <div className="text-[13px] font-black text-red-400 uppercase tracking-widest mb-1">Rival</div>
@@ -1161,7 +1179,6 @@ const MAX_POWERS_PER_DUEL = 3; // Maximum power activations per duel
           )}
             style={{
               background:'linear-gradient(145deg,rgba(15,23,42,0.98) 0%,rgba(17,24,60,0.98) 100%)',
-              backdropFilter:'blur(16px)',
               ...(shieldActive ? {boxShadow:'0 0 0 2px rgba(34,211,238,0.15),0 0 50px rgba(34,211,238,0.12)'} : {})
             }}>
           {/* Shield outer pulse ring */}
@@ -1329,8 +1346,7 @@ const MAX_POWERS_PER_DUEL = 3; // Maximum power activations per duel
               )}
             </div>
 
-            {/* Power panel modal — compact 3-col */}
-            {/* ⚡ PREMIUM Power Arsenal */}
+            {/* ⚡ POWER PANEL — rendered outside overflow:hidden card via AnimatePresence fixed */}
             <AnimatePresence>
               {showPowerPanel&&(
                 <motion.div key="powerpanel" initial={{opacity:0}} animate={{opacity:1}} exit={{opacity:0}}
@@ -1443,6 +1459,7 @@ const MAX_POWERS_PER_DUEL = 3; // Maximum power activations per duel
               )}
             </AnimatePresence>
 
+
             {/* �"?�"? Bottom actions �"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"? */}
             <div className="px-5 pb-5 space-y-2.5">
               {/* Power button */}
@@ -1520,19 +1537,23 @@ const MAX_POWERS_PER_DUEL = 3; // Maximum power activations per duel
               ):null}
             </div>
 
-            {/* Answer Feedback Overlay */}
-            <AnswerFeedbackOverlay
-              feedback={duelFeedback?.type??null}
-              correctAnswerText={duelFeedback?.correctText}
-              explanation={duelFeedback?.explanation}
-              points={duelFeedback?.pointsEarned}
-              manualAdvance
-              nextLabel={currentQuestionIndex>=questions.length-1?'Ver Resultado':'Próxima Pergunta'}
-              onDismiss={()=>{ setDuelFeedback(null); pendingDuelNext.current=null; if(currentQuestionIndex < questions.length - 1) handleNext(); }}
-            />
+            {/* Answer Feedback Overlay — MUST be OUTSIDE overflow:hidden card */}
+            {/* Moving it here (still inside question-card div) causes iOS clipping */}
           </div>
         </motion.div>
       </AnimatePresence>
+
+      {/* AnswerFeedbackOverlay rendered at PLAYING container level (outside any overflow:hidden) */}
+      <AnswerFeedbackOverlay
+        feedback={duelFeedback?.type??null}
+        correctAnswerText={duelFeedback?.correctText}
+        explanation={duelFeedback?.explanation}
+        points={duelFeedback?.pointsEarned}
+        manualAdvance
+        nextLabel={currentQuestionIndex>=questions.length-1?'Ver Resultado':'Próxima Pergunta'}
+        onDismiss={()=>{ setDuelFeedback(null); pendingDuelNext.current=null; if(currentQuestionIndex < questions.length - 1) handleNext(); }}
+      />
+
 
       {/* ============================================================ */}
       {/* Queima de Energia Modal */}

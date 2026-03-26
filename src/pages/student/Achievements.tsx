@@ -22,6 +22,9 @@ interface ExtraCounts {
   diaryAiEntries: number;
   duelCompleted: number;
   duelWins: number;
+  duelSoloCompleted: number;
+  duelChallengeCompleted: number;
+  duelRealtimeCompleted: number;
   daysRegistered: number;
 }
 
@@ -56,8 +59,11 @@ function getCurrentValue(criteria: string, stats: GamificationStats, extra: Extr
     case 'diary_entries':     return extra.diaryEntries;
     case 'diary_ai_entry':    return extra.diaryAiEntries > 0 ? 1 : 0;
     case 'diary_tags':        return extra.diaryEntries;
-    case 'duel_completed':    return extra.duelCompleted;
-    case 'duel_wins':         return extra.duelWins;
+    case 'duel_completed':          return extra.duelCompleted;
+    case 'duel_wins':                return extra.duelWins;
+    case 'duel_solo_completed':      return extra.duelSoloCompleted;
+    case 'duel_challenge_completed': return extra.duelChallengeCompleted;
+    case 'duel_realtime_completed':  return extra.duelRealtimeCompleted;
     case 'all_achievements':  return totalUnlocked;
     case 'coins_spent':       return Math.max(0, (stats.xp * 2) - stats.coins);
     default:                  return 0;
@@ -135,6 +141,29 @@ export const Achievements: React.FC = () => {
           .single(),
       ]);
 
+      // 3. Fetch duel sub-mode mission counts (2-step: get mission IDs → count completions)
+      const countForCriteria = async (criteria: string): Promise<number> => {
+        const { data: missionIds } = await supabase
+          .from('missions')
+          .select('id')
+          .eq('criteria', criteria);
+        if (!missionIds || missionIds.length === 0) return 0;
+        const ids = missionIds.map((m: any) => m.id);
+        const { count } = await supabase
+          .from('student_missions')
+          .select('id', { count: 'exact', head: true })
+          .eq('studentId', user.id)
+          .in('missionId', ids)
+          .not('completedAt', 'is', null);
+        return count ?? 0;
+      };
+
+      const [duelSoloCount, duelChalCount, duelRtCount] = await Promise.all([
+        countForCriteria('duel_solo_completed'),
+        countForCriteria('duel_challenge_completed'),
+        countForCriteria('duel_realtime_completed'),
+      ]);
+
       const defs = (defsRes.data || []) as AchDef[];
       setAllDefs(defs);
 
@@ -162,6 +191,9 @@ export const Achievements: React.FC = () => {
         diaryAiEntries: diaryAiR?.count ?? 0,
         duelCompleted: duelCR?.count ?? 0,
         duelWins: duelWR?.count ?? 0,
+        duelSoloCompleted: duelSoloCount,
+        duelChallengeCompleted: duelChalCount,
+        duelRealtimeCompleted: duelRtCount,
         daysRegistered: userCreatedAt
           ? Math.floor((Date.now() - new Date(userCreatedAt).getTime()) / 86400000)
           : 0,

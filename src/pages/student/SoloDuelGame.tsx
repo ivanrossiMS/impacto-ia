@@ -1,20 +1,22 @@
-import React, { useState, useRef, useEffect } from 'react';
+﻿import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuthStore } from '../../store/auth.store';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   Zap, Timer, CheckCircle2, XCircle, ArrowLeft, Star,
   BrainCircuit, Shuffle, BookMarked, Globe, Atom, Palette,
-  Dumbbell, User, Brain, Shield, Swords, Gamepad2, Tv,
-  Trophy, Target,
+  Dumbbell, User, Brain, Shield, Swords, Gamepad2, Tv, Target, Flame
 } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
 import { DuelService } from '../../services/duel.service';
-import type { DuelTheme, DuelDifficulty, DuelQuestion } from '../../types/duel';
-import { calcDuelRewards } from '../../lib/duelRewards';
+import type { DuelTheme, DuelDifficulty, DuelQuestion, DuelAnswerData, DuelPowerType } from '../../types/duel';
 import { toast } from 'sonner';
 import { incrementMissionProgress } from '../../lib/missionUtils';
 import { AnswerFeedbackOverlay, type FeedbackType } from '../../components/ui/AnswerFeedbackOverlay';
+import { AvatarComposer } from '../../features/avatar/components/AvatarComposer';
+import { cn } from '../../lib/utils';
+import { TIME_PER_QUESTION, MAX_ENERGY, calcQuestionScore, calcTotalDetailed } from '../../lib/duelScoring';
+import { callGenerateDuel } from '../../ai/client';
 
 type Phase = 'setup' | 'loading' | 'game' | 'result';
 
@@ -31,15 +33,30 @@ const THEMES: { id: DuelTheme; label: string; Icon: any; color: string; bg: stri
 ];
 
 const DIFFS: { id: DuelDifficulty; label: string; Icon: any; desc: string; xp: string; color: string; bg: string; border: string; glow: string }[] = [
-  { id: 'easy',   label: 'Iniciante', Icon: Shield, desc: 'Questões adaptadas ao nível básico.',        xp: '+60 XP',  color: '#4ade80', bg: 'rgba(74,222,128,0.1)',  border: 'rgba(74,222,128,0.35)',  glow: 'rgba(74,222,128,0.25)'  },
-  { id: 'medium', label: 'Médio',     Icon: Zap,    desc: 'Balanço entre desafio e aprendizado.',       xp: '+75 XP',  color: '#fbbf24', bg: 'rgba(251,191,36,0.1)',  border: 'rgba(251,191,36,0.35)',  glow: 'rgba(251,191,36,0.25)'  },
-  { id: 'hard',   label: 'Mestre',    Icon: Swords, desc: 'Para os mais corajosos. Alto desafio.',      xp: '+100 XP', color: '#f87171', bg: 'rgba(248,113,113,0.1)', border: 'rgba(248,113,113,0.35)', glow: 'rgba(248,113,113,0.25)' },
+  { id: 'easy',   label: 'Iniciante', Icon: Shield, desc: 'Questões adaptadas.', xp: '+60 XP',  color: '#4ade80', bg: 'rgba(74,222,128,0.1)',  border: 'rgba(74,222,128,0.35)',  glow: 'rgba(74,222,128,0.25)'  },
+  { id: 'medium', label: 'Médio',     Icon: Zap,    desc: 'Balanço ideal.',       xp: '+75 XP',  color: '#fbbf24', bg: 'rgba(251,191,36,0.1)',  border: 'rgba(251,191,36,0.35)',  glow: 'rgba(251,191,36,0.25)'  },
+  { id: 'hard',   label: 'Mestre',    Icon: Swords, desc: 'Alto desafio.',        xp: '+100 XP', color: '#f87171', bg: 'rgba(248,113,113,0.1)', border: 'rgba(248,113,113,0.35)', glow: 'rgba(248,113,113,0.25)' },
 ];
 
 const LETTERS = ['A', 'B', 'C', 'D'];
-const TIME_PER_Q = 30;
 const CARD = { background: 'linear-gradient(160deg,#080e24 0%,#0b1230 100%)', border: '1px solid rgba(255,255,255,0.07)' };
-const LABEL = { color: 'rgba(255,255,255,0.25)', fontSize: 10, fontWeight: 900 as const, letterSpacing: '0.18em', textTransform: 'uppercase' as const };
+
+type PowerCat = 'defense' | 'control' | 'strategy' | 'boost';
+
+const POWERS_INFO: Record<string, {
+  emoji: string; label: string; desc: string; color: string; bg: string; border: string; glow: string; cat: PowerCat; cost: number;
+}> = {
+  shield:         { emoji:'🛡️', label:'Escudo',          desc:'Bloqueia 1 erro',          color:'text-cyan-300',    bg:'from-cyan-950 to-blue-950',        border:'border-cyan-500/50',    glow:'rgba(34,211,238,0.45)',   cat:'defense',  cost:1 },
+  dica:           { emoji:'💡', label:'Dica',             desc:'Revela uma dica',            color:'text-amber-300',   bg:'from-amber-950 to-yellow-950',     border:'border-amber-500/50',   glow:'rgba(251,191,36,0.45)',   cat:'strategy', cost:2 },
+  freeze:         { emoji:'❄️', label:'Congelar',         desc:'+10s no cronômetro',        color:'text-blue-200',    bg:'from-blue-950 to-indigo-950',      border:'border-blue-400/50',    glow:'rgba(96,165,250,0.45)',   cat:'control',  cost:2 },
+  turbo:          { emoji:'⚡', label:'Turbo',             desc:'Próximos 3: 2x energia',    color:'text-yellow-300',  bg:'from-yellow-950 to-amber-950',     border:'border-yellow-500/50',  glow:'rgba(234,179,8,0.45)',    cat:'boost',    cost:1 },
+  swap:           { emoji:'🔄', label:'Trocar Questão',   desc:'Nova pergunta com IA',      color:'text-teal-300',    bg:'from-teal-950 to-emerald-950',     border:'border-teal-500/50',    glow:'rgba(20,184,166,0.45)',   cat:'strategy', cost:3 },
+  eliminate:      { emoji:'✂️', label:'Eliminar',         desc:'Remove 2 opções erradas',   color:'text-purple-300',  bg:'from-purple-950 to-fuchsia-950',   border:'border-purple-500/50',  glow:'rgba(168,85,247,0.45)',  cat:'strategy', cost:4 },
+  segunda_chance: { emoji:'⏳', label:'Segunda Chance',   desc:'Tente de novo se errar',    color:'text-orange-300',  bg:'from-orange-950 to-red-950',       border:'border-orange-500/50',  glow:'rgba(251,146,60,0.45)',   cat:'defense',  cost:3 },
+  queima:         { emoji:'🔥', label:'Supernova',        desc:'+20% pts próx. questão',    color:'text-yellow-300',  bg:'from-yellow-950 to-orange-950',  border:'border-yellow-500/60',  glow:'rgba(251,191,36,0.55)',   cat:'boost',    cost:1 },
+};
+
+const ALL_POWERS = ['shield','dica','freeze','turbo','swap','eliminate','segunda_chance','queima'] as const;
 
 function shuffleArr<T>(arr: T[]): T[] {
   const a = [...arr];
@@ -50,120 +67,320 @@ function shuffleArr<T>(arr: T[]): T[] {
   return a;
 }
 
-function stars(accuracy: number) {
-  if (accuracy >= 1)   return 5;
-  if (accuracy >= 0.8) return 4;
-  if (accuracy >= 0.6) return 3;
-  if (accuracy >= 0.4) return 2;
-  return 1;
-}
+const CountUp: React.FC<{to:number;delay?:number;suffix?:string}> = ({to,delay=0,suffix=''}) => {
+  const [val,setVal] = useState(0);
+  useEffect(()=>{
+    if(!to){setVal(0);return;}
+    const t=setTimeout(()=>{
+      const steps=28;let i=0;
+      const timer=setInterval(()=>{
+        i++; setVal(Math.round(to*i/steps));
+        if(i>=steps){clearInterval(timer);setVal(to);}
+      },1000/steps);
+      return ()=>clearInterval(timer);
+    },delay*1000);
+    return ()=>clearTimeout(t);
+  },[to,delay]);
+  return <>{val}{suffix}</>;
+};
 
 export const SoloDuelGame: React.FC = () => {
   const navigate = useNavigate();
   const user = useAuthStore(s => s.user);
-  const [phase, setPhase] = useState<Phase>('setup');
 
+  const [phase, setPhase] = useState<Phase>('setup');
   const [theme, setTheme] = useState<DuelTheme>('aleatorio');
   const [diff, setDiff]   = useState<DuelDifficulty>('medium');
-  const count = 10;
-  const [userGrade, setUserGrade] = useState('');
-
-  const [duelId, setDuelId]       = useState('');
+  const count = 8;
+  
+  // Profile
+  const [myAvatarUrl, setMyAvatarUrl] = useState('/avatars/default-impacto.png');
+  const [myAvatarCompose, setMyAvatarCompose] = useState<{avatarUrl:string;backgroundUrl?:string;borderUrl?:string}|null>(null);
+  const [myLevel, setMyLevel] = useState<number>(1);
+  const [myGrade, setMyGrade] = useState<string>('');
+  
+  // Game state
+  const [duelId, setDuelId] = useState('');
   const [questions, setQuestions] = useState<DuelQuestion[]>([]);
-  const [optMap, setOptMap]       = useState<Record<string, any[]>>({});
-  const [qIdx, setQIdx]           = useState(0);
-  const [chosen, setChosen]       = useState<string | null>(null);
-  const [answered, setAnswered]   = useState(false);
-  const [timedOut, setTimedOut]   = useState(false);
-  const [timeLeft, setTimeLeft]   = useState(TIME_PER_Q);
-  const [results, setResults]     = useState<{ questionId: string; selectedOptionId: string }[]>([]);
+  const [optMap, setOptMap] = useState<Record<string, any[]>>({});
+  const [qIdx, setQIdx] = useState(0);
+  const [chosen, setChosen] = useState<string | null>(null);
+  const [answered, setAnswered] = useState(false);
+  const [_timedOut, setTimedOut] = useState(false);
+  const [timeLeft, setTimeLeft] = useState(TIME_PER_QUESTION);
+  
+  const [answerData, setAnswerData] = useState<DuelAnswerData[]>([]);
+  const [currentStreak, setCurrentStreak] = useState(0);
+  const [maxStreak, setMaxStreak] = useState(0);
   const [submitting, setSubmitting] = useState(false);
+  const [xpEarned, setXp] = useState(0);
+  const [coins, setCoins] = useState(0);
 
-  const [soloFeedback, setSoloFeedback] = useState<{ type: FeedbackType; correctText?: string; explanation?: string } | null>(null);
+  const [soloFeedback, setSoloFeedback] = useState<{ type: FeedbackType; correctText?: string; pointsEarned?: number; explanation?: string } | null>(null);
   const pendingSoloNext = useRef<(() => void) | null>(null);
-
-  const [xpEarned, setXp]       = useState(0);
-  const [coins, setCoins]       = useState(0);
-  const [finalScore, setFScore] = useState(0);
-
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const freezeTimerRef = useRef<ReturnType<typeof setTimeout>|null>(null);
+
+  // Powers
+  const MAX_POWERS_PER_DUEL = 3;
+  const [energy, setEnergy] = useState(0); 
+  const [usedPowers, setUsedPowers] = useState<DuelPowerType[]>([]);
+  const [activePowerPerQ, setActivePowerPerQ] = useState<DuelPowerType|null>(null);
+  const [shieldActive, setShieldActive] = useState(false);
+  const [freezeActive, setFreezeActive] = useState(false);
+  const [turboRemaining, setTurboRemaining] = useState(0);
+  const [eliminatedOptionIds, setEliminatedOptionIds] = useState<string[]>([]);
+  const [secondChanceAvailable, setSecondChanceAvailable] = useState(false);
+  const [showHint, setShowHint] = useState(false);
+  const [reserveQuestion, setReserveQuestion] = useState<DuelQuestion|null>(null);
+  const [swappedQuestions, setSwappedQuestions] = useState<Record<number,DuelQuestion>>({});
+  const [_generatingSwap, setGeneratingSwap] = useState(false);
+  const [_showPowerFlash, setShowPowerFlash] = useState<DuelPowerType|null>(null);
+  const [showBonusFlash, setShowBonusFlash] = useState<string|null>(null);
+  const [powerActivationAnim, setPowerActivationAnim] = useState<DuelPowerType|null>(null);
+  const [energyBurnBonus, setEnergyBurnBonus] = useState(0);
+  const [energyBurnTargetQuestion, setEnergyBurnTargetQuestion] = useState(-1);
+  const [powerModal, setPowerModal] = useState<DuelPowerType|null>(null);
+
   const clearT = () => { if (timerRef.current) clearInterval(timerRef.current); };
 
+  // Profile Data Fetch
   useEffect(() => {
     if (!user) return;
+    if (user.avatar) setMyAvatarUrl(user.avatar);
+    supabase.from('gamification_stats').select('level').eq('id', user.id).maybeSingle()
+      .then(({ data }) => { if (data?.level) setMyLevel(data.level); });
     const classId = (user as any).classId;
     if (classId) {
       supabase.from('classes').select('grade').eq('id', classId).maybeSingle()
-        .then(({ data }) => { if (data?.grade) setUserGrade(data.grade); });
+        .then(({ data }) => { if (data?.grade) setMyGrade(data.grade); });
     }
+    const buildAvatar = async () => {
+      const { data: prof } = await supabase.from('student_avatar_profiles').select('*').eq('studentId', user.id).maybeSingle();
+      if (!prof?.selectedAvatarId) return;
+      const ids = [prof.selectedAvatarId, prof.selectedBackgroundId, prof.selectedBorderId].filter(Boolean) as string[];
+      const { data: items } = await supabase.from('avatar_catalog').select('id,assetUrl,imageUrl').in('id', ids);
+      const map: Record<string,any> = {};
+      (items||[]).forEach((i:any) => { map[i.id]=i; });
+      const av = map[prof.selectedAvatarId];
+      if (av) {
+        setMyAvatarCompose({
+          avatarUrl: av.assetUrl||av.imageUrl||'',
+          backgroundUrl: map[prof.selectedBackgroundId]?.assetUrl||map[prof.selectedBackgroundId]?.imageUrl,
+          borderUrl: map[prof.selectedBorderId]?.assetUrl||map[prof.selectedBorderId]?.imageUrl
+        });
+      }
+    };
+    buildAvatar();
   }, [user?.id]);
 
-  useEffect(() => {
-    if (phase !== 'game' || answered) { clearT(); return; }
-    setTimeLeft(TIME_PER_Q);
+  // Timer Handlers
+  const handleTimeout = useCallback(() => {
+    if (answered) return;
     clearT();
-    timerRef.current = setInterval(() => setTimeLeft(p => p > 1 ? p - 1 : 0), 1000);
-    return clearT;
-  }, [qIdx, phase, answered]);
+    const q = questions[qIdx];
+    if (!q) return;
+    const entry: DuelAnswerData = {
+      questionId: q.id, selectedOptionId: 'timeout_skip', isCorrect: false,
+      timeUsed: TIME_PER_QUESTION, timeMax: TIME_PER_QUESTION, pointsEarned: 0,
+      speedBonus: 0, streakBonus: 0, comboMultiplier: 1, streakAtAnswer: currentStreak,
+    };
+    setAnswerData(p => [...p, entry]);
+    if (shieldActive) setShieldActive(false);
+    setCurrentStreak(0); setTimedOut(true); setAnswered(true);
+    const correctOptOnTimeout = q.options.find((o: any) => o.isCorrect);
+    setSoloFeedback({ type: 'timeout', correctText: correctOptOnTimeout?.text, explanation: q.explanation });
+    pendingSoloNext.current = () => handleNext();
+  }, [answered, questions, qIdx, currentStreak, shieldActive]);
 
   useEffect(() => {
-    if (phase === 'game' && timeLeft === 0 && !answered) {
-      const q = questions[qIdx];
-      if (!q) return;
-      setResults(p => [...p, { questionId: q.id, selectedOptionId: 'timeout_skip' }]);
-      setTimedOut(true);
-      setAnswered(true);
-      setSoloFeedback({ type: 'timeout' });
-      pendingSoloNext.current = () => handleNext();
-    }
-  }, [timeLeft, phase, answered, questions, qIdx]);
+    if (phase !== 'game' || answered || freezeActive) return;
+    clearT();
+    timerRef.current = setInterval(() => {
+      setTimeLeft(p => {
+        if (p <= 1) { handleTimeout(); return 0; }
+        return p - 1;
+      });
+    }, 1000);
+    return clearT;
+  }, [qIdx, phase, answered, freezeActive, handleTimeout]);
 
+  // Starts Duel
   const handleStart = async () => {
     if (!user) return;
     setPhase('loading');
     try {
-      const duel = await DuelService.createSoloDuel(user.id, theme, diff, count, userGrade);
+      const duel = await DuelService.createSoloDuel(user.id, theme, diff, count, myGrade);
       const { data } = await supabase.from('duel_questions').select('*').eq('duelId', duel.id);
       const qs: DuelQuestion[] = data || [];
       const map: Record<string, any[]> = {};
-      qs.forEach(q => { map[q.id] = shuffleArr(q.options); });
-      setDuelId(duel.id); setQuestions(qs); setOptMap(map);
-      setQIdx(0); setResults([]); setChosen(null); setAnswered(false); setTimedOut(false);
+      qs.slice(0, count).forEach(q => { map[q.id] = shuffleArr(q.options); });
+      setDuelId(duel.id); 
+      setQuestions(qs.slice(0, count)); 
+      if (qs.length > count) setReserveQuestion(qs[count]);
+      setOptMap(map);
+      setQIdx(0); setAnswerData([]); setChosen(null); setAnswered(false); setTimedOut(false);
+      setEnergy(0); setUsedPowers([]); setShieldActive(false); setTurboRemaining(0);
       setPhase('game');
     } catch (e) {
-      console.error(e);
       toast.error('Erro ao gerar questões. Tente novamente.');
       setPhase('setup');
     }
   };
 
+  // Powers Logic
+  const canActivatePower = (p: DuelPowerType) => !usedPowers.includes(p) && usedPowers.length < MAX_POWERS_PER_DUEL && energy >= POWERS_INFO[p].cost && !answered && timeLeft > 2 && !activePowerPerQ;
+
+  const handleActivatePower = async (chosen: DuelPowerType) => {
+    if (!canActivatePower(chosen)) return;
+    const cost = POWERS_INFO[chosen].cost;
+    setEnergy(e => e - cost);
+    setUsedPowers(prev => [...prev, chosen]);
+    setActivePowerPerQ(chosen);
+    setPowerActivationAnim(chosen);
+    setTimeout(() => setPowerActivationAnim(null), 1800);
+    setShowPowerFlash(chosen);
+    setTimeout(() => setShowPowerFlash(null), 1200);
+
+    if (chosen === 'shield') setShieldActive(true);
+    else if (chosen === 'freeze') {
+      setFreezeActive(true);
+      clearT();
+      freezeTimerRef.current = setTimeout(() => {
+        setFreezeActive(false);
+        setTimeLeft(t => Math.min(TIME_PER_QUESTION, t + 10));
+      }, 10000);
+    } else if (chosen === 'eliminate') {
+      const currentQ = swappedQuestions[qIdx] ?? questions[qIdx];
+      const availableOpts = (optMap[currentQ?.id]||[]).filter((o:any) => !eliminatedOptionIds.includes(o.id));
+      const wrongAvail = availableOpts.filter((o:any) => !o.isCorrect);
+      if (wrongAvail.length < 2) {
+        setEnergy(e => Math.min(MAX_ENERGY, e + cost));
+        setUsedPowers(prev => prev.filter(p => p !== chosen));
+        setActivePowerPerQ(null);
+        toast.error('Alternativas insuficientes. Energia devolvida.');
+        return;
+      }
+      setEliminatedOptionIds(wrongAvail.slice(0,2).map((o:any)=>o.id));
+    } else if (chosen === 'swap') {
+      const applySwap = (newQ: DuelQuestion) => {
+        setSwappedQuestions(prev => ({ ...prev, [qIdx]: newQ }));
+        if (!optMap[newQ.id]) setOptMap(prev => ({ ...prev, [newQ.id]: shuffleArr(newQ.options) }));
+        setReserveQuestion(null); setChosen(null); setEliminatedOptionIds([]);
+        setTimeLeft(TIME_PER_QUESTION);
+      };
+      if (reserveQuestion) applySwap(reserveQuestion);
+      else {
+        setGeneratingSwap(true);
+        clearT();
+        try {
+          const data = await callGenerateDuel({ theme, difficulty: diff, count: 1, grade: myGrade });
+          const raw = data.questions?.[0];
+          if (!raw) throw new Error('empty');
+          applySwap({ id: window.crypto.randomUUID(), duelId, questionText: raw.questionText, options: raw.options||[], explanation: raw.explanation||'' });
+          toast.success('Nova questão gerada! 🔄');
+        } catch {
+          setEnergy(e => Math.min(MAX_ENERGY, e + cost));
+          setUsedPowers(prev => prev.filter(p => p !== 'swap'));
+          setActivePowerPerQ(null);
+          toast.error('Falha ao gerar questão. Energia devolvida.');
+        } finally {
+          setGeneratingSwap(false);
+        }
+      }
+    } else if (chosen === 'turbo') setTurboRemaining(3);
+    else if (chosen === 'segunda_chance') setSecondChanceAvailable(true);
+    else if (chosen === 'dica') setShowHint(true);
+    else if (chosen === 'queima') {
+      // In solo, we simplify queima: costs 1 energy, gives +20% next turn.
+      setEnergyBurnBonus(20);
+      setEnergyBurnTargetQuestion(qIdx + 1);
+      setShowBonusFlash(`🔥 +20% na próxima questão!`);
+      setTimeout(() => setShowBonusFlash(null), 2000);
+      toast.success(`🔥 Queima ativa! +20% na próxima questão`);
+    }
+  };
+
   const handleConfirm = () => {
-    if (!chosen || !questions[qIdx]) return;
-    clearT();
-    const q = questions[qIdx];
-    setResults(p => [...p, { questionId: q.id, selectedOptionId: chosen }]);
-    setAnswered(true);
-    const ok = q.options.find(o => o.id === chosen)?.isCorrect;
-    const correctOpt = q.options.find((o: any) => o.isCorrect);
+    if (freezeActive) return;
+    const currentQ = swappedQuestions[qIdx] ?? questions[qIdx];
+    if (!chosen || !currentQ) return;
+    clearT(); setAnswered(true);
+    if (freezeTimerRef.current) { clearTimeout(freezeTimerRef.current); setFreezeActive(false); }
+    
+    const rawCorrect = currentQ.options.find((o:any) => o.id === chosen)?.isCorrect ?? false;
+    const correctOpt = currentQ.options.find((o: any) => o.isCorrect);
+    const shieldAbsorbed = !rawCorrect && shieldActive;
+    if (shieldAbsorbed) setShieldActive(false);
+
+    const timeUsed = Math.max(1, TIME_PER_QUESTION - timeLeft);
+    const scored = calcQuestionScore({ isCorrect: rawCorrect, timeUsed, streakBefore: currentStreak, shieldAbsorbed, wasSkipped: false });
+    
+    const newStreak = scored.newStreak;
+    setCurrentStreak(newStreak);
+    setMaxStreak(Math.max(maxStreak, newStreak));
+
+    let appliedBurnBonus = 0;
+    if (energyBurnBonus > 0 && qIdx === energyBurnTargetQuestion) {
+      appliedBurnBonus = energyBurnBonus;
+      setEnergyBurnBonus(0); setEnergyBurnTargetQuestion(-1);
+    }
+
+    if (rawCorrect || shieldAbsorbed) {
+      const eGain = turboRemaining > 0 ? 2 : 1;
+      setEnergy(e => Math.min(MAX_ENERGY, e + eGain));
+      if (turboRemaining > 0) {
+        setShowBonusFlash('+2 ⚡ TURBO!');
+        setTurboRemaining(r => r - 1);
+        setTimeout(() => setShowBonusFlash(null), 1400);
+      }
+    }
+
+    const entry: DuelAnswerData = {
+      questionId: currentQ.id, selectedOptionId: chosen, isCorrect: rawCorrect,
+      timeUsed, timeMax: TIME_PER_QUESTION,
+      pointsEarned: rawCorrect && appliedBurnBonus > 0 ? Math.round(scored.points * (1 + appliedBurnBonus/100)) : scored.points,
+      speedBonus: scored.speedBonus, streakBonus: scored.streakBonus,
+      comboMultiplier: scored.comboMultiplier, streakAtAnswer: currentStreak,
+      shieldActivated: shieldAbsorbed || undefined,
+      eliminatedOptionIds: eliminatedOptionIds.length > 0 ? eliminatedOptionIds : undefined,
+      powerUsed: activePowerPerQ ?? undefined, energyBurnBonus: appliedBurnBonus > 0 ? appliedBurnBonus : undefined,
+    };
+    setAnswerData(p => [...p, entry]);
+
+    if (!rawCorrect && !shieldAbsorbed && secondChanceAvailable) {
+      setSecondChanceAvailable(false); setAnswered(false); setChosen(null);
+      setShowBonusFlash('⏳ Segunda Chance! Tente novamente!');
+      setTimeout(() => setShowBonusFlash(null), 2200);
+      return;
+    }
+
     setSoloFeedback({
-      type: ok ? 'correct' : 'wrong',
-      correctText: !ok ? correctOpt?.text : undefined,
-      explanation: (q as any).explanation ?? undefined,
+      type: rawCorrect ? 'correct' : 'wrong',
+      correctText: !rawCorrect ? correctOpt?.text : undefined,
+      pointsEarned: entry.pointsEarned,
+      explanation: currentQ.explanation,
     });
     pendingSoloNext.current = () => handleNext();
   };
 
   const handleNext = async () => {
+    setEliminatedOptionIds([]); setActivePowerPerQ(null); setFreezeActive(false); setSecondChanceAvailable(false); setShowHint(false);
+    if (freezeTimerRef.current) clearTimeout(freezeTimerRef.current);
+    
     if (qIdx < questions.length - 1) {
-      setQIdx(p => p + 1);
-      setChosen(null); setAnswered(false); setTimedOut(false);
+      setQIdx(p => p + 1); setChosen(null); setAnswered(false); setTimedOut(false); setTimeLeft(TIME_PER_QUESTION);
     } else {
       if (!user || submitting) return;
       setSubmitting(true);
       try {
-        const { xpEarned: xp, coinsEarned: c, score: s } = await DuelService.submitSoloTurn(duelId, user.id, results);
-        setXp(xp); setCoins(c); setFScore(s);
+        const payload = answerData.map(a => ({ questionId: a.questionId, selectedOptionId: a.selectedOptionId }));
+        const { xpEarned: xp, coinsEarned: c } = await DuelService.submitSoloTurn(duelId, user.id, payload);
+        const totals = calcTotalDetailed(answerData);
+        setXp(xp + totals.correctCount * 5); // Add minor base reward
+        setCoins(c + totals.correctCount * 2);
         await incrementMissionProgress(user.id, 'duel_completed');
+        await incrementMissionProgress(user.id, 'duel_solo_completed');
         setPhase('result');
       } catch { toast.error('Erro ao salvar resultado.'); }
       finally { setSubmitting(false); }
@@ -171,323 +388,433 @@ export const SoloDuelGame: React.FC = () => {
   };
 
   const resetToSetup = () => {
-    setPhase('setup'); setResults([]); setQIdx(0); setChosen(null);
-    setAnswered(false); setTimedOut(false); setXp(0); setCoins(0); setFScore(0);
+    setPhase('setup'); setAnswerData([]); setQIdx(0); setChosen(null);
+    setAnswered(false); setTimedOut(false); setXp(0); setCoins(0); setEnergy(0);
+    setUsedPowers([]); setCurrentStreak(0); setMaxStreak(0);
   };
 
-  const rewards    = calcDuelRewards(diff, count);
-  const cq         = questions[qIdx];
-  const opts       = cq ? (optMap[cq.id] || cq.options) : [];
-  const timerPct   = (timeLeft / TIME_PER_Q) * 100;
-  const starCount  = stars(questions.length > 0 ? finalScore / questions.length : 0);
+  const cq = swappedQuestions[qIdx] ?? questions[qIdx];
+  const opts = cq ? (optMap[cq.id] || cq.options).filter((o:any)=>!eliminatedOptionIds.includes(o.id)) : [];
   const activeTheme = THEMES.find(t => t.id === theme)!;
 
+  const MyAvatar = ({ size = 100 }: { size?: number }) => myAvatarCompose?.avatarUrl
+    ? <AvatarComposer avatarUrl={myAvatarCompose.avatarUrl} backgroundUrl={myAvatarCompose.backgroundUrl} borderUrl={myAvatarCompose.borderUrl} size="md" animate={false} isFloating={false} className={`w-[${size}px] h-[${size}px]`}/>
+    : <div className={`w-[${size}px] h-[${size}px] rounded-2xl overflow-hidden bg-gradient-to-br from-indigo-400 to-purple-600`}><img src={myAvatarUrl} className="w-full h-full object-cover" onError={e=>{(e.target as any).src='/avatars/default-impacto.png'}} /></div>;
+
   return (
-    <div style={{ maxWidth: 640, margin: '0 auto', padding: '0 16px 96px' }}>
+    <div style={{ maxWidth: phase === 'game' ? 1100 : 800, margin: '0 auto', padding: phase === 'game' ? '0 8px 32px' : '0 16px 96px', position: 'relative' }}>
+      
+      {powerActivationAnim && (
+        <div className="fixed inset-0 z-50 pointer-events-none flex items-center justify-center bg-black/40 backdrop-blur-sm">
+          <motion.div initial={{ scale: 0.5, rotate: -20, opacity: 0 }} animate={{ scale: [1.2, 1], rotate: 0, opacity: 1 }} exit={{ scale: 0.8, opacity: 0 }}
+            className="flex flex-col items-center">
+            <span style={{ fontSize: 100, filter: `drop-shadow(0 0 30px ${POWERS_INFO[powerActivationAnim].glow})` }}>{POWERS_INFO[powerActivationAnim].emoji}</span>
+            <span className="text-4xl font-black mt-4 uppercase text-white tracking-widest" style={{ fontFamily: "'Rajdhani', sans-serif", textShadow: `0 0 20px ${POWERS_INFO[powerActivationAnim].glow}` }}>
+              {POWERS_INFO[powerActivationAnim].label} ATIVADO!
+            </span>
+          </motion.div>
+        </div>
+      )}
+
+      {showBonusFlash && (
+        <motion.div initial={{ y: 50, opacity: 0 }} animate={{ y: 0, opacity: 1 }} exit={{ opacity: 0 }}
+          className="fixed top-24 left-1/2 -translate-x-1/2 z-50 pointer-events-none px-6 py-3 rounded-full font-black text-xl text-white shadow-2xl tracking-widest"
+          style={{ background: 'linear-gradient(90deg, #f59e0b, #ef4444)', fontFamily: "'Rajdhani', sans-serif" }}>
+          {showBonusFlash}
+        </motion.div>
+      )}
+
       <AnimatePresence mode="wait">
-
-        {/* ─── SETUP ─── */}
+        {/* \u2500\u2500\u2500 SETUP \u2500\u2500\u2500 */}
         {phase === 'setup' && (
-          <motion.div key="setup" initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -16 }}
-            style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-
-            {/* Back */}
-            <button onClick={() => navigate('/student/duels')}
-              style={{ display: 'flex', alignItems: 'center', gap: 4, color: 'rgba(255,255,255,0.3)', fontSize: 11, fontWeight: 800, letterSpacing: '0.1em', background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}>
-              <ArrowLeft size={13} /> Voltar para Duelos
+          <motion.div key="setup" initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -16 }} className="flex flex-col gap-5">
+            <button onClick={() => navigate('/student/duels')} className="flex items-center gap-2 text-xs font-black text-white/40 uppercase tracking-widest hover:text-white transition-colors">
+              <ArrowLeft size={16} /> Voltar para Duelos
             </button>
-
-            {/* Hero card */}
-            <div style={{ ...CARD, borderRadius: 28, overflow: 'hidden', position: 'relative', padding: '28px 28px 24px' }}>
-              <div style={{ position: 'absolute', inset: 0, background: 'linear-gradient(135deg,#020617 0%,#0f0a2e 50%,#1a0533 100%)', pointerEvents: 'none' }} />
-              <div style={{ position: 'absolute', top: -50, left: -40, width: 180, height: 180, borderRadius: '50%', background: 'radial-gradient(circle,#6366f1,transparent)', filter: 'blur(60px)', opacity: 0.25, pointerEvents: 'none' }} />
-              <div style={{ position: 'absolute', bottom: -30, right: -30, width: 140, height: 140, borderRadius: '50%', background: 'radial-gradient(circle,#a855f7,transparent)', filter: 'blur(50px)', opacity: 0.2, pointerEvents: 'none' }} />
-              <div style={{ position: 'absolute', inset: 0, opacity: 0.04, backgroundImage: 'linear-gradient(rgba(99,102,241,1) 1px,transparent 1px),linear-gradient(90deg,rgba(99,102,241,1) 1px,transparent 1px)', backgroundSize: '28px 28px', pointerEvents: 'none' }} />
-              <div style={{ position: 'relative', zIndex: 1, display: 'flex', alignItems: 'center', gap: 20 }}>
-                <motion.div animate={{ rotate: [0, -6, 6, 0] }} transition={{ duration: 5, repeat: Infinity, repeatDelay: 2 }}
-                  style={{ width: 64, height: 64, borderRadius: 20, background: 'rgba(99,102,241,0.2)', border: '1.5px solid rgba(99,102,241,0.4)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-                  <Gamepad2 size={30} style={{ color: '#818cf8' }} />
-                </motion.div>
-                <div>
-                  <p style={{ ...LABEL, marginBottom: 4 }}>Modo Treinamento</p>
-                  <h1 style={{ fontFamily: "'Rajdhani',sans-serif", fontWeight: 900, fontSize: 30, color: '#fff', lineHeight: 1, marginBottom: 6 }}>
-                    Treino <span style={{ background: 'linear-gradient(90deg,#818cf8,#c084fc)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>Solo</span>
+            <div className="relative overflow-hidden rounded-[2rem] p-8 shadow-2xl" style={{ ...CARD }}>
+              <div className="absolute inset-0 bg-gradient-to-br from-[#0f172a] via-[#1e1b4b] to-[#2e1065] pointer-events-none" />
+              <div className="absolute -top-20 -left-20 w-64 h-64 rounded-full bg-indigo-500/20 blur-[80px] pointer-events-none" />
+              <div className="absolute -bottom-20 -right-20 w-64 h-64 rounded-full bg-purple-500/20 blur-[80px] pointer-events-none" />
+              
+              <div className="relative z-10 flex flex-col md:flex-row items-center gap-8">
+                <div className="flex-shrink-0 relative group flex flex-col items-center">
+                  <div className="w-[120px] h-[120px]"><MyAvatar size={120} /></div>
+                  <div className="mt-4 text-center">
+                    <div className="text-lg font-black text-white uppercase tracking-widest" style={{ fontFamily: "'Rajdhani', sans-serif" }}>{user?.name?.split(' ')[0] || 'Aluno'}</div>
+                    <div className="bg-indigo-500/20 border border-indigo-500/30 text-indigo-300 text-[10px] font-black px-3 py-1 rounded-full uppercase shadow-lg whitespace-nowrap mt-1">Nív. {myLevel} {myGrade ? `\u2022 ${myGrade}` : ''}</div>
+                  </div>
+                </div>
+                <div className="text-center md:text-left flex-1">
+                  <h1 className="text-4xl font-black text-white mb-2 uppercase" style={{ fontFamily: "'Rajdhani', sans-serif" }}>
+                    Modo <span className="text-transparent bg-clip-text bg-gradient-to-r from-indigo-400 to-purple-400">Treinamento</span>
                   </h1>
-                  <p style={{ color: 'rgba(255,255,255,0.35)', fontSize: 12, fontWeight: 600 }}>Pratique, aprenda e ganhe XP sem adversário!</p>
+                  <p className="text-white/50 text-sm font-bold">Teste seus conhecimentos, ative poderes e não perca pontos. Uma arena solo perfeita para dominar as matérias!</p>
                 </div>
               </div>
             </div>
 
-            {/* Theme selector */}
-            <div style={{ ...CARD, borderRadius: 24, padding: 16 }}>
-              <p style={{ ...LABEL, display: 'flex', alignItems: 'center', gap: 6, marginBottom: 12 }}>
-                <Star size={11} style={{ color: '#fbbf24' }} /> Tema do Treino
-              </p>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 8 }}>
-                {THEMES.map(t => {
-                  const active = theme === t.id;
-                  return (
-                    <motion.button key={t.id} whileTap={{ scale: 0.94 }} onClick={() => setTheme(t.id)}
-                      style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6, padding: '12px 8px', borderRadius: 16, cursor: 'pointer', border: `1.5px solid ${active ? t.color : 'rgba(255,255,255,0.07)'}`, background: active ? t.bg : 'rgba(255,255,255,0.03)', boxShadow: active ? `0 0 14px ${t.bg}` : 'none', transition: 'all 0.15s' }}>
-                      <t.Icon size={22} style={{ color: t.color, opacity: active ? 1 : 0.55, filter: active ? `drop-shadow(0 0 6px ${t.color})` : 'none' }} />
-                      <span style={{ fontSize: 10, fontWeight: 900, color: active ? t.color : 'rgba(255,255,255,0.55)', textAlign: 'center', lineHeight: 1.2 }}>{t.label}</span>
-                    </motion.button>
-                  );
-                })}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+              <div className="p-6 rounded-[2rem]" style={{ ...CARD }}>
+                <h3 className="text-xs font-black text-white/50 uppercase tracking-widest mb-4 flex items-center gap-2"><Star size={14} className="text-amber-400"/> Tema do Treino</h3>
+                <div className="grid grid-cols-3 gap-2">
+                  {THEMES.map(t => {
+                    const active = theme === t.id;
+                    return (
+                      <motion.button key={t.id} whileTap={{ scale: 0.94 }} onClick={() => setTheme(t.id)}
+                        className={cn("flex flex-col items-center gap-2 p-3 rounded-2xl border-2 transition-all", active ? `bg-[${t.bg}] shadow-[0_0_15px_${t.bg}]` : "bg-white/5 border-white/5 hover:bg-white/10")} style={{ borderColor: active ? t.color : 'transparent' }}>
+                        <t.Icon size={24} style={{ color: active ? t.color : 'rgba(255,255,255,0.4)', filter: active ? `drop-shadow(0 0 8px ${t.color})` : 'none' }} />
+                        <span className="text-[10px] font-black uppercase text-center" style={{ color: active ? t.color : 'rgba(255,255,255,0.4)' }}>{t.label}</span>
+                      </motion.button>
+                    )
+                  })}
+                </div>
+              </div>
+              <div className="p-6 rounded-[2rem]" style={{ ...CARD }}>
+                <h3 className="text-xs font-black text-white/50 uppercase tracking-widest mb-4 flex items-center gap-2"><Target size={14} className="text-red-400"/> Dificuldade</h3>
+                <div className="flex flex-col gap-3">
+                  {DIFFS.map(d => {
+                    const active = diff === d.id;
+                    return (
+                      <motion.button key={d.id} whileTap={{ scale: 0.97 }} onClick={() => setDiff(d.id)}
+                        className={cn("flex items-center gap-4 p-4 rounded-2xl border-2 transition-all text-left", active ? `bg-[${d.bg}] shadow-[0_0_15px_${d.glow}]` : "bg-white/5 border-white/5 hover:bg-white/10")} style={{ borderColor: active ? d.border : 'transparent' }}>
+                        <div className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0" style={{ background: active ? d.bg : 'rgba(255,255,255,0.05)' }}><d.Icon size={20} color={d.color} /></div>
+                        <div className="flex-1">
+                          <p className="font-black text-sm text-white uppercase" style={{ fontFamily: "'Rajdhani', sans-serif", color: active ? d.color : '#fff' }}>{d.label}</p>
+                          <p className="text-xs text-white/40 font-bold">{d.desc}</p>
+                        </div>
+                        {active && <CheckCircle2 size={20} color={d.color} />}
+                      </motion.button>
+                    );
+                  })}
+                </div>
               </div>
             </div>
 
-            {/* Difficulty */}
-            <div style={{ ...CARD, borderRadius: 24, padding: 16 }}>
-              <p style={{ ...LABEL, display: 'flex', alignItems: 'center', gap: 6, marginBottom: 12 }}>
-                <Target size={11} style={{ color: '#f87171' }} /> Dificuldade
-              </p>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                {DIFFS.map(d => {
-                  const active = diff === d.id;
-                  return (
-                    <motion.button key={d.id} whileTap={{ scale: 0.97 }} onClick={() => setDiff(d.id)}
-                      style={{ display: 'flex', alignItems: 'center', gap: 14, padding: '14px 16px', borderRadius: 18, cursor: 'pointer', border: `1.5px solid ${active ? d.border : 'rgba(255,255,255,0.07)'}`, background: active ? d.bg : 'rgba(255,255,255,0.03)', boxShadow: active ? `0 0 16px ${d.glow}` : 'none', transition: 'all 0.15s', textAlign: 'left' }}>
-                      <div style={{ width: 40, height: 40, borderRadius: 12, background: active ? d.bg : 'rgba(255,255,255,0.05)', border: `1px solid ${active ? d.border : 'rgba(255,255,255,0.08)'}`, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-                        <d.Icon size={18} style={{ color: d.color }} />
-                      </div>
-                      <div style={{ flex: 1 }}>
-                        <p style={{ fontWeight: 900, fontSize: 14, color: active ? d.color : '#fff', marginBottom: 2, fontFamily: "'Rajdhani',sans-serif" }}>{d.label}</p>
-                        <p style={{ fontSize: 11, color: 'rgba(255,255,255,0.35)', fontWeight: 600 }}>{d.desc}</p>
-                      </div>
-                      <span style={{ fontSize: 12, fontWeight: 900, color: d.color }}>{d.xp}</span>
-                      {active && <CheckCircle2 size={16} style={{ color: d.color, flexShrink: 0 }} />}
-                    </motion.button>
-                  );
-                })}
-              </div>
-            </div>
-
-            {/* Rewards bar */}
-            <div style={{ ...CARD, borderRadius: 20, padding: 14, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-              <span style={{ fontSize: 12, fontWeight: 700, color: 'rgba(255,255,255,0.4)' }}>Recompensa máxima</span>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
-                <span style={{ display: 'flex', alignItems: 'center', gap: 5, fontWeight: 900, fontSize: 13, color: '#fbbf24' }}>
-                  <Zap size={13} style={{ color: '#fbbf24' }} /> +{rewards.maxXP} XP
-                </span>
-                <span style={{ fontWeight: 900, fontSize: 13, color: '#f59e0b' }}>🪙 +{rewards.maxCoins}</span>
-              </div>
-            </div>
-
-            {/* Start button */}
-            <motion.button whileHover={{ scale: 1.02, boxShadow: '0 0 36px rgba(99,102,241,0.55)' }} whileTap={{ scale: 0.97 }} onClick={handleStart}
-              style={{ width: '100%', height: 56, borderRadius: 20, background: 'linear-gradient(135deg,#6366f1 0%,#7c3aed 50%,#a855f7 100%)', color: '#fff', fontFamily: "'Rajdhani',sans-serif", fontWeight: 900, fontSize: 18, letterSpacing: '0.08em', border: 'none', cursor: 'pointer', boxShadow: '0 0 24px rgba(99,102,241,0.45), 0 8px 24px rgba(0,0,0,0.4)', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10 }}>
-              <Gamepad2 size={20} /> JOGAR SOLO
+            <motion.button whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }} onClick={handleStart}
+              className="w-full py-5 rounded-2xl font-black text-xl text-white shadow-2xl flex items-center justify-center gap-3 uppercase tracking-widest mt-2"
+              style={{ background: 'linear-gradient(90deg, #6366f1, #a855f7)', fontFamily: "'Rajdhani', sans-serif" }}>
+              <Gamepad2 size={24} /> Iniciar Batalha Solo
             </motion.button>
           </motion.div>
         )}
 
-        {/* ─── LOADING ─── */}
+        {/* \u2500\u2500\u2500 LOADING \u2500\u2500\u2500 */}
         {phase === 'loading' && (
-          <motion.div key="loading" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-            style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '80px 0', gap: 32 }}>
-            <div style={{ position: 'relative', width: 112, height: 112 }}>
-              <div style={{ position: 'absolute', inset: 0, borderRadius: '50%', border: '3px solid rgba(99,102,241,0.15)' }} />
-              <div className="animate-spin" style={{ position: 'absolute', inset: 0, borderRadius: '50%', border: '3px solid transparent', borderTopColor: '#818cf8', borderRightColor: '#a855f7' }} />
-              <motion.div animate={{ scale: [1, 1.15, 1] }} transition={{ repeat: Infinity, duration: 1.2 }}
-                style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                <BrainCircuit size={40} style={{ color: '#818cf8' }} />
+          <motion.div key="loading" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="flex flex-col items-center justify-center py-24 gap-8">
+            <div className="relative w-32 h-32">
+              <div className="absolute inset-0 rounded-full border-4 border-indigo-500/20" />
+              <div className="absolute inset-0 rounded-full border-4 border-transparent border-t-indigo-400 border-r-purple-400 animate-spin" />
+              <motion.div animate={{ scale: [1, 1.2, 1] }} transition={{ repeat: Infinity, duration: 1.5 }} className="absolute inset-0 flex items-center justify-center">
+                <BrainCircuit size={48} className="text-indigo-400" />
               </motion.div>
             </div>
-            <div style={{ textAlign: 'center' }}>
-              <h2 style={{ fontFamily: "'Rajdhani',sans-serif", fontWeight: 900, fontSize: 22, color: '#fff', marginBottom: 8 }}>Gerando questões com IA</h2>
-              <motion.p animate={{ opacity: [0.5, 1, 0.5] }} transition={{ duration: 1.4, repeat: Infinity }}
-                style={{ color: '#818cf8', fontWeight: 700, fontSize: 13 }}>Preparando seu desafio solo...</motion.p>
-            </div>
-            <div style={{ display: 'flex', gap: 8 }}>
-              {[0, 1, 2].map(i => (
-                <motion.div key={i} animate={{ opacity: [0.3, 1, 0.3], scale: [0.8, 1, 0.8] }} transition={{ repeat: Infinity, duration: 1.2, delay: i * 0.3 }}
-                  style={{ width: 8, height: 8, borderRadius: '50%', background: '#818cf8' }} />
-              ))}
+            <div className="text-center">
+              <h2 className="text-3xl font-black text-white uppercase mb-2" style={{ fontFamily: "'Rajdhani', sans-serif" }}>Gerando Arena</h2>
+              <motion.p animate={{ opacity: [0.5, 1, 0.5] }} transition={{ duration: 1.5, repeat: Infinity }} className="text-indigo-400 font-bold tracking-widest text-sm uppercase">Preparando os desafios...</motion.p>
             </div>
           </motion.div>
         )}
 
-        {/* ─── GAME ─── */}
+        {/* \u2500\u2500\u2500 GAME \u2500\u2500\u2500 */}
+        {/* ─── GAME ─── Ultra-Premium ─── */}
         {phase === 'game' && cq && (
           <motion.div key="game" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-            style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            className="relative rounded-[2rem] overflow-hidden"
+            style={{ background: 'radial-gradient(ellipse 80% 60% at 60% 10%, #1a0a4a 0%, #050d1f 55%, #000510 100%)', minHeight: '90vh' }}>
 
-            {/* HUD bar */}
-            <div style={{ ...CARD, borderRadius: 20, padding: '12px 16px' }}>
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                  <BrainCircuit size={14} style={{ color: '#818cf8' }} />
-                  <span style={{ fontSize: 10, fontWeight: 900, color: 'rgba(255,255,255,0.4)', textTransform: 'uppercase', letterSpacing: '0.15em' }}>
-                    Solo · {activeTheme.label}
-                  </span>
-                </div>
-                <span style={{ fontSize: 11, fontWeight: 900, color: '#818cf8', background: 'rgba(99,102,241,0.15)', padding: '3px 10px', borderRadius: 10 }}>
-                  Q{qIdx + 1}/{questions.length}
-                </span>
-              </div>
-              {/* Progress */}
-              <div style={{ height: 4, background: 'rgba(255,255,255,0.08)', borderRadius: 4, overflow: 'hidden' }}>
-                <motion.div style={{ height: '100%', background: 'linear-gradient(90deg,#818cf8,#a855f7)', borderRadius: 4 }}
-                  animate={{ width: `${(qIdx / questions.length) * 100}%` }} transition={{ duration: 0.4 }} />
-              </div>
-            </div>
+            {/* Ambient orbs */}
+            <div className="absolute -top-24 -left-24 w-96 h-96 rounded-full opacity-20 blur-[130px] pointer-events-none" style={{ background: 'radial-gradient(circle, #6366f1, transparent)' }} />
+            <div className="absolute top-1/2 -right-24 w-72 h-72 rounded-full opacity-15 blur-[100px] pointer-events-none" style={{ background: 'radial-gradient(circle, #a855f7, transparent)' }} />
+            <div className="absolute -bottom-24 left-1/3 w-64 h-64 rounded-full opacity-10 blur-[80px] pointer-events-none" style={{ background: 'radial-gradient(circle, #3b82f6, transparent)' }} />
+            <div className="absolute inset-0 pointer-events-none opacity-[0.025]" style={{ backgroundImage: 'repeating-linear-gradient(0deg, rgba(255,255,255,0.5) 0px, transparent 1px, transparent 40px)', backgroundSize: '100% 40px' }} />
 
-            {/* Question card */}
-            <AnimatePresence mode="wait">
-              <motion.div key={qIdx} initial={{ opacity: 0, x: 40 }} animate={{ opacity: 1, x: 0 }}
-                exit={{ opacity: 0, x: -40 }} transition={{ duration: 0.22 }}
-                style={{ ...CARD, borderRadius: 24, overflow: 'hidden' }}>
+            <div className="relative z-10 flex flex-col lg:flex-row min-h-[90vh]">
 
-                {/* Timer bar */}
-                <div style={{ padding: '14px 20px 10px' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
-                    <Timer size={13} style={{ color: timeLeft > 15 ? '#4ade80' : timeLeft > 7 ? '#fbbf24' : '#f87171' }} />
-                    <span style={{ fontSize: 13, fontWeight: 900, color: timeLeft > 15 ? '#4ade80' : timeLeft > 7 ? '#fbbf24' : '#f87171', fontFamily: "'Rajdhani',sans-serif" }}>
-                      {String(timeLeft).padStart(2, '0')}s
-                    </span>
-                    {timeLeft <= 7 && !answered && (
-                      <motion.span animate={{ scale: [1, 1.2, 1] }} transition={{ repeat: Infinity, duration: 0.5 }}
-                        style={{ fontSize: 10, fontWeight: 900, color: '#f87171' }}>🚨 Corra!</motion.span>
-                    )}
+              {/* ══ LEFT SIDEBAR ══ */}
+              <div className="lg:w-[260px] flex-shrink-0 flex flex-col items-center py-8 px-5 border-b lg:border-b-0 lg:border-r border-white/[0.07]">
+                <button onClick={resetToSetup} className="self-start flex items-center gap-1.5 text-[10px] font-black text-white/30 uppercase tracking-widest hover:text-white/70 transition-colors mb-6">
+                  <ArrowLeft size={13} /> Sair
+                </button>
+
+                {/* Big Avatar */}
+                <div className="relative mb-4">
+                  <motion.div animate={{ rotate: 360 }} transition={{ duration: 8, repeat: Infinity, ease: 'linear' }}
+                    className="absolute -inset-[6px] rounded-full pointer-events-none"
+                    style={{ background: 'conic-gradient(from 0deg, #6366f1 0%, #a855f7 33%, #ec4899 66%, #6366f1 100%)', WebkitMask: 'radial-gradient(circle at center, transparent 64%, black 65%)' }} />
+                  <motion.div animate={{ opacity: [0.35, 0.7, 0.35] }} transition={{ duration: 2.5, repeat: Infinity }}
+                    className="absolute -inset-5 rounded-full blur-2xl opacity-40 pointer-events-none"
+                    style={{ background: 'radial-gradient(circle, #6366f1, transparent)' }} />
+                  <div className="relative w-[160px] h-[160px] rounded-full overflow-hidden border-2 border-indigo-500/40 shadow-2xl">
+                    <MyAvatar size={160} />
                   </div>
-                  <div style={{ height: 4, background: 'rgba(255,255,255,0.08)', borderRadius: 4, overflow: 'hidden' }}>
-                    <motion.div
-                      style={{ height: '100%', background: timeLeft > 15 ? 'linear-gradient(90deg,#4ade80,#22d3ee)' : timeLeft > 7 ? 'linear-gradient(90deg,#fbbf24,#f59e0b)' : 'linear-gradient(90deg,#f87171,#ef4444)', borderRadius: 4 }}
-                      animate={{ width: `${timerPct}%` }} transition={{ duration: 1, ease: 'linear' }} />
+                  <div className="absolute -bottom-4 left-1/2 -translate-x-1/2 bg-gradient-to-r from-indigo-600 to-purple-600 text-white text-[11px] font-black px-4 py-1 rounded-full uppercase tracking-widest shadow-xl border border-indigo-400/30 whitespace-nowrap">
+                    Nív. {myLevel}{myGrade ? ` · ${myGrade}` : ''}
                   </div>
                 </div>
 
-                {/* Question text */}
-                <div style={{ padding: '0 20px 16px' }}>
-                  <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12, marginBottom: 18 }}>
-                    <span style={{ flexShrink: 0, width: 30, height: 30, borderRadius: 10, background: 'rgba(99,102,241,0.2)', border: '1px solid rgba(99,102,241,0.35)', color: '#818cf8', fontSize: 11, fontWeight: 900, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>{qIdx + 1}</span>
-                    <p style={{ fontSize: 16, fontWeight: 800, color: '#fff', lineHeight: 1.5 }}>{cq.questionText}</p>
-                  </div>
+                <div className="mt-8 text-center">
+                  <div className="text-xl font-black text-white uppercase tracking-widest" style={{ fontFamily: "'Rajdhani', sans-serif" }}>{user?.name?.split(' ')[0] || 'Aluno'}</div>
+                  <div className="text-[11px] font-bold text-indigo-300/50 uppercase tracking-wider mt-1">{activeTheme.label} · Solo</div>
+                </div>
 
-                  {/* Options */}
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                    {opts.map((opt, idx) => {
-                      const sel = chosen === opt.id;
-                      const show = answered;
-                      let bg = 'rgba(255,255,255,0.04)';
-                      let border = 'rgba(255,255,255,0.08)';
-                      let color = 'rgba(255,255,255,0.8)';
-                      let letBg = 'rgba(255,255,255,0.1)';
-                      let letColor = 'rgba(255,255,255,0.5)';
-                      if (!show && sel) { bg = 'rgba(99,102,241,0.2)'; border = 'rgba(99,102,241,0.7)'; color = '#fff'; letBg = '#6366f1'; letColor = '#fff'; }
-                      if (show) {
-                        if (opt.isCorrect) { bg = 'rgba(74,222,128,0.12)'; border = 'rgba(74,222,128,0.55)'; color = '#4ade80'; letBg = 'rgba(74,222,128,0.25)'; letColor = '#4ade80'; }
-                        else if (sel) { bg = 'rgba(248,113,113,0.12)'; border = 'rgba(248,113,113,0.55)'; color = '#f87171'; letBg = 'rgba(248,113,113,0.25)'; letColor = '#f87171'; }
-                        else { bg = 'rgba(255,255,255,0.02)'; border = 'rgba(255,255,255,0.05)'; color = 'rgba(255,255,255,0.3)'; letBg = 'rgba(255,255,255,0.05)'; letColor = 'rgba(255,255,255,0.25)'; }
-                      }
+                {/* Stats */}
+                <div className="mt-6 w-full flex flex-col gap-2">
+                  <div className="flex items-center justify-between mb-0.5">
+                    <span className="text-[10px] font-black text-white/35 uppercase tracking-widest">Progresso</span>
+                    <span className="text-[10px] font-black text-indigo-300">{qIdx + 1}/{questions.length}</span>
+                  </div>
+                  <div className="w-full h-1.5 bg-white/5 rounded-full overflow-hidden">
+                    <motion.div animate={{ width: `${((qIdx + 1) / Math.max(1, questions.length)) * 100}%` }} transition={{ type: 'spring' }}
+                      className="h-full rounded-full bg-gradient-to-r from-indigo-500 to-purple-500" />
+                  </div>
+                  <div className="mt-2 flex items-center justify-between bg-white/[0.04] rounded-2xl px-4 py-2.5 border border-white/[0.06]">
+                    <span className="text-[11px] font-black text-white/45 uppercase tracking-widest">Streak</span>
+                    <div className="flex items-center gap-1.5"><span className="text-lg font-black text-orange-400">{currentStreak}</span><Flame size={15} className="text-orange-400" /></div>
+                  </div>
+                  <div className="flex items-center justify-between bg-white/[0.04] rounded-2xl px-4 py-2.5 border border-white/[0.06]">
+                    <span className="text-[11px] font-black text-white/45 uppercase tracking-widest">Energia</span>
+                    <div className="flex items-center gap-1.5">
+                      {Array.from({length: MAX_ENERGY}).map((_,i) => (
+                        <motion.div key={i} animate={i < energy ? { scale: [1, 1.3, 1] } : {}} transition={{ delay: i * 0.06 }}
+                          className={`w-3 h-3 rounded-full border ${i < energy ? 'bg-yellow-400 border-yellow-400 shadow-[0_0_8px_rgba(250,204,21,0.8)]' : 'bg-transparent border-white/20'}`} />
+                      ))}
+                    </div>
+                  </div>
+                  <div className="flex flex-wrap gap-1.5 mt-1 min-h-[24px]">
+                    {shieldActive && <div className="text-[10px] font-black text-cyan-400 bg-cyan-500/10 px-2.5 py-1 rounded-full border border-cyan-500/30 flex items-center gap-1"><Shield size={9}/> Escudo</div>}
+                    {turboRemaining > 0 && <div className="text-[10px] font-black text-yellow-400 bg-yellow-500/10 px-2.5 py-1 rounded-full border border-yellow-500/30 flex items-center gap-1"><Zap size={9}/> ×{turboRemaining}</div>}
+                    {freezeActive && <div className="text-[10px] font-black text-blue-400 bg-blue-500/10 px-2.5 py-1 rounded-full border border-blue-500/30">❄️ Freeze</div>}
+                    {energyBurnTargetQuestion === qIdx && <div className="text-[10px] font-black text-orange-400 bg-orange-500/10 px-2.5 py-1 rounded-full border border-orange-500/30">🔥 +{energyBurnBonus}%</div>}
+                  </div>
+                </div>
+
+                {/* Powers mini-grid */}
+                <div className="mt-auto pt-6 w-full">
+                  <div className="text-[10px] font-black text-white/30 uppercase tracking-widest mb-3 text-center">Poderes — clique para ativar</div>
+                  <div className="grid grid-cols-4 gap-2">
+                    {(ALL_POWERS as readonly DuelPowerType[]).map(p => {
+                      const info = POWERS_INFO[p];
+                      const canUse = canActivatePower(p);
+                      const used = usedPowers.includes(p);
                       return (
-                        <motion.button key={opt.id} disabled={answered} onClick={() => setChosen(opt.id)}
-                          whileTap={{ scale: 0.98 }}
-                          style={{ width: '100%', textAlign: 'left', padding: '12px 14px', borderRadius: 14, border: `1.5px solid ${border}`, background: bg, display: 'flex', alignItems: 'center', gap: 12, cursor: answered ? 'default' : 'pointer', transition: 'all 0.15s' }}>
-                          <span style={{ flexShrink: 0, width: 32, height: 32, borderRadius: 10, background: letBg, color: letColor, fontSize: 12, fontWeight: 900, display: 'flex', alignItems: 'center', justifyContent: 'center', transition: 'all 0.15s' }}>{LETTERS[idx]}</span>
-                          <span style={{ flex: 1, fontSize: 14, fontWeight: 700, color, lineHeight: 1.4 }}>{opt.text}</span>
-                          {show && opt.isCorrect && <motion.div initial={{ scale: 0 }} animate={{ scale: 1 }}><CheckCircle2 size={18} style={{ color: '#4ade80' }} /></motion.div>}
-                          {show && sel && !opt.isCorrect && <XCircle size={18} style={{ color: '#f87171' }} />}
+                        <motion.button key={p} whileHover={canUse ? { scale: 1.12, y: -2 } : {}} whileTap={canUse ? { scale: 0.9 } : {}}
+                          onClick={() => setPowerModal(p)} title={info.label}
+                          className={cn('flex flex-col items-center justify-center p-2 rounded-xl border transition-all duration-300 relative overflow-hidden aspect-square cursor-pointer',
+                            canUse ? `bg-gradient-to-b ${info.bg} ${info.border} shadow-lg` : used ? 'bg-white/3 border-white/5 opacity-20' : 'bg-white/5 border-white/10 opacity-35')}>
+                          {canUse && <motion.div animate={{ opacity: [0.2, 0.5, 0.2] }} transition={{ duration: 1.8, repeat: Infinity }} className="absolute inset-0 bg-white/10 pointer-events-none" />}
+                          <span className="text-xl relative z-10">{info.emoji}</span>
+                          <span className="text-[8px] font-black text-yellow-400 flex items-center gap-0.5 mt-0.5 relative z-10">{info.cost}<Zap size={6}/></span>
                         </motion.button>
                       );
                     })}
                   </div>
-
-                  {timedOut && (
-                    <motion.div initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }}
-                      style={{ marginTop: 12, padding: '10px 16px', background: 'rgba(248,113,113,0.1)', border: '1px solid rgba(248,113,113,0.3)', borderRadius: 14, textAlign: 'center' }}>
-                      <p style={{ fontWeight: 900, color: '#f87171', fontSize: 13 }}>⏱️ Tempo esgotado!</p>
-                    </motion.div>
-                  )}
-                  {answered && cq.explanation && (
-                    <motion.div initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }}
-                      style={{ marginTop: 12, padding: '12px 16px', background: 'rgba(96,165,250,0.1)', border: '1px solid rgba(96,165,250,0.3)', borderRadius: 14 }}>
-                      <p style={{ fontSize: 10, fontWeight: 900, color: '#60a5fa', textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: 6 }}>💡 Explicação</p>
-                      <p style={{ fontSize: 13, fontWeight: 600, color: 'rgba(255,255,255,0.75)', lineHeight: 1.5 }}>{cq.explanation}</p>
-                    </motion.div>
-                  )}
                 </div>
+              </div>
 
-                {/* Action btn */}
-                <div style={{ padding: '0 20px 20px' }}>
-                  {!answered ? (
-                    <motion.button whileTap={{ scale: 0.97 }} disabled={!chosen} onClick={handleConfirm}
-                      style={{ width: '100%', height: 50, borderRadius: 16, border: 'none', fontFamily: "'Rajdhani',sans-serif", fontWeight: 900, fontSize: 16, cursor: chosen ? 'pointer' : 'not-allowed', background: chosen ? 'linear-gradient(135deg,#6366f1,#a855f7)' : 'rgba(255,255,255,0.06)', color: chosen ? '#fff' : 'rgba(255,255,255,0.2)', boxShadow: chosen ? '0 0 20px rgba(99,102,241,0.45)' : 'none', transition: 'all 0.2s' }}>
-                      ✅ Confirmar Resposta
-                    </motion.button>
-                  ) : (
-                    <motion.button initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }}
-                      whileTap={{ scale: 0.97 }} onClick={handleNext} disabled={submitting}
-                      style={{ width: '100%', height: 50, borderRadius: 16, border: 'none', fontFamily: "'Rajdhani',sans-serif", fontWeight: 900, fontSize: 16, cursor: 'pointer', background: 'linear-gradient(135deg,#0f172a,#1e1b4b)', color: '#818cf8', boxShadow: '0 0 16px rgba(99,102,241,0.25)', opacity: submitting ? 0.6 : 1 }}>
-                      {submitting ? '⏳ Salvando...' : qIdx < questions.length - 1 ? '⚡ Próxima Questão' : '🏁 Ver Resultado'}
-                    </motion.button>
-                  )}
-                </div>
-              </motion.div>
+              {/* ══ RIGHT — Question Area ══ */}
+              <div className="flex-1 flex flex-col p-6 lg:p-8 gap-5">
+
+                {/* Giant Timer Pill */}
+                <motion.div animate={timeLeft <= 5 ? { scale: [1, 1.03, 1] } : {}} transition={{ duration: 0.45, repeat: timeLeft <= 5 ? Infinity : 0 }}
+                  className={cn('flex items-center gap-4 px-7 py-4 rounded-[2rem] border-2 shadow-2xl w-full',
+                    freezeActive ? 'bg-blue-950/80 border-blue-400/60' : timeLeft > 15 ? 'bg-emerald-950/80 border-emerald-500/50' : timeLeft > 7 ? 'bg-amber-950/80 border-amber-500/60' : 'bg-red-950/90 border-red-500/80')}
+                  style={{ boxShadow: freezeActive ? '0 0 30px rgba(96,165,250,0.3)' : timeLeft > 15 ? '0 0 24px rgba(16,185,129,0.2)' : timeLeft > 7 ? '0 0 28px rgba(245,158,11,0.35)' : '0 0 40px rgba(239,68,68,0.55)' }}>
+                  <motion.div animate={timeLeft <= 7 && !freezeActive ? { rotate: [0,-18,18,0] } : {}} transition={{ duration: 0.35, repeat: Infinity }}>
+                    <Timer size={30} className={cn(freezeActive ? 'text-blue-400' : timeLeft > 15 ? 'text-emerald-400' : timeLeft > 7 ? 'text-amber-400' : 'text-red-400')} />
+                  </motion.div>
+                  <span className={cn('text-5xl font-black tabular-nums', freezeActive ? 'text-blue-300' : timeLeft > 15 ? 'text-emerald-300' : timeLeft > 7 ? 'text-amber-300' : 'text-red-300')} style={{ fontFamily: "'Rajdhani', sans-serif" }}>
+                    {String(timeLeft).padStart(2,'0')}<span className="text-2xl opacity-50">s</span>
+                  </span>
+                  {freezeActive && <span className="text-blue-300 text-xs font-black uppercase tracking-widest ml-1">❄️ Congelado</span>}
+                  <div className="flex-1 h-2 bg-white/10 rounded-full overflow-hidden ml-2">
+                    <motion.div animate={{ width: `${(timeLeft / TIME_PER_QUESTION) * 100}%` }} transition={{ duration: 0.9, ease: 'linear' }}
+                      className={cn('h-full rounded-full', freezeActive ? 'bg-blue-400' : timeLeft > 15 ? 'bg-emerald-400' : timeLeft > 7 ? 'bg-amber-400' : 'bg-red-500')} />
+                  </div>
+                </motion.div>
+
+                {/* Question + Answers */}
+                <AnimatePresence mode="wait">
+                  <motion.div key={qIdx} initial={{ opacity: 0, x: 60 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -60 }} transition={{ duration: 0.3, type: 'spring', stiffness: 220 }}
+                    className="flex flex-col gap-4 flex-1">
+
+                    <div className="bg-white/[0.04] border border-white/10 rounded-[2rem] p-6 lg:p-8 shadow-xl">
+                      <div className="flex items-start gap-4">
+                        <div className="shrink-0 w-11 h-11 rounded-2xl bg-indigo-500/20 border border-indigo-500/30 flex items-center justify-center">
+                          <span className="text-indigo-300 font-black text-sm">{qIdx + 1}</span>
+                        </div>
+                        <h2 className="text-2xl md:text-3xl font-black text-white leading-snug flex-1">{cq.questionText}</h2>
+                      </div>
+                    </div>
+
+                    {showHint && cq.explanation && !answered && (
+                      <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} className="p-4 bg-amber-500/10 border border-amber-500/30 rounded-2xl">
+                        <p className="text-xs font-black text-amber-400 uppercase tracking-widest mb-1">💡 DICA</p>
+                        <p className="text-sm text-amber-200/80 font-bold">{cq.explanation.substring(0, Math.floor(cq.explanation.length / 2))}...</p>
+                      </motion.div>
+                    )}
+
+                    <div className="flex flex-col gap-3">
+                      {opts.map((opt, idx) => {
+                        const sel = chosen === opt.id;
+                        const show = answered;
+                        let bg=''; let border=''; let textCol=''; let badgeBg='';
+                        if (!show && !sel) { bg='bg-white/[0.05] hover:bg-white/[0.1]'; border='border-white/10'; textCol='text-white/85'; badgeBg='bg-white/10 text-white/50'; }
+                        else if (!show && sel) { bg='bg-indigo-500/20'; border='border-indigo-500'; textCol='text-white'; badgeBg='bg-indigo-500 text-white'; }
+                        else if (show && opt.isCorrect) { bg='bg-emerald-500/20'; border='border-emerald-500/60'; textCol='text-emerald-300'; badgeBg='bg-emerald-500/30 text-emerald-300'; }
+                        else if (show && sel && !opt.isCorrect) { bg='bg-red-500/20'; border='border-red-500/60'; textCol='text-red-300'; badgeBg='bg-red-500/30 text-red-300'; }
+                        else { bg='bg-white/[0.03] opacity-40'; border='border-transparent'; textCol='text-white/20'; badgeBg='bg-white/5 text-white/20'; }
+                        return (
+                          <motion.button key={opt.id} whileHover={!answered ? { scale: 1.015, x: 5 } : {}} whileTap={!answered ? { scale: 0.985 } : {}}
+                            disabled={answered} onClick={() => setChosen(opt.id)}
+                            className={cn('w-full text-left p-5 rounded-2xl border-2 flex items-center gap-4 transition-all duration-200', bg, border)}
+                            style={{ boxShadow: !show && sel ? '0 0 22px rgba(99,102,241,0.28)' : show && opt.isCorrect ? '0 0 22px rgba(16,185,129,0.22)' : 'none' }}>
+                            <div className={cn('w-10 h-10 rounded-xl flex items-center justify-center text-sm font-black shrink-0', badgeBg)}>{LETTERS[idx]}</div>
+                            <span className={cn('flex-1 text-lg font-bold', textCol)}>{opt.text}</span>
+                            {show && opt.isCorrect && <CheckCircle2 size={26} className="text-emerald-400 shrink-0" />}
+                            {show && sel && !opt.isCorrect && <XCircle size={26} className="text-red-400 shrink-0" />}
+                          </motion.button>
+                        );
+                      })}
+                    </div>
+
+                    <div className="mt-2">
+                      {!answered ? (
+                        <motion.button whileHover={{ scale: chosen ? 1.02 : 1 }} whileTap={{ scale: chosen ? 0.97 : 1 }}
+                          disabled={!chosen} onClick={handleConfirm}
+                          className={cn('w-full py-5 rounded-2xl font-black text-xl uppercase tracking-widest transition-all', chosen ? 'bg-gradient-to-r from-indigo-500 to-purple-500 text-white shadow-[0_0_30px_rgba(99,102,241,0.45)]' : 'bg-white/5 text-white/20 cursor-not-allowed')}
+                          style={{ fontFamily: "'Rajdhani', sans-serif" }}>
+                          Confirmar Resposta
+                        </motion.button>
+                      ) : (
+                        <motion.button initial={{ scale: 0.95, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.97 }}
+                          disabled={submitting} onClick={handleNext}
+                          className="w-full py-5 rounded-2xl font-black text-xl text-white uppercase tracking-widest bg-gradient-to-r from-emerald-500 to-teal-500 shadow-[0_0_30px_rgba(16,185,129,0.4)]"
+                          style={{ fontFamily: "'Rajdhani', sans-serif" }}>
+                          {submitting ? 'Salvando...' : qIdx < questions.length - 1 ? 'Próxima Questão ⚡' : 'Ver Resultados 🏆'}
+                        </motion.button>
+                      )}
+                    </div>
+                  </motion.div>
+                </AnimatePresence>
+              </div>
+            </div>
+
+            {/* ── POWER MODAL ── */}
+            <AnimatePresence>
+              {powerModal && (() => {
+                const info = POWERS_INFO[powerModal];
+                const canUse = canActivatePower(powerModal);
+                return (
+                  <motion.div key="power-modal" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+                    className="fixed inset-0 z-50 flex items-center justify-center p-6"
+                    style={{ background: 'rgba(0,0,0,0.78)', backdropFilter: 'blur(14px)' }}
+                    onClick={() => setPowerModal(null)}>
+                    <motion.div initial={{ scale: 0.75, y: 50 }} animate={{ scale: 1, y: 0 }} exit={{ scale: 0.75, y: 50 }}
+                      transition={{ type: 'spring', stiffness: 320, damping: 26 }}
+                      onClick={e => e.stopPropagation()}
+                      className={`relative flex flex-col items-center gap-6 p-10 rounded-[2.5rem] border-2 w-full max-w-sm overflow-hidden shadow-2xl bg-gradient-to-b ${info.bg} ${info.border}`}
+                      style={{ boxShadow: `0 0 80px ${info.glow}, 0 25px 70px rgba(0,0,0,0.7)` }}>
+                      <div className="absolute inset-0 pointer-events-none opacity-25" style={{ background: `radial-gradient(circle at 50% 0%, ${info.glow}, transparent 70%)` }} />
+                      <motion.span animate={{ y: [0, -10, 0] }} transition={{ duration: 2.2, repeat: Infinity, ease: 'easeInOut' }}
+                        style={{ fontSize: 96, filter: `drop-shadow(0 0 28px ${info.glow})`, position: 'relative', zIndex: 1 }}>
+                        {info.emoji}
+                      </motion.span>
+                      <div className="text-center relative z-10">
+                        <div className={`text-4xl font-black uppercase tracking-widest ${info.color}`} style={{ fontFamily: "'Rajdhani', sans-serif", textShadow: `0 0 20px ${info.glow}` }}>{info.label}</div>
+                        <div className="text-white/55 text-base font-bold mt-2">{info.desc}</div>
+                      </div>
+                      <div className="flex items-center gap-2 bg-black/40 px-6 py-2.5 rounded-full border border-yellow-400/20 relative z-10">
+                        <span className="text-yellow-400 text-2xl font-black">{info.cost}</span>
+                        <Zap size={17} className="text-yellow-400" />
+                        <span className="text-white/45 text-sm font-bold uppercase tracking-widest">de Energia</span>
+                      </div>
+                      {!canUse && (
+                        <div className="text-red-400 text-sm font-bold uppercase tracking-widest bg-red-500/10 px-4 py-2 rounded-full border border-red-500/20 relative z-10">
+                          {usedPowers.includes(powerModal) ? '✓ Já Utilizado' : energy < info.cost ? `⚡ Energia: ${energy}/${info.cost}` : usedPowers.length >= MAX_POWERS_PER_DUEL ? 'Limite: 3 Poderes' : 'Indisponível'}
+                        </div>
+                      )}
+                      <div className="flex w-full gap-3 relative z-10">
+                        <button onClick={() => setPowerModal(null)}
+                          className="flex-1 py-3.5 rounded-2xl bg-white/10 text-white/55 font-black uppercase tracking-widest hover:bg-white/15 transition-all">
+                          Cancelar
+                        </button>
+                        {canUse && (
+                          <motion.button whileHover={{ scale: 1.04 }} whileTap={{ scale: 0.96 }}
+                            onClick={() => { setPowerModal(null); handleActivatePower(powerModal); }}
+                            className={`flex-1 py-3.5 rounded-2xl font-black uppercase tracking-widest text-white border ${info.border} bg-gradient-to-r from-white/20 to-white/10 hover:from-white/28 transition-all`}
+                            style={{ boxShadow: `0 0 25px ${info.glow}` }}>
+                            ⚡ Ativar!
+                          </motion.button>
+                        )}
+                      </div>
+                    </motion.div>
+                  </motion.div>
+                );
+              })()}
             </AnimatePresence>
           </motion.div>
         )}
 
-        {/* ─── RESULT ─── */}
+
+        {/* \u2500\u2500\u2500 RESULT \u2500\u2500\u2500 */}
         {phase === 'result' && (
-          <motion.div key="result" initial={{ opacity: 0, scale: 0.92 }} animate={{ opacity: 1, scale: 1 }} style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+          <motion.div key="result" initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} className="flex flex-col gap-6">
+            <div className="relative overflow-hidden rounded-[2.5rem] p-8 md:p-12 text-center" style={{ ...CARD, boxShadow: '0 20px 50px rgba(0,0,0,0.5)' }}>
+              <div className="absolute inset-0 bg-gradient-to-b from-indigo-900/40 to-transparent pointer-events-none" />
+              <div className="absolute top-0 left-1/2 -translate-x-1/2 w-full h-full bg-[radial-gradient(ellipse_at_top,rgba(99,102,241,0.3),transparent_70%)] pointer-events-none" />
 
-            {/* Result hero */}
-            <div style={{ ...CARD, borderRadius: 28, padding: '36px 28px', textAlign: 'center', position: 'relative', overflow: 'hidden' }}>
-              <div style={{ position: 'absolute', inset: 0, background: 'linear-gradient(135deg,#020617 0%,#0f0a2e 50%,#1a0533 100%)', pointerEvents: 'none' }} />
-              <div style={{ position: 'absolute', top: -60, left: '50%', transform: 'translateX(-50%)', width: 200, height: 200, borderRadius: '50%', background: 'radial-gradient(circle,rgba(99,102,241,0.3),transparent)', filter: 'blur(40px)', pointerEvents: 'none' }} />
-              <div style={{ position: 'relative', zIndex: 1 }}>
-                {/* Stars */}
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, marginBottom: 20 }}>
-                  {[1, 2, 3, 4, 5].map(s => (
-                    <motion.div key={s} initial={{ scale: 0, rotate: -30 }} animate={{ scale: 1, rotate: 0 }}
-                      transition={{ delay: s * 0.1, type: 'spring' }}>
-                      <Star size={30} style={{ color: s <= starCount ? '#fbbf24' : 'rgba(255,255,255,0.12)', fill: s <= starCount ? '#fbbf24' : 'transparent' }} />
+              {/* Stars animation based on accuracy */}
+              <div className="flex justify-center gap-4 mb-8">
+                {Array.from({ length: 5 }).map((_, i) => {
+                  const accuracy = calcTotalDetailed(answerData).accuracy;
+                  const earned = (i + 1) * 20 <= accuracy * 100;
+                  return (
+                    <motion.div key={i} initial={{ scale: 0, rotate: -45 }} animate={{ scale: 1, rotate: 0 }} transition={{ delay: 0.2 + i * 0.1, type: 'spring' }} className="relative z-10">
+                      <Star size={48} className={earned ? 'text-yellow-400 drop-shadow-[0_0_15px_rgba(250,204,21,0.8)]' : 'text-white/10'} fill={earned ? 'currentColor' : 'transparent'} />
                     </motion.div>
-                  ))}
+                  )
+                })}
+              </div>
+
+              <h2 className="text-5xl md:text-6xl font-black text-white uppercase tracking-widest mb-4 relative z-10" style={{ fontFamily: "'Rajdhani', sans-serif" }}>
+                TREINO CONCLUÍDO
+              </h2>
+              <p className="text-indigo-300 font-bold uppercase tracking-widest relative z-10 mb-10">
+                Resumo da Batalha Solo
+              </p>
+
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-4 relative z-10">
+                <div className="bg-white/5 border border-white/10 p-5 rounded-3xl">
+                  <div className="text-3xl font-black text-white mb-1"><CountUp to={calcTotalDetailed(answerData).correctCount} /></div>
+                  <div className="text-[10px] font-black text-white/40 uppercase tracking-widest">Acertos</div>
                 </div>
-
-                <motion.div initial={{ scale: 0 }} animate={{ scale: 1 }} transition={{ type: 'spring', delay: 0.4 }}
-                  style={{ fontSize: 72, marginBottom: 12 }}>
-                  {starCount >= 4 ? '🏆' : starCount >= 3 ? '⚔️' : '💪'}
-                </motion.div>
-                <h2 style={{ fontFamily: "'Rajdhani',sans-serif", fontWeight: 900, fontSize: 32, color: '#fff', marginBottom: 6 }}>
-                  {starCount >= 4 ? 'Excelente!' : starCount >= 3 ? 'Muito Bom!' : 'Continue Praticando!'}
-                </h2>
-                <p style={{ color: 'rgba(255,255,255,0.35)', fontWeight: 700, marginBottom: 28 }}>{finalScore}/{questions.length} acertos</p>
-
-                {/* Rewards */}
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-                  <motion.div initial={{ y: 20, opacity: 0 }} animate={{ y: 0, opacity: 1 }} transition={{ delay: 0.5 }}
-                    style={{ background: 'rgba(251,191,36,0.1)', border: '1px solid rgba(251,191,36,0.25)', borderRadius: 18, padding: '16px 12px' }}>
-                    <div style={{ fontFamily: "'Orbitron',sans-serif", fontWeight: 900, fontSize: 28, color: '#fbbf24', marginBottom: 4 }}>+{xpEarned}</div>
-                    <div style={{ fontSize: 10, fontWeight: 900, color: 'rgba(251,191,36,0.6)', letterSpacing: '0.1em', textTransform: 'uppercase' }}>⚡ XP Ganho</div>
-                  </motion.div>
-                  <motion.div initial={{ y: 20, opacity: 0 }} animate={{ y: 0, opacity: 1 }} transition={{ delay: 0.6 }}
-                    style={{ background: 'rgba(245,158,11,0.1)', border: '1px solid rgba(245,158,11,0.25)', borderRadius: 18, padding: '16px 12px' }}>
-                    <div style={{ fontFamily: "'Orbitron',sans-serif", fontWeight: 900, fontSize: 28, color: '#f59e0b', marginBottom: 4 }}>+{coins}</div>
-                    <div style={{ fontSize: 10, fontWeight: 900, color: 'rgba(245,158,11,0.6)', letterSpacing: '0.1em', textTransform: 'uppercase' }}>🪙 Moedas</div>
-                  </motion.div>
+                <div className="bg-white/5 border border-white/10 p-5 rounded-3xl">
+                  <div className="text-3xl font-black text-orange-400 mb-1"><CountUp to={maxStreak} />🔥</div>
+                  <div className="text-[10px] font-black text-white/40 uppercase tracking-widest">Maior Streak</div>
+                </div>
+                <div className="bg-emerald-500/10 border border-emerald-500/20 p-5 rounded-3xl">
+                  <div className="text-3xl font-black text-emerald-400 mb-1">+<CountUp to={xpEarned} /></div>
+                  <div className="text-[10px] font-black text-emerald-400/50 uppercase tracking-widest">XP Ganho</div>
+                </div>
+                <div className="bg-yellow-500/10 border border-yellow-500/20 p-5 rounded-3xl">
+                  <div className="text-3xl font-black text-yellow-400 mb-1">+<CountUp to={coins} /></div>
+                  <div className="text-[10px] font-black text-yellow-400/50 uppercase tracking-widest">Moedas</div>
                 </div>
               </div>
             </div>
 
-            {/* Action buttons */}
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-              <motion.button whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.97 }} onClick={resetToSetup}
-                style={{ height: 50, borderRadius: 16, fontFamily: "'Rajdhani',sans-serif", fontWeight: 900, fontSize: 14, cursor: 'pointer', background: 'rgba(255,255,255,0.06)', color: 'rgba(255,255,255,0.7)', border: '1px solid rgba(255,255,255,0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7 }}>
-                🔄 Jogar Novamente
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <motion.button whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }} onClick={resetToSetup}
+                className="py-5 bg-white/5 hover:bg-white/10 border border-white/10 rounded-2xl flex items-center justify-center gap-3 text-white font-black text-lg uppercase tracking-widest transition-all" style={{ fontFamily: "'Rajdhani', sans-serif" }}>
+                <Shuffle size={20} /> Jogar Novamente
               </motion.button>
-              <motion.button whileHover={{ scale: 1.02, boxShadow: '0 0 24px rgba(99,102,241,0.4)' }} whileTap={{ scale: 0.97 }}
-                onClick={() => navigate('/student/duels')}
-                style={{ height: 50, borderRadius: 16, fontFamily: "'Rajdhani',sans-serif", fontWeight: 900, fontSize: 14, cursor: 'pointer', background: 'linear-gradient(135deg,#7c3aed,#4f46e5)', color: '#fff', border: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7, boxShadow: '0 0 16px rgba(99,102,241,0.35)' }}>
-                <Trophy size={15} /> Arena de Duelos
+              <motion.button whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }} onClick={() => navigate('/student/duels')}
+                className="py-5 bg-gradient-to-r from-indigo-500 to-purple-600 rounded-2xl flex items-center justify-center gap-3 text-white font-black text-lg uppercase tracking-widest shadow-xl shadow-indigo-500/25 transition-all" style={{ fontFamily: "'Rajdhani', sans-serif" }}>
+                <Swords size={20} /> Arena Multiplayer
               </motion.button>
             </div>
           </motion.div>
         )}
-
       </AnimatePresence>
 
       <AnswerFeedbackOverlay

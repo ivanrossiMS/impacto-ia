@@ -25,6 +25,14 @@ export interface DiaryEntry {
   updatedAt: string;
 }
 
+export interface DuelQuestionHistory {
+  id: string;
+  studentId: string;
+  theme: string;
+  questionText: string;
+  seenAt: string;
+}
+
 
 export interface StudentActivityResult {
   id: string; // activityId + studentId
@@ -87,6 +95,7 @@ export class ImpactoDatabase extends Dexie {
   diaryEntries!: EntityTable<DiaryEntry, 'id'>;
   duels!: EntityTable<Duel, 'id'>;
   duelQuestions!: EntityTable<DuelQuestion, 'id'>;
+  duelQuestionHistory!: EntityTable<DuelQuestionHistory, 'id'>;
 
   // System
   notifications!: EntityTable<AppNotification, 'id'>;
@@ -338,6 +347,33 @@ export class ImpactoDatabase extends Dexie {
       notifications: 'id, userId, role, read, createdAt',
       duels: 'id, challengerId, challengedId, status, createdAt',
       duelQuestions: 'id, duelId',
+    });
+    this.version(24).stores({
+      users: 'id, role, studentCode, guardianCode, email, schoolId, guardianId, *guardianIds, [schoolId+role], classId',
+      schools: 'id, name, status, globalScore, logo',
+      classes: 'id, name, grade, teacherId, schoolId, year, *studentIds',
+      avatarCatalog: 'id, type, priceCoins, rarity, isActive',
+      studentOwnedAvatars: 'id, studentId, catalogItemId',
+      studentAvatarProfiles: 'studentId',
+      avatarCollections: 'id, isActive',
+      avatarCampaigns: 'id, isActive',
+      gamificationStats: 'id',
+      achievements: 'id',
+      studentAchievements: 'id, studentId, achievementId',
+      missions: 'id, type, criteria, title',
+      studentMissions: 'id, studentId, missionId, [studentId+missionId]',
+      learningPaths: 'id, subject, grade, classId, schoolYear, schoolId',
+      activities: 'id, subject, grade, classId, teacherId, title',
+      studentProgress: 'id, studentId, pathId, status',
+      supportTickets: 'id, userId, status, priority, createdAt, schoolId, isReadByParticipant, isReadByAdmin',
+      ticketMessages: 'id, ticketId, senderId, createdAt',
+      libraryItems: 'id, classId, teacherId, subject, grade, type',
+      diaryEntries: 'id, studentId, createdAt',
+      studentActivityResults: 'id, activityId, studentId, status',
+      notifications: 'id, userId, role, read, createdAt',
+      duels: 'id, challengerId, challengedId, status, createdAt',
+      duelQuestions: 'id, duelId',
+      duelQuestionHistory: 'id, studentId, theme, seenAt, [studentId+theme]',
     });
   }
 }

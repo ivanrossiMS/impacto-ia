@@ -111,6 +111,7 @@ export async function callGenerateActivity(params: {
   className?: string;
   seed?: number;
   userId?: string;
+  existingQuestions?: string[];
 }): Promise<{ questions: any[] }> {
   const res = await callAI<{ questions: any[] }>({ feature: "generate-activity", ...params });
   return res.result;
@@ -158,6 +159,8 @@ export async function callGenerateDuel(params: {
   count: number;
   grade?: string;
   userId?: string;
+  studentAccuracy?: number;    // 0.0–1.0 — used for adaptive difficulty
+  recentQuestions?: string[]; // anti-repetition: texts of recently seen questions
 }): Promise<{ questions: any[] }> {
   const res = await callAI<{ questions: any[] }>({
     feature: "generate-duel",

@@ -1,6 +1,6 @@
 // ============================================================
 // duelRewards.ts — Single source of truth for duel reward calc
-// Rebalanced v2: Duels are now meaningfully rewarding
+// Rebalanced v5: competitive rewards ×1.3 vs v4
 // ============================================================
 
 export interface DuelRewards {
@@ -20,30 +20,30 @@ export interface DuelRewards {
   maxCoins: number;
 }
 
-// Difficulty bonuses — significantly increased to make difficulty choices matter
+// Difficulty bonuses — v4 × 1.3 (rounded)
 const DIFFICULTY_BONUSES: Record<string, { xp: number; coins: number }> = {
-  easy:   { xp:  20, coins: 10 },
-  medium: { xp:  45, coins: 20 },
-  hard:   { xp:  80, coins: 40 },
+  easy:   { xp:  28, coins: 12 },   // v4 22/9   × 1.3
+  medium: { xp:  58, coins: 27 },   // v4 45/21  × 1.3
+  hard:   { xp: 117, coins: 55 },   // v4 90/42  × 1.3
 };
 
-// Question count bonuses — reward commitment to longer duels
+// Question count bonuses — v4 × 1.3
 const QUESTION_COUNT_BONUSES: Record<number, { xp: number; coins: number }> = {
-  5:  { xp:   0, coins:  0 },
-  8:  { xp:  25, coins: 10 },
-  10: { xp:  50, coins: 20 },
+  5:  { xp:  0, coins:  0 },
+  8:  { xp: 28, coins: 12 },   // v4 22/9  × 1.3
+  10: { xp: 58, coins: 23 },   // v4 45/18 × 1.3
 };
 
-// Base rewards — significantly rebalanced for better duel engagement
+// Base rewards — v4 × 1.3 (rounded)
 const BASE = {
-  winXP:         120,  // was 50  — winning a duel should feel really good
-  loseXP:         30,  // was 10  — even losing deserves recognition
-  drawXP:         60,  // was 20  — a draw is still a strong performance
-  winCoins:       25,  // was 10  — meaningful coin reward for victories
-  loseCoins:      10,  // was  0  — players should never feel zero reward
-  drawCoins:      15,  // was  3  — draw is competitive, should reward equally
-  xpPerCorrect:   25,  // was 15  — each correct answer in duel has real XP value
-  coinsPerCorrect: 5,  // was  2  — small but visible coin reward per correct
+  winXP:         156,  // v4  120 × 1.3
+  loseXP:         49,  // v4   38 × 1.3
+  drawXP:         88,  // v4   68 × 1.3
+  winCoins:       35,  // v4   27 × 1.3
+  loseCoins:      16,  // v4   12 × 1.3
+  drawCoins:      23,  // v4   18 × 1.3
+  xpPerCorrect:   35,  // v4   27 × 1.3
+  coinsPerCorrect: 6,  // v4    5 × 1.2
 };
 
 export function calcDuelRewards(

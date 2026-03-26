@@ -45,21 +45,40 @@ export const syncEngine = {
     for (const table of SYNC_TABLES) {
       const dexieKey = TABLE_TO_DEXIE[table];
       if (!dexieKey) continue;
-      try {
-        let data: any[] | null = null;
-        let error: any = null;
-        if (table === 'avatar_catalog') {
-          ({ data, error } = await supabase.rpc('get_avatar_catalog'));
-        } else {
-          ({ data, error } = await supabase.from(table).select('*'));
+
+      let retries = 2;
+      while (retries >= 0) {
+        try {
+          let data: any[] | null = null;
+          let error: any = null;
+          if (table === 'avatar_catalog') {
+            ({ data, error } = await supabase.rpc('get_avatar_catalog'));
+          } else {
+            // Explicit limit avoids Supabase default page size issues;
+            // notifications is the only large table, cap at 200 recent rows.
+            const query = supabase.from(table).select('*');
+            if (table === 'notifications') {
+              ({ data, error } = await query.order('createdAt', { ascending: false }).limit(200));
+            } else {
+              ({ data, error } = await query.limit(1000));
+            }
+          }
+          if (error) throw error;
+          if (data && data.length > 0) {
+            await (db[dexieKey] as any).bulkPut(data);
+            console.log(`[SyncEngine] Synced ${data.length} records for ${table} => db.${dexieKey}`);
+          }
+          break; // success — move to next table
+        } catch (err: any) {
+          if (retries > 0 && (err?.code === '57014' || err?.message?.includes('timeout'))) {
+            console.warn(`[SyncEngine] Timeout on ${table}, retrying (${retries} attempts left)…`);
+            retries--;
+            await new Promise(res => setTimeout(res, 1200));
+          } else {
+            console.error(`[SyncEngine] Failed to sync table ${table}:`, err);
+            break;
+          }
         }
-        if (error) throw error;
-        if (data && data.length > 0) {
-          await (db[dexieKey] as any).bulkPut(data);
-          console.log(`[SyncEngine] Synced ${data.length} records for ${table} => db.${dexieKey}`);
-        }
-      } catch (err) {
-        console.error(`[SyncEngine] Failed to sync table ${table}:`, err);
       }
     }
   },

@@ -232,6 +232,27 @@ const EditModal: React.FC<{
 };
 
 // ─── Upload Modal ─────────────────────────────────────────────────────────────
+const ACCEPTED_TYPES = 'image/*,video/*,audio/*,.pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx,.txt,.zip';
+
+function detectTypeFromFile(file: File): LibraryItem['type'] {
+  const ext = file.name.split('.').pop()?.toLowerCase() || '';
+  if (['mp4', 'mov', 'avi', 'webm', 'mkv'].includes(ext) || file.type.startsWith('video/')) return 'video';
+  if (['mp3', 'wav', 'ogg', 'aac', 'm4a'].includes(ext) || file.type.startsWith('audio/')) return 'audio';
+  return 'text';
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes === 0) return '0 B';
+  const k = 1024;
+  const sizes = ['B', 'KB', 'MB', 'GB'];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+}
+
+const TYPE_EMOJI_MAP: Record<LibraryItem['type'], string> = {
+  text: '📄', video: '🎥', quiz: '📝', audio: '🎵',
+};
+
 const UploadModal: React.FC<{
   onClose: () => void;
   onUpload: (item: LibraryItem) => void;
@@ -244,21 +265,84 @@ const UploadModal: React.FC<{
   const [classId, setClassId] = useState('');
   const [type, setType] = useState<LibraryItem['type']>('text');
   const [description, setDescription] = useState('');
-  const [url, setUrl] = useState('');
+  const [urlInput, setUrlInput] = useState('');
   const [dragOver, setDragOver] = useState(false);
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [isUploading, setIsUploading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState(0);
   const fileRef = useRef<HTMLInputElement>(null);
-  const [fileName, setFileName] = useState('');
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const applyFile = (file: File) => {
+    setSelectedFile(file);
+    // Auto-fill title if empty
+    if (!title) {
+      const nameParts = file.name.split('.');
+      nameParts.pop();
+      setTitle(nameParts.join('.').replace(/[-_]/g, ' ').replace(/\b\w/g, c => c.toUpperCase()));
+    }
+    // Auto-detect type
+    setType(detectTypeFromFile(file));
+    setUrlInput(''); // clear manual url if file chosen
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    setDragOver(false);
+    const file = e.dataTransfer.files[0];
+    if (file) applyFile(file);
+  };
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) applyFile(file);
+  };
+
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!title || !subject || !grade) { toast.error('Preencha os campos obrigatórios.'); return; }
+
+    let finalUrl = urlInput;
+
+    // ── Real upload to Supabase Storage ─────────────────────────────────────
+    if (selectedFile) {
+      setIsUploading(true);
+      setUploadProgress(10);
+
+      const ext = selectedFile.name.split('.').pop() || 'bin';
+      const path = `${Date.now()}_${crypto.randomUUID().slice(0, 8)}.${ext}`;
+
+      try {
+        // Simulate progress steps while uploading
+        const progressInterval = setInterval(() => {
+          setUploadProgress(prev => Math.min(prev + 15, 85));
+        }, 400);
+
+        const { data: storageData, error: storageError } = await supabase.storage
+          .from('library-files')
+          .upload(path, selectedFile, { cacheControl: '3600', upsert: false });
+
+        clearInterval(progressInterval);
+
+        if (storageError) throw storageError;
+
+        setUploadProgress(95);
+        const { data: urlData } = supabase.storage.from('library-files').getPublicUrl(storageData.path);
+        finalUrl = urlData.publicUrl;
+        setUploadProgress(100);
+      } catch (err: any) {
+        setIsUploading(false);
+        setUploadProgress(0);
+        toast.error(`Erro no upload: ${err.message || 'Tente novamente.'}`);
+        return;
+      }
+    }
+
     const newItem: LibraryItem = {
       id: crypto.randomUUID(), title, subject, grade, year, classId: classId || undefined,
-      type, description, url, downloads: 0, rating: 0, isOwn: true,
+      type, description, url: finalUrl, downloads: 0, rating: 0, isOwn: true,
       addedAt: new Date().toISOString(),
     };
     onUpload(newItem);
-    toast.success(`"${title}" adicionado à biblioteca!`);
     onClose();
   };
 
@@ -269,28 +353,74 @@ const UploadModal: React.FC<{
           <h2 className="text-xl font-black text-slate-800">Upload de Material</h2>
           <button onClick={onClose} className="p-2 hover:bg-slate-100 rounded-xl transition-colors"><X size={20} /></button>
         </div>
+
         <form onSubmit={handleSubmit} className="p-6 space-y-5">
+
+          {/* ── Drop Zone ───────────────────────────────────────── */}
           <div
             onDragOver={e => { e.preventDefault(); setDragOver(true); }}
             onDragLeave={() => setDragOver(false)}
-            onDrop={e => { e.preventDefault(); setDragOver(false); const f = e.dataTransfer.files[0]; if (f) setFileName(f.name); }}
-            onClick={() => fileRef.current?.click()}
-            className={cn('border-2 border-dashed rounded-2xl p-8 text-center cursor-pointer transition-all',
-              dragOver ? 'border-indigo-400 bg-indigo-50' : 'border-slate-200 hover:border-slate-300 bg-slate-50/50'
-            )}>
-            <input ref={fileRef} type="file" className="hidden" onChange={e => setFileName(e.target.files?.[0]?.name || '')} />
-            <Upload size={32} className={cn('mx-auto mb-2', dragOver ? 'text-indigo-500' : 'text-slate-300')} />
-            {fileName ? <p className="font-bold text-sm text-slate-700">{fileName}</p> : (
-              <><p className="font-bold text-slate-500 text-sm">Arraste um arquivo ou clique para selecionar</p>
-              <p className="text-xs text-slate-400 mt-1">PDF, DOCX, MP4, MP3, PNG, JPG</p></>
+            onDrop={handleDrop}
+            onClick={() => !selectedFile && fileRef.current?.click()}
+            className={cn(
+              'border-2 border-dashed rounded-2xl p-7 text-center transition-all',
+              selectedFile
+                ? 'border-indigo-300 bg-indigo-50/60 cursor-default'
+                : dragOver
+                  ? 'border-indigo-400 bg-indigo-50 cursor-pointer'
+                  : 'border-slate-200 hover:border-indigo-300 bg-slate-50/50 cursor-pointer hover:bg-indigo-50/30'
+            )}
+          >
+            <input ref={fileRef} type="file" accept={ACCEPTED_TYPES} className="hidden" onChange={handleFileChange} />
+
+            {selectedFile ? (
+              <div className="flex items-center gap-4">
+                <div className="w-14 h-14 rounded-2xl bg-indigo-100 flex items-center justify-center text-3xl flex-shrink-0">
+                  {TYPE_EMOJI_MAP[type]}
+                </div>
+                <div className="text-left flex-1 min-w-0">
+                  <p className="font-black text-sm text-slate-800 truncate">{selectedFile.name}</p>
+                  <p className="text-xs text-slate-500 font-medium mt-0.5">{formatBytes(selectedFile.size)} · {TYPE_EMOJI_MAP[type]} {type.charAt(0).toUpperCase() + type.slice(1)}</p>
+                  {isUploading && (
+                    <div className="mt-2 space-y-1">
+                      <div className="w-full h-1.5 bg-indigo-100 rounded-full overflow-hidden">
+                        <div className="h-full bg-indigo-500 transition-all duration-300 rounded-full" style={{ width: `${uploadProgress}%` }} />
+                      </div>
+                      <p className="text-[10px] font-black text-indigo-500 uppercase tracking-widest">Enviando... {uploadProgress}%</p>
+                    </div>
+                  )}
+                </div>
+                <button
+                  type="button"
+                  onClick={e => { e.stopPropagation(); setSelectedFile(null); setUploadProgress(0); if (fileRef.current) fileRef.current.value = ''; }}
+                  className="p-1.5 text-slate-300 hover:text-red-400 hover:bg-red-50 rounded-xl transition-colors flex-shrink-0"
+                >
+                  <X size={16} />
+                </button>
+              </div>
+            ) : (
+              <>
+                <Upload size={32} className={cn('mx-auto mb-3', dragOver ? 'text-indigo-500' : 'text-slate-300')} />
+                <p className="font-black text-slate-600 text-sm">Arraste um arquivo ou <span className="text-indigo-500 underline underline-offset-2">clique para selecionar</span></p>
+                <p className="text-xs text-slate-400 mt-1.5">PDF, DOCX, PPTX, MP4, MP3, PNG, JPG, ZIP…</p>
+              </>
             )}
           </div>
 
-          <div className="text-center text-slate-300 text-xs font-bold uppercase tracking-widest">— ou adicione um link —</div>
-          <input type="url" value={url} onChange={e => setUrl(e.target.value)}
-            placeholder="https://youtube.com/..."
-            className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm font-bold outline-none focus:ring-2 focus:ring-indigo-200" />
+          {!selectedFile && (
+            <>
+              <div className="flex items-center gap-3 text-slate-300">
+                <div className="flex-1 h-px bg-slate-100" />
+                <span className="text-xs font-bold uppercase tracking-widest flex-shrink-0">ou adicione um link</span>
+                <div className="flex-1 h-px bg-slate-100" />
+              </div>
+              <input type="url" value={urlInput} onChange={e => setUrlInput(e.target.value)}
+                placeholder="https://youtube.com/..."
+                className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm font-bold outline-none focus:ring-2 focus:ring-indigo-200" />
+            </>
+          )}
 
+          {/* ── Form Fields ─────────────────────────────────────── */}
           <div>
             <label className="block text-xs font-black uppercase text-slate-400 tracking-widest mb-2">Título <span className="text-red-400">*</span></label>
             <input value={title} onChange={e => setTitle(e.target.value)}
@@ -353,8 +483,16 @@ const UploadModal: React.FC<{
           </div>
 
           <div className="flex gap-3 pt-2">
-            <Button type="button" variant="outline" onClick={onClose} className="flex-1 rounded-xl py-3">Cancelar</Button>
-            <Button type="submit" variant="primary" className="flex-1 rounded-xl py-3 shadow shadow-indigo-200">Adicionar à Biblioteca</Button>
+            <Button type="button" variant="outline" onClick={onClose} disabled={isUploading} className="flex-1 rounded-xl py-3">Cancelar</Button>
+            <Button type="submit" variant="primary" disabled={isUploading} className="flex-1 rounded-xl py-3 shadow shadow-indigo-200 gap-2">
+              {isUploading ? (
+                <><div className="w-4 h-4 border-2 border-white/40 border-t-white rounded-full animate-spin" /> Enviando...</>
+              ) : selectedFile ? (
+                <><Upload size={15} /> Enviar e Adicionar</>
+              ) : (
+                'Adicionar à Biblioteca'
+              )}
+            </Button>
           </div>
         </form>
       </div>

@@ -30,12 +30,12 @@ export const ALL_ACHIEVEMENTS = [
   {
     id: 'fe6dadec-04af-441b-b528-4a6194267c2e',
     title: "Caçador de Recompensas",
-    description: "Acumulou suas primeiras 50 moedas. O cofre está abrindo.",
+    description: "Acumulou suas primeiras 1000 moedas. O cofre está abrindo.",
     icon: "🪙",
     rewardXp: 50,
     rewardCoins: 0,
     category: "moedas",
-    requiredCount: 50,
+    requiredCount: 1000,
     criteria: "coins"
   },
   {
@@ -107,12 +107,12 @@ export const ALL_ACHIEVEMENTS = [
   {
     id: '372874cb-1d31-4cac-8016-12a79a321d75',
     title: "Princípio da Grandeza",
-    description: "Ultrapassou a barreira dos 100 XP. Que venham as milhares!",
+    description: "Ultrapassou a barreira dos 20000 XP. Que venham as milhares!",
     icon: "✨",
     rewardXp: 50,
     rewardCoins: 25,
     category: "xp",
-    requiredCount: 100,
+    requiredCount: 20000,
     criteria: "xp"
   },
   {
@@ -327,12 +327,12 @@ export const ALL_ACHIEVEMENTS = [
   {
     id: '72672a34-f3f6-4fb0-a393-181965c957cc',
     title: "Centelha Mágica",
-    description: "Acumulou 500 pontos de experiência no total. Rumo ao topo!",
+    description: "Acumulou 5000 pontos de experiência no total. Rumo ao topo!",
     icon: "💫",
     rewardXp: 150,
     rewardCoins: 75,
     category: "xp",
-    requiredCount: 500,
+    requiredCount: 5000,
     criteria: "xp"
   },
   {
@@ -668,12 +668,12 @@ export const ALL_ACHIEVEMENTS = [
   {
     id: '03a80c1c-c267-40b1-adf2-c74b390afe5a',
     title: "Dono do Shoppping",
-    description: "Distribuiu felicidade gastando 500 preciosas moedas na economia local.",
+    description: "Distribuiu felicidade gastando 5000 preciosas moedas na economia local.",
     icon: "💳",
     rewardXp: 300,
     rewardCoins: 0,
     category: "loja",
-    requiredCount: 500,
+    requiredCount: 5000,
     criteria: "coins_spent"
   },
   {
@@ -1194,6 +1194,144 @@ export const ALL_ACHIEVEMENTS = [
     category: "duelos",
     requiredCount: 50,
     criteria: "duel_wins"
+  },
+
+  // ── Duelo Solo ──────────────────────────────────────────────────────────────
+  {
+    id: 'b2c3d4e5-f6a7-8901-bcde-f12345678901',
+    title: "Lobo Solitário",
+    description: "Completou seu primeiro Duelo Solo. O aprendizado começa dentro de você!",
+    icon: "🎮",
+    rewardXp: 80,
+    rewardCoins: 40,
+    category: "duelos",
+    requiredCount: 1,
+    criteria: "duel_solo_completed"
+  },
+  {
+    id: 'b2c3d4e5-f6a7-8901-bcde-f12345678902',
+    title: "Solitário Implacável",
+    description: "10 Duelos Solo concluídos. Você treina sério e sem distrações!",
+    icon: "🧘",
+    rewardXp: 300,
+    rewardCoins: 150,
+    category: "duelos",
+    requiredCount: 10,
+    criteria: "duel_solo_completed"
+  },
+  {
+    id: 'b2c3d4e5-f6a7-8901-bcde-f12345678903',
+    title: "Mestre das Sombras",
+    description: "50 Duelos Solo! Forjado na solidão, invencível no confronto.",
+    icon: "🌑",
+    rewardXp: 1000,
+    rewardCoins: 500,
+    category: "duelos",
+    requiredCount: 50,
+    criteria: "duel_solo_completed"
+  },
+  {
+    id: 'b2c3d4e5-f6a7-8901-bcde-f12345678904',
+    title: "Ermitão da Arena",
+    description: "100 Duelos Solo! Disciplina pura. Um guerreiro forjado em treino.",
+    icon: "⛩️",
+    rewardXp: 2500,
+    rewardCoins: 1200,
+    category: "duelos",
+    requiredCount: 100,
+    criteria: "duel_solo_completed"
+  },
+
+  // ── Duelo Desafio (Oponente) ─────────────────────────────────────────────────
+  {
+    id: 'c3d4e5f6-a7b8-9012-cdef-123456789001',
+    title: "O Desafiador",
+    description: "Enfrentou um adversário real pela primeira vez. A arena pede sangue!",
+    icon: "⚔️",
+    rewardXp: 120,
+    rewardCoins: 60,
+    category: "duelos",
+    requiredCount: 1,
+    criteria: "duel_challenge_completed"
+  },
+  {
+    id: 'c3d4e5f6-a7b8-9012-cdef-123456789002',
+    title: "Caçador de Crânios",
+    description: "10 desafios contra oponentes reais. Você não foge de ninguém!",
+    icon: "💀",
+    rewardXp: 400,
+    rewardCoins: 200,
+    category: "duelos",
+    requiredCount: 10,
+    criteria: "duel_challenge_completed"
+  },
+  {
+    id: 'c3d4e5f6-a7b8-9012-cdef-123456789003',
+    title: "Gladiador Temido",
+    description: "25 desafios disputados. Seu nome ecoa no corredor dos campeões!",
+    icon: "🛡️",
+    rewardXp: 900,
+    rewardCoins: 450,
+    category: "duelos",
+    requiredCount: 25,
+    criteria: "duel_challenge_completed"
+  },
+  {
+    id: 'c3d4e5f6-a7b8-9012-cdef-123456789004',
+    title: "Lenda dos Desafios",
+    description: "75 duelos contra rivais reais. Uma carreira épica na arena!",
+    icon: "🏆",
+    rewardXp: 2000,
+    rewardCoins: 1000,
+    category: "duelos",
+    requiredCount: 75,
+    criteria: "duel_challenge_completed"
+  },
+
+  // ── Duelo Ao Vivo (Realtime) ─────────────────────────────────────────────────
+  {
+    id: 'd4e5f6a7-b8c9-0123-defa-234567890001',
+    title: "Iniciante Ao Vivo",
+    description: "Participou da sua primeira batalha em tempo real. Adrenalina total!",
+    icon: "⚡",
+    rewardXp: 150,
+    rewardCoins: 75,
+    category: "duelos",
+    requiredCount: 1,
+    criteria: "duel_realtime_completed"
+  },
+  {
+    id: 'd4e5f6a7-b8c9-0123-defa-234567890002',
+    title: "Combatente em Tempo Real",
+    description: "5 batalhas ao vivo disputadas. O ping da vitória é sua música favorita!",
+    icon: "🔴",
+    rewardXp: 350,
+    rewardCoins: 175,
+    category: "duelos",
+    requiredCount: 5,
+    criteria: "duel_realtime_completed"
+  },
+  {
+    id: 'd4e5f6a7-b8c9-0123-defa-234567890003',
+    title: "Gladiador Digital",
+    description: "20 batalhas simultâneas ao vivo. Reflexos de campeão!",
+    icon: "🎯",
+    rewardXp: 800,
+    rewardCoins: 400,
+    category: "duelos",
+    requiredCount: 20,
+    criteria: "duel_realtime_completed"
+  },
+  {
+    id: 'd4e5f6a7-b8c9-0123-defa-234567890004',
+    title: "Rei da Transmissão",
+    description: "50 batalhas ao vivo! Você nasceu para a arena em tempo real!",
+    icon: "👑",
+    rewardXp: 2000,
+    rewardCoins: 1000,
+    category: "duelos",
+    requiredCount: 50,
+    criteria: "duel_realtime_completed"
   }
 ];
 
@@ -1201,9 +1339,17 @@ export const ALL_ACHIEVEMENTS = [
 // MISSION TEMPLATES (for auto-generation)
 // ============================================================
 const DAILY_TEMPLATES = [
-  // Ação e Duelos
+  // Duelos Gerais
   { title: 'Primeiro Sangue', description: 'Complete 1 épico Duelo do Dia.', targetCount: 1, rewardXp: 80, rewardCoins: 40, criteria: 'duel_completed' },
   { title: 'Arena de Titãs', description: 'Desafie seus colegas e complete 3 Duelos.', targetCount: 3, rewardXp: 150, rewardCoins: 80, criteria: 'duel_completed' },
+  // Solo
+  { title: 'Treino Solitário', description: 'Complete 1 Duelo Solo para aquecer a mente.', targetCount: 1, rewardXp: 60, rewardCoins: 30, criteria: 'duel_solo_completed' },
+  { title: 'Dois Rounds Solo', description: 'Complete 2 Duelos Solo hoje. Sem distrações!', targetCount: 2, rewardXp: 110, rewardCoins: 55, criteria: 'duel_solo_completed' },
+  // Desafio
+  { title: 'O Cartel', description: 'Desafie 1 colega no Duelo de verdade hoje.', targetCount: 1, rewardXp: 90, rewardCoins: 45, criteria: 'duel_challenge_completed' },
+  { title: 'Dois Rivais', description: 'Enfrente 2 adversários reais hoje. Sem medo!', targetCount: 2, rewardXp: 160, rewardCoins: 80, criteria: 'duel_challenge_completed' },
+  // Ao Vivo
+  { title: 'Batalha ao Vivo', description: 'Participe de 1 Duelo Ao Vivo hoje!', targetCount: 1, rewardXp: 120, rewardCoins: 60, criteria: 'duel_realtime_completed' },
 
   // Atividades e Resoluções
   { title: 'Despertar Neuronal', description: 'Conclua a sua primeira atividade hoje. O cérebro agradece!', targetCount: 1, rewardXp: 50, rewardCoins: 25, criteria: 'activity_completed' },
@@ -1231,9 +1377,18 @@ const DAILY_TEMPLATES = [
 ];
 
 const WEEKLY_TEMPLATES = [
-  // Ação e Duelos
+  // Duelos Gerais
   { title: 'Gladiador Cibernético', description: 'Participe de 7 duelos esta semana.', targetCount: 7, rewardXp: 400, rewardCoins: 200, criteria: 'duel_completed' },
   { title: 'Torneio dos Campeões', description: 'Mostre seu valor provando a força em 15 combates de Duelo.', targetCount: 15, rewardXp: 800, rewardCoins: 400, criteria: 'duel_completed' },
+  // Solo
+  { title: 'Semana do Ermitão', description: 'Complete 5 Duelos Solo esta semana.', targetCount: 5, rewardXp: 280, rewardCoins: 140, criteria: 'duel_solo_completed' },
+  { title: 'Rotina do Solitário', description: 'Complete 10 Duelos Solo esta semana.', targetCount: 10, rewardXp: 550, rewardCoins: 275, criteria: 'duel_solo_completed' },
+  // Desafio
+  { title: 'Semana de Combate', description: 'Desafie 5 oponentes reais esta semana.', targetCount: 5, rewardXp: 320, rewardCoins: 160, criteria: 'duel_challenge_completed' },
+  { title: 'Caçador Semanal', description: 'Derrube 10 rivais nos duelos de desafio esta semana!', targetCount: 10, rewardXp: 600, rewardCoins: 300, criteria: 'duel_challenge_completed' },
+  // Ao Vivo
+  { title: 'Semana Ao Vivo', description: 'Participe de 3 batalhas ao vivo esta semana.', targetCount: 3, rewardXp: 350, rewardCoins: 175, criteria: 'duel_realtime_completed' },
+  { title: 'Transmissão Semanal', description: 'Dispute 6 batalhas ao vivo esta semana. Que show!', targetCount: 6, rewardXp: 650, rewardCoins: 325, criteria: 'duel_realtime_completed' },
 
   // Atividades e Resoluções
   { title: 'Maratona Intelectual', description: 'Complete 10 atividades nesta semana.', targetCount: 10, rewardXp: 300, rewardCoins: 150, criteria: 'activity_completed' },
@@ -1260,9 +1415,18 @@ const WEEKLY_TEMPLATES = [
 ];
 
 const EPIC_TEMPLATES = [
-  // Ação e Duelos
+  // Duelos Gerais
   { title: 'Lenda do Coliseu', description: 'Prove ser indestrutível completando 40 duelos no mês.', targetCount: 40, rewardXp: 1500, rewardCoins: 800, criteria: 'duel_completed' },
   { title: 'A Fúria dos Deuses', description: 'Consolide seu império com incriveis 100 duelos finalizados!', targetCount: 100, rewardXp: 4000, rewardCoins: 2000, criteria: 'duel_completed' },
+  // Solo
+  { title: 'Monge do Conhecimento', description: 'Complete 30 Duelos Solo este mês. A solidão é sua força!', targetCount: 30, rewardXp: 1200, rewardCoins: 600, criteria: 'duel_solo_completed' },
+  { title: 'Asceta da Arena', description: 'Impressionantes 80 Duelos Solo! Um campeão de dentro para fora.', targetCount: 80, rewardXp: 3500, rewardCoins: 1800, criteria: 'duel_solo_completed' },
+  // Desafio
+  { title: 'Conquistador de Rivais', description: 'Derrote 20 rivais reais em desafios este mês!', targetCount: 20, rewardXp: 1400, rewardCoins: 700, criteria: 'duel_challenge_completed' },
+  { title: 'O Terror da Arena', description: '50 rivais enfrentados. Seu nome é temido por todos!', targetCount: 50, rewardXp: 3800, rewardCoins: 1900, criteria: 'duel_challenge_completed' },
+  // Ao Vivo
+  { title: 'Maratona Ao Vivo', description: 'Dispute 15 batalhas ao vivo neste mês. Pura adrenalina!', targetCount: 15, rewardXp: 1600, rewardCoins: 800, criteria: 'duel_realtime_completed' },
+  { title: 'Rei da Arena em Tempo Real', description: '40 batalhas ao vivo! Você domina o tempo real!', targetCount: 40, rewardXp: 4200, rewardCoins: 2100, criteria: 'duel_realtime_completed' },
 
   // Atividades e Resoluções
   { title: 'O Sábio Produtivo', description: 'Finalize impressionantes 50 atividades este mês.', targetCount: 50, rewardXp: 2000, rewardCoins: 1000, criteria: 'activity_completed' },
@@ -1295,15 +1459,19 @@ const EPIC_TEMPLATES = [
 export async function seedAchievements() {
   const total = ALL_ACHIEVEMENTS.length;
   const { data: existing } = await supabase.from('achievements').select('id');
-  if (existing && existing.length === total) {
-    // DB already has the exact same count as our definitions — skip re-seed
-    return;
-  }
-  if (existing && existing.length > 0) {
-    console.log(`[GameSeeder] Found ${existing.length} achievements in DB but definitions have ${total}. Wiping for clean re-seed...`);
-    await supabase.from('achievements').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+  const existingCount = existing?.length ?? 0;
+
+  if (existingCount === total) {
+    // Same count — still upsert to catch any definition changes
+    // but skip if IDs all match (fast path)
+    const existingIds = new Set((existing || []).map((e: any) => e.id));
+    const allMatch = ALL_ACHIEVEMENTS.every(a => existingIds.has(a.id));
+    if (allMatch) return; // Nothing new to add
   }
 
+  console.log(`[GameSeeder] Syncing achievements: DB has ${existingCount}, definitions have ${total}. Upserting...`);
+
+  // Always upsert — never delete (preserves student_achievements foreign keys)
   const toUpsert = ALL_ACHIEVEMENTS.map(ach => ({
     id: ach.id,
     title: ach.title,
@@ -1314,11 +1482,11 @@ export async function seedAchievements() {
     rewardCoins: ach.rewardCoins
   }));
 
-  const { error } = await supabase.from('achievements').upsert(toUpsert);
+  const { error } = await supabase.from('achievements').upsert(toUpsert, { onConflict: 'id' });
   if (error) {
     console.error('[GameSeeder] Fail to seed achievements', error);
   } else {
-    console.log('[GameSeeder] Seeded 100 achievements.');
+    console.log(`[GameSeeder] Seeded ${total} achievements successfully.`);
   }
 }
 
@@ -1473,7 +1641,8 @@ export async function checkAndUnlockAchievements(studentId: string) {
   // ── Batch fetch all extra counts in parallel ────────────────────────────────
   const [
     actRes, misRes, invRes, pathStartRes, pathCompRes,
-    diaryRes, diaryAiRes, duelCompRes, duelWinRes, userRes,
+    diaryRes, diaryAiRes, duelCompRes, duelWinRes,
+    userRes,
   ] = await Promise.all([
     supabase.from('student_activity_results')
       .select('id', { count: 'exact', head: true })
@@ -1510,6 +1679,25 @@ export async function checkAndUnlockAchievements(studentId: string) {
       .single(),
   ]);
 
+  // Fetch duel sub-mode counts using 2-step approach (join queries unreliable in PostgREST)
+  const countForCriteria = async (criteria: string): Promise<number> => {
+    const { data: mIds } = await supabase.from('missions').select('id').eq('criteria', criteria);
+    if (!mIds || mIds.length === 0) return 0;
+    const { count } = await supabase
+      .from('student_missions')
+      .select('id', { count: 'exact', head: true })
+      .eq('studentId', studentId)
+      .in('missionId', mIds.map((m: any) => m.id))
+      .not('completedAt', 'is', null);
+    return count ?? 0;
+  };
+
+  const [duelSoloCount, duelChalCount, duelRtCount] = await Promise.all([
+    countForCriteria('duel_solo_completed'),
+    countForCriteria('duel_challenge_completed'),
+    countForCriteria('duel_realtime_completed'),
+  ]);
+
   const counts = {
     activitiesCorrect: actRes.count ?? 0,
     missionsCompleted: misRes.count ?? 0,
@@ -1520,6 +1708,9 @@ export async function checkAndUnlockAchievements(studentId: string) {
     diaryAiEntries: diaryAiRes.count ?? 0,
     duelCompleted: duelCompRes.count ?? 0,
     duelWins: duelWinRes.count ?? 0,
+    duelSoloCompleted: duelSoloCount,
+    duelChallengeCompleted: duelChalCount,
+    duelRealtimeCompleted: duelRtCount,
     daysRegistered: userRes.data?.createdAt
       ? Math.floor((Date.now() - new Date(userRes.data.createdAt).getTime()) / 86400000)
       : 0,
@@ -1555,10 +1746,13 @@ export async function checkAndUnlockAchievements(studentId: string) {
       case 'diary_entries':     return counts.diaryEntries;
       case 'diary_ai_entry':    return counts.diaryAiEntries > 0 ? 1 : 0;
       case 'diary_tags':        return counts.diaryEntries;
-      case 'duel_completed':    return counts.duelCompleted;
-      case 'duel_wins':         return counts.duelWins;
+      case 'duel_completed':          return counts.duelCompleted;
+      case 'duel_wins':                return counts.duelWins;
+      case 'duel_solo_completed':      return counts.duelSoloCompleted;
+      case 'duel_challenge_completed': return counts.duelChallengeCompleted;
+      case 'duel_realtime_completed':  return counts.duelRealtimeCompleted;
       case 'all_achievements':  return alreadyUnlockedCount;
-      case 'coins_spent':       return Math.max(0, (stats.xp * 2) - stats.coins);
+      case 'coins_spent':       return Math.max(0, Math.floor(stats.xp * 0.5) - stats.coins);
       // Event-driven: unlocked at activity time, not computable here
       default:                  return 0;
     }
@@ -1583,7 +1777,10 @@ export async function checkAndUnlockAchievements(studentId: string) {
     achievementId: item.achievementId,
     unlockedAt: item.unlockedAt,
   }));
-  await supabase.from('student_achievements').insert(inserts);
+  await supabase.from('student_achievements').upsert(inserts, {
+    onConflict: 'studentId,achievementId',
+    ignoreDuplicates: true,
+  });
   console.log(`[GameSeeder] Unlocked ${toUnlock.length} achievements for ${studentId}`);
 
   // Notify student for each unlocked achievement

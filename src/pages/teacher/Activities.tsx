@@ -1033,16 +1033,20 @@ const CreateActivityModal: React.FC<{
   });
 
   const [noExitAllowed, setNoExitAllowed] = useState(false);
+  const [isPinnedToClass, setIsPinnedToClass] = useState(true);
   const watchedDuration = watch('duration', '0');
+  const watchedClassId = watch('classId', '');
 
   const onSubmit = async (data: ActivityFormData) => {
     const durationLabel = !data.duration || data.duration === '0' ? 'Sem limite' : `${data.duration} min`;
     const selectedClass = classes.find((c: any) => c.id === data.classId);
     const activityGrade = selectedClass?.grade || 'Todas as Séries';
     const now = new Date().toISOString();
+    // pinnedToClass only matters when a class is selected
+    const pinnedToClass = !!data.classId && isPinnedToClass;
     const newActivity = {
       id: crypto.randomUUID(), ...data, duration: durationLabel, grade: activityGrade,
-      questions: [], aiAssisted: false, noExitAllowed, teacherId, createdAt: now,
+      questions: [], aiAssisted: false, noExitAllowed, pinnedToClass, teacherId, createdAt: now,
     };
     await saveActivityToStorage(newActivity);
 
@@ -1184,6 +1188,32 @@ const CreateActivityModal: React.FC<{
               </p>
             </div>
           </div>
+
+          {/* ── Fixar na Turma toggle (only when a class is selected) ── */}
+          {watchedClassId && (
+            <div
+              onClick={() => setIsPinnedToClass(v => !v)}
+              className={cn(
+                'flex items-start gap-4 rounded-2xl border-2 p-4 cursor-pointer transition-all select-none',
+                isPinnedToClass ? 'border-indigo-400 bg-indigo-50 shadow-sm' : 'border-slate-100 bg-slate-50 hover:border-slate-200'
+              )}
+            >
+              <div className={cn('mt-0.5 w-10 h-5 rounded-full flex-shrink-0 relative transition-all', isPinnedToClass ? 'bg-indigo-500' : 'bg-slate-200')}>
+                <div className={cn('absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform duration-300', isPinnedToClass ? 'translate-x-5' : 'translate-x-0')} />
+              </div>
+              <div className="flex-1 space-y-0.5">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="text-sm font-black text-slate-800">📌 Fixar na Turma</span>
+                  {isPinnedToClass && <span className="text-[9px] font-black bg-indigo-500 text-white px-2 py-0.5 rounded-lg uppercase tracking-widest">ATIVO</span>}
+                </div>
+                <p className="text-xs text-slate-500 font-medium leading-snug">
+                  {isPinnedToClass
+                    ? '✅ Novos alunos que entrarem na turma depois também verão esta atividade automaticamente.'
+                    : 'Quando ativado: a atividade fica disponível para todos os alunos atuais e futuros da turma.'}
+                </p>
+              </div>
+            </div>
+          )}
 
           <div className="flex gap-3 pt-2">
             <Button type="button" variant="outline" onClick={onClose} className="flex-1 rounded-xl py-3">Cancelar</Button>
@@ -1489,6 +1519,12 @@ export const Activities: React.FC = () => {
                   {act.aiAssisted && (
                     <span className="text-[10px] font-black text-violet-600 bg-violet-50 border border-violet-100 px-2 py-1 rounded-lg flex-shrink-0 uppercase tracking-wider">
                       ✨ IA
+                    </span>
+                  )}
+                  {/* Pinned badge */}
+                  {act.pinnedToClass && (
+                    <span className="text-[10px] font-black text-indigo-600 bg-indigo-50 border border-indigo-100 px-2 py-1 rounded-lg flex-shrink-0 uppercase tracking-wider" title="Fixada na turma">
+                      📌 Fixada
                     </span>
                   )}
                 </div>

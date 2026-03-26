@@ -33,7 +33,7 @@ export interface Mission {
   targetCount: number;
   rewardXp: number;
   rewardCoins: number;
-  criteria?: 'activity_completed' | 'question_correct' | 'login' | 'streak' | 'path_started' | 'path_completed' | 'tutor_question' | 'diary_entry' | 'library_access' | 'store_visit' | 'ranking_visit' | 'activity_feedback' | 'avatar_customized' | 'duel_completed';
+  criteria?: 'activity_completed' | 'question_correct' | 'login' | 'streak' | 'path_started' | 'path_completed' | 'tutor_question' | 'diary_entry' | 'library_access' | 'store_visit' | 'ranking_visit' | 'activity_feedback' | 'avatar_customized' | 'duel_completed' | 'duel_solo_completed' | 'duel_challenge_completed' | 'duel_realtime_completed';
   expiresAt?: string;
 
   requiredLevel?: number;

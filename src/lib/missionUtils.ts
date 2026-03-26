@@ -8,7 +8,7 @@ import { updateGamificationStats } from './gamificationUtils';
  */
 export async function incrementMissionProgress(
   studentId: string, 
-  criteria: 'activity_completed' | 'question_correct' | 'login' | 'streak' | 'path_started' | 'path_completed' | 'tutor_question' | 'diary_entry' | 'library_access' | 'store_visit' | 'ranking_visit' | 'duel_completed',
+  criteria: 'activity_completed' | 'question_correct' | 'login' | 'streak' | 'path_started' | 'path_completed' | 'tutor_question' | 'diary_entry' | 'library_access' | 'store_visit' | 'ranking_visit' | 'duel_completed' | 'duel_solo_completed' | 'duel_challenge_completed' | 'duel_realtime_completed',
   amount: number = 1
 ) {
   if (!studentId) return;

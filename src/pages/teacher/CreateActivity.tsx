@@ -290,6 +290,7 @@ export const CreateActivity: React.FC = () => {
   const [quantity, setQuantity] = useState(5);
   const [duration, setDuration] = useState('0');
   const [noExitAllowed, setNoExitAllowed] = useState(false);
+  const [isPinnedToClass, setIsPinnedToClass] = useState(true);
   const [activityType, setActivityType] = useState<ActivityTypeId>('objetiva');
   const [isGenerating, setIsGenerating] = useState(false);
   const [step, setStep] = useState(0);
@@ -403,6 +404,7 @@ export const CreateActivity: React.FC = () => {
       subject: subjectLabel, grade, type: activityType, difficulty,
       duration: durationLabel,
       noExitAllowed,
+      pinnedToClass: !!classId && isPinnedToClass,
       description: `${typeLabel} sobre ${topic}. Turma: ${selectedClass?.name || 'Todas'}. Gerado por IA.`,
       classId: classId || undefined, 
       questions: generatedQuestions, 
@@ -520,6 +522,69 @@ export const CreateActivity: React.FC = () => {
   const addQuestion = (q: Question) => {
     setGeneratedQuestions(prev => [...prev, q]);
     setShowAddPanel(false);
+  };
+
+  const [isGeneratingSingle, setIsGeneratingSingle] = useState(false);
+
+  const handleGenerateSingleQuestion = async () => {
+    if (!subject || !topic || !grade) {
+      toast.error('Preencha disciplina, tópico e série para gerar uma questão extra.');
+      return;
+    }
+    setIsGeneratingSingle(true);
+    setShowAddPanel(false);
+    setEditingIdx(null);
+    try {
+      const selectedClass = myClasses.find(c => c.id === classId);
+      const actTypeLabel = ACTIVITY_TYPES.find(t => t.id === activityType)?.label || activityType;
+      const genType = ['simulado', 'prova_bimestral', 'prova_mensal'].includes(activityType) ? 'objetiva' : activityType;
+      // Pass already-generated question texts so Gemini avoids duplicates
+      const existingTexts = generatedQuestions.map(q => q.text);
+      const data = await callGenerateActivity({
+        topic, subject, grade,
+        type: genType,
+        activityTypeLabel: actTypeLabel,
+        difficulty,
+        count: 1,
+        className: selectedClass ? `${selectedClass.name} (${selectedClass.grade || grade})` : grade,
+        seed: Date.now(),
+        userId: user?.id,
+        existingQuestions: existingTexts,
+      });
+
+      const rawQ = data.questions?.[0];
+      if (!rawQ) throw new Error('A IA não retornou nenhuma questão.');
+
+      // Apply same shuffle logic as handleGenerate for objetiva questions
+      let newQ: Question;
+      if (genType !== 'dissertativa' && rawQ.options?.length) {
+        const opts: string[] = [...rawQ.options];
+        const correctIdx = parseInt(rawQ.answer ?? '0', 10);
+        const indices = opts.map((_, i) => i);
+        for (let i = indices.length - 1; i > 0; i--) {
+          const j = Math.floor(Math.random() * (i + 1));
+          [indices[i], indices[j]] = [indices[j], indices[i]];
+        }
+        const shuffledOpts = indices.map(i => opts[i]);
+        const newCorrectIdx = indices.indexOf(correctIdx);
+        newQ = {
+          id: crypto.randomUUID(), type: rawQ.type || 'objetiva',
+          text: rawQ.text, options: shuffledOpts, answer: String(newCorrectIdx),
+        };
+      } else {
+        newQ = {
+          id: crypto.randomUUID(), type: rawQ.type || 'dissertativa',
+          text: rawQ.text, answer: rawQ.answer,
+        };
+      }
+
+      setGeneratedQuestions(prev => [...prev, newQ]);
+      toast.success('⚡ Nova questão gerada pela IA!');
+    } catch (err: any) {
+      toast.error(err.message || 'Erro ao gerar questão. Tente novamente.');
+    } finally {
+      setIsGeneratingSingle(false);
+    }
   };
 
   const defaultQType = activityType === 'dissertativa' ? 'dissertativa' : 'objetiva';
@@ -719,6 +784,42 @@ export const CreateActivity: React.FC = () => {
               </div>
             </div>
 
+            {/* Fixar na Turma toggle — only shown when a class is selected */}
+            {classId && (
+              <div
+                onClick={() => setIsPinnedToClass(v => !v)}
+                className={cn(
+                  'relative z-10 flex items-start gap-4 rounded-2xl border-2 p-5 cursor-pointer transition-all select-none',
+                  isPinnedToClass
+                    ? 'border-indigo-400 bg-indigo-50 shadow-md shadow-indigo-100'
+                    : 'border-slate-100 bg-slate-50 hover:border-slate-200'
+                )}
+              >
+                <div className={cn(
+                  'mt-0.5 w-11 h-6 rounded-full flex-shrink-0 transition-all relative',
+                  isPinnedToClass ? 'bg-indigo-500' : 'bg-slate-200'
+                )}>
+                  <div className={cn(
+                    'absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full shadow transition-transform duration-300',
+                    isPinnedToClass ? 'translate-x-5' : 'translate-x-0'
+                  )} />
+                </div>
+                <div className="flex-1 space-y-1">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="text-sm font-black text-slate-800">📌 Fixar na Turma</span>
+                    {isPinnedToClass && (
+                      <span className="text-[9px] font-black uppercase tracking-widest bg-indigo-500 text-white px-2 py-0.5 rounded-lg">ATIVO</span>
+                    )}
+                  </div>
+                  <p className="text-xs text-slate-500 font-medium leading-snug">
+                    {isPinnedToClass
+                      ? '✅ Novos alunos que entrarem na turma depois também verão esta atividade automaticamente.'
+                      : 'Quando ativado: a atividade fica disponível para todos os alunos atuais e futuros da turma.'}
+                  </p>
+                </div>
+              </div>
+            )}
+
             <button onClick={handleGenerate} disabled={!subject || !topic || !grade || isGenerating}
               className="w-full bg-slate-900 hover:bg-black disabled:opacity-50 disabled:cursor-not-allowed text-white font-black py-6 rounded-[1.5rem] transition-all shadow-2xl hover:shadow-primary-500/20 flex items-center justify-center gap-3 mt-2 text-lg relative overflow-hidden group">
               <AnimatePresence mode="wait">
@@ -872,11 +973,25 @@ export const CreateActivity: React.FC = () => {
                           </AnimatePresence>
 
                           {!showAddPanel && (
-                            <button
-                              onClick={() => { setShowAddPanel(true); setEditingIdx(null); }}
-                              className="w-full py-3 border-2 border-dashed border-slate-200 hover:border-primary-400 text-slate-400 hover:text-primary-500 font-bold text-sm rounded-2xl transition-all flex items-center justify-center gap-2">
-                              <Plus size={16} /> Adicionar Questão
-                            </button>
+                            <div className="flex gap-2">
+                              <button
+                                onClick={() => { setShowAddPanel(true); setEditingIdx(null); }}
+                                className="flex-1 py-3 border-2 border-dashed border-slate-200 hover:border-primary-400 text-slate-400 hover:text-primary-500 font-bold text-sm rounded-2xl transition-all flex items-center justify-center gap-2"
+                              >
+                                <Plus size={16} /> Adicionar Questão
+                              </button>
+                              <button
+                                onClick={handleGenerateSingleQuestion}
+                                disabled={isGeneratingSingle}
+                                className="flex-1 py-3 border-2 border-dashed border-primary-300 hover:border-primary-500 bg-primary-50/60 hover:bg-primary-50 text-primary-600 hover:text-primary-700 font-black text-sm rounded-2xl transition-all flex items-center justify-center gap-2 disabled:opacity-60 disabled:cursor-not-allowed"
+                              >
+                                {isGeneratingSingle ? (
+                                  <><div className="w-4 h-4 border-2 border-primary-400 border-t-transparent rounded-full animate-spin" /> Gerando...</>
+                                ) : (
+                                  <><Wand2 size={15} /> Gerar com IA</>
+                                )}
+                              </button>
+                            </div>
                           )}
                         </div>
                       </motion.div>

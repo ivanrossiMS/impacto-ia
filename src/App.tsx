@@ -37,6 +37,8 @@ const StudentDuelList = lazy(() => import('./pages/student/DuelList').then(m => 
 const StudentDuelCreate = lazy(() => import('./pages/student/DuelCreate').then(m => ({ default: m.DuelCreate })));
 const StudentDuelGame     = lazy(() => import('./pages/student/DuelGame').then(m => ({ default: m.DuelGame })));
 const StudentSoloDuelGame = lazy(() => import('./pages/student/SoloDuelGame').then(m => ({ default: m.SoloDuelGame })));
+const RealtimeDuelLobby   = lazy(() => import('./pages/student/RealtimeDuelLobby').then(m => ({ default: m.RealtimeDuelLobby })));
+const RealtimeDuelGame    = lazy(() => import('./pages/student/RealtimeDuelGame').then(m => ({ default: m.RealtimeDuelGame })));
 
 // ── LAZY-LOADED: Guardian pages ──
 const GuardianDashboard = lazy(() => import('./pages/guardian/Dashboard').then(m => ({ default: m.GuardianDashboard })));
@@ -168,6 +170,8 @@ function App() {
               <Route path="duels" element={<StudentDuelList />} />
               <Route path="duels/create" element={<StudentDuelCreate />} />
               <Route path="duels/solo" element={<StudentSoloDuelGame />} />
+              <Route path="duels/realtime" element={<RealtimeDuelLobby />} />
+              <Route path="duels/realtime/:roomId" element={<RealtimeDuelGame />} />
               <Route path="duels/:duelId" element={<StudentDuelGame />} />
             </Route>
 

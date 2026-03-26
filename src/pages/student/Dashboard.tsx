@@ -36,7 +36,7 @@ import { cn } from '../../lib/utils';
 import { incrementMissionProgress } from '../../lib/missionUtils';
 import { checkAndUnlockAchievements } from '../../lib/gameSeeder';
 import { AchievementUnlockModal, useAchievementUnlock } from '../../components/achievements/AchievementUnlockModal';
-
+import { useLiveStats } from '../../hooks/useLiveStats';
 
 
 
@@ -45,6 +45,9 @@ export const StudentDashboard: React.FC = () => {
   const user = useAuthStore(state => state.user);
   const { profile, fetchProfile, fetchCatalog, catalog } = useAvatarStore();
   const { firstInQueue, clearFirst, checkForNew } = useAchievementUnlock(user?.id);
+  // Live reactive stats — auto-updates via Dexie's useLiveQuery whenever
+  // SyncEngine writes from Supabase Realtime. No manual refresh needed.
+  const liveStats = useLiveStats(user?.id);
   
   const [dashboardData, setDashboardData] = useState<any>({
     stats: null,
@@ -405,7 +408,8 @@ export const StudentDashboard: React.FC = () => {
   if (loading) return <DashboardSkeleton />;
 
   // Safe fallback values - never block if stats is null
-  const safeStats = stats ?? { level: 1, xp: 0, coins: 0, streak: 0, lastStudyDate: '' };
+  // Prefer liveStats (reactive Dexie) over the manual fetch — auto-updates via Supabase Realtime
+  const safeStats = liveStats ?? (stats ?? { level: 1, xp: 0, coins: 0, streak: 0, lastStudyDate: '' });
   const levelProgress = getLevelProgress(safeStats.xp);
 
 
@@ -683,7 +687,7 @@ export const StudentDashboard: React.FC = () => {
 
             {/* Listagem dos Últimos 3 Duelos */}
             <div className="space-y-3 flex-1">
-              {duelData.recent.map((duel: any) => (
+              {[...new Map(duelData.recent.map((d: any) => [d.id, d])).values()].map((duel: any) => (
                 <div key={duel.id} className="flex items-center justify-between p-4 bg-slate-50/50 border border-slate-100 rounded-2xl hover:bg-white hover:border-special-100 transition-all group/duel">
                   <div className="flex flex-col">
                     <div className="flex items-center gap-2">

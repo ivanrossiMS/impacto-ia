@@ -92,15 +92,15 @@ export const AvatarStudio: React.FC = () => {
     .filter((url): url is string => !!url);
 
   return (
-    <div className="flex flex-col lg:flex-row h-[calc(100vh-120px)] bg-background gap-8 overflow-hidden">
+    <div className="flex flex-col lg:flex-row lg:h-[calc(100vh-120px)] bg-background gap-8 lg:overflow-hidden">
       
       {/* ── LEFT: MODERN LIGHT PREVIEW SHOWCASE ── */}
       <motion.div 
         initial={{ opacity: 0, x: -50 }}
         animate={{ opacity: 1, x: 0 }}
-      className="lg:w-1/2 flex flex-col h-full bg-slate-50/50 backdrop-blur-3xl rounded-[3rem] p-4 border border-slate-200/60 shadow-inner overflow-hidden relative"
+      className="lg:w-1/2 flex flex-col lg:h-full bg-slate-50/50 backdrop-blur-3xl rounded-[3rem] p-4 border border-slate-200/60 shadow-inner lg:overflow-hidden relative"
       >
-        <div className="flex-1 flex flex-col items-center justify-center relative overflow-hidden bg-white rounded-[2.5rem] shadow-[0_30px_60px_-12px_rgba(0,0,0,0.08)] group border border-slate-100">
+        <div className="lg:flex-1 flex flex-col items-center justify-center relative lg:overflow-hidden bg-white rounded-[2.5rem] shadow-[0_30px_60px_-12px_rgba(0,0,0,0.08)] group border border-slate-100 py-6">
           
           {/* Abstract Modern Background Elements */}
           <div className="absolute inset-0 bg-gradient-to-br from-primary-50/40 via-white to-special-50/30" />
@@ -151,30 +151,28 @@ export const AvatarStudio: React.FC = () => {
              </div>
           </motion.div>
 
-          {/* ── MOBILE avatar preview — idêntico ao Dashboard ── */}
+          {/* ── MOBILE avatar preview ── */}
           <motion.div
             key={'mob-' + profile.selectedAvatarId + profile.selectedBackgroundId}
             initial={{ scale: 0.9, opacity: 0, y: 20 }}
             animate={{ scale: 1, opacity: 1, y: 0 }}
             transition={{ type: 'spring', damping: 15, stiffness: 100 }}
-            className="md:hidden relative z-10"
+            className="md:hidden relative z-10 flex items-center justify-center py-4"
           >
             <div className="relative group/avatar">
-              {/* Outer Glow — igual ao Dashboard */}
+              {/* Outer Glow */}
               <div className="absolute inset-0 bg-primary-400/30 rounded-[3rem] blur-3xl animate-pulse opacity-0 group-hover:opacity-100 transition-opacity" />
-              {/* Main Container — branco grosso igual ao Dashboard */}
-              <div className="relative z-10 p-1.5 bg-white rounded-[3rem] shadow-[0_20px_50px_rgba(0,0,0,0.3)] border-2 border-white/20">
-                <div className="relative rounded-[2.5rem] bg-[#F8FAFF] overflow-hidden p-2">
-                  <AvatarComposer
-                    avatarUrl={activeAvatar?.assetUrl || '/avatars/default-impacto.png'}
-                    backgroundUrl={activeBg?.assetUrl}
-                    borderUrl={activeBorder?.assetUrl}
-                    stickerUrls={activeStickers}
-                    size="xl"
-                    className="relative z-10"
-                    isFloating={true}
-                  />
-                </div>
+              {/* Avatar — sem overflow-hidden para não cortar */}
+              <div className="relative z-10">
+                <AvatarComposer
+                  avatarUrl={activeAvatar?.assetUrl || '/avatars/default-impacto.png'}
+                  backgroundUrl={activeBg?.assetUrl}
+                  borderUrl={activeBorder?.assetUrl}
+                  stickerUrls={activeStickers}
+                  size="xl"
+                  className="relative z-10 drop-shadow-[0_20px_50px_rgba(0,0,0,0.25)]"
+                  isFloating={true}
+                />
               </div>
             </div>
           </motion.div>

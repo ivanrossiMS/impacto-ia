@@ -4,33 +4,34 @@ import { useGamificationStore } from '../store/gamification.store';
 
 /**
  * Gamification Utilities — IMPACTO-IA
- * Rebalanced v3: Power-curve leveling (1.8 exponent), level cap 100.
+ * Rebalanced v5: 100% easier — parabolic level curve + doubled rewards.
+ * Level curve: 40 × (L-1)²  →  L1-30 muito rápido, L31-100 progressivo.
  */
 
 // ─────────────────────────────────────────────────────────────────────────────
-// LEVEL CURVE  (Power Curve 1.8 — fast early, slow late)
-// Formula: XP needed to reach level L = round(80 * (L-1)^1.8)
+// LEVEL CURVE  (Quadratic / Parabola) — FAST EARLY, PROGRESSIVELY HARDER
+// Formula: XP to reach level L = round(40 × (L-1)²)
 //
-// Active student (~730 XP/day: 1 perfect activity + login)
-// Casual student (~80 XP/day: login + a few questions)
+// Typical rates: Casual ~500 XP/day | Médio ~1.400 XP/day | Ativo ~3.000 XP/day
 //
-// Level │ Total XP     │ Active    │ Casual
-// ──────┼──────────────┼───────────┼────────────
-// L 5   │   ~905 XP    │ 1.2 days  │ 11 days
-// L10   │  ~4,176 XP   │ 5.7 days  │ 52 days
-// L20   │ ~16,024 XP   │ 22 days   │ 6.7 months
-// L30   │ ~34,296 XP   │ 47 days   │ 14 months
-// L50   │ ~88,560 XP   │ 4 months  │ ~3.0 years
-// L75   │ ~186,000 XP  │ 8.5 months│ ~6.4 years
-// L100  │ ~312,240 XP  │ ~14 months│ max grinders only
+// Level │ XP Total  │ Casual (500/d) │ Médio (1400/d) │ Ativo (3000/d)
+// ──────┼───────────┼────────────────┼────────────────┼───────────────
+// L 5   │     640   │   1.3 dias     │  < 1 dia       │  < 1 dia
+// L10   │   3.240   │   6.5 dias     │  2.3 dias      │  1.1 dia
+// L15   │   7.840   │  15.7 dias     │  5.6 dias      │  2.6 dias
+// L20   │  14.440   │  29 dias       │  10 dias       │  4.8 dias
+// L30   │  33.640   │  67 dias       │  24 dias       │  11 dias
+// L50   │  96.040   │  6.4 meses     │  69 dias       │  32 dias
+// L75   │ 219.040   │  1.5 anos      │  5.2 meses     │  2.4 meses
+// L100  │ 392.040   │  2.6 anos      │  9.3 meses     │  4.4 meses
 // ─────────────────────────────────────────────────────────────────────────────
 
 export const MAX_LEVEL = 100;
 
 export function getXPForLevel(level: number): number {
   if (level <= 1) return 0;
-  if (level > MAX_LEVEL) return getXPForLevel(MAX_LEVEL); // hard cap
-  return Math.round(240 * Math.pow(level - 1, 1.8));  // 3× base (was 80) — harder progression
+  if (level > MAX_LEVEL) return getXPForLevel(MAX_LEVEL);
+  return Math.round(40 * Math.pow(level - 1, 2));  // pure quadratic — fast early, hard late
 }
 
 export function calculateLevel(xp: number): number {
@@ -38,7 +39,7 @@ export function calculateLevel(xp: number): number {
   let level = 1;
   while (getXPForLevel(level + 1) <= xp) {
     level++;
-    if (level >= MAX_LEVEL) break; // cap at 100
+    if (level >= MAX_LEVEL) break;
   }
   return level;
 }
@@ -62,14 +63,14 @@ export function getLevelProgress(xp: number) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// STREAK BONUS TABLE
-// Additional XP & Coins awarded on top of daily login reward based on streak.
+// STREAK BONUS TABLE  (v5 — doubled vs v4)
 // ─────────────────────────────────────────────────────────────────────────────
 export const STREAK_BONUSES: { minDays: number; xp: number; coins: number; label: string }[] = [
-  { minDays: 30, xp: 100, coins: 80,  label: '🏆 Mestre da Consistência' },
-  { minDays: 14, xp:  60, coins: 50,  label: '💎 Duas Semanas Invicto'   },
-  { minDays:  7, xp:  40, coins: 30,  label: '🔥 Uma Semana Consecutiva' },
-  { minDays:  3, xp:  20, coins: 15,  label: '⚡ Sequência em Alta'       },
+  { minDays: 30, xp: 360, coins: 180, label: '🏆 Mestre da Consistência' },
+  { minDays: 14, xp: 240, coins: 120, label: '💎 Duas Semanas Invicto'   },
+  { minDays:  7, xp: 150, coins:  75, label: '🔥 Uma Semana Consecutiva' },
+  { minDays:  3, xp:  76, coins:  36, label: '⚡ Sequência em Alta'       },
+  { minDays:  1, xp:  20, coins:  10, label: '🌱 Mantendo o Ritmo'       },
 ];
 
 export function getStreakBonus(streak: number): { xp: number; coins: number; label: string } | null {
@@ -125,10 +126,9 @@ export async function updateGamificationStats(
       const newStreak     = calculateNewStreak(stats.streak || 0, stats.lastStudyDate);
       const streakChanged = newStreak !== (stats.streak || 0);
 
-      // Streak bonus (awarded once per day when streak increments)
       let streakXp    = 0;
       let streakCoins = 0;
-      if (updates.applyStreakBonus && streakChanged && newStreak > 1) {
+      if (updates.applyStreakBonus && streakChanged) {
         const bonus = getStreakBonus(newStreak);
         if (bonus) { streakXp = bonus.xp; streakCoins = bonus.coins; }
       }
@@ -192,34 +192,39 @@ export async function updateGamificationStats(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// REWARDS CONSTANTS  (Rebalanced v2)
+// REWARDS CONSTANTS  (Rebalanced v5 — 100% easier, front-loaded progression)
 // ─────────────────────────────────────────────────────────────────────────────
 export const REWARDS = {
   // ── Activities ──────────────────────────────────────────────────────────────
-  ACTIVITY_COMPLETE_XP:      200,   // +33% vs old 150 — completing an activity is meaningful
-  QUESTION_CORRECT_XP:        50,   // +67% vs old 30 — every correct answer feels rewarding
-  ACTIVITY_PERFECT_BONUS:    150,   // +50% vs old 100 — perfection deserves premium reward
-  QUESTION_CORRECT_COINS:     10,   // ≈old 15 but slightly reduced to control inflation
-  ACTIVITY_COMPLETE_COINS:    40,   // ≈old 50 slightly reduced to keep coins valuable
-  ACTIVITY_PERFECT_COINS:     50,   // NEW — bonus coins for perfect score
+  ACTIVITY_COMPLETE_XP:      240,   // v4 120 × 2 = 240
+  QUESTION_CORRECT_XP:        44,   // v4  22 × 2 = 44
+  ACTIVITY_PERFECT_BONUS:    180,   // v4  90 × 2 = 180 — perfection is celebrated
+  QUESTION_CORRECT_COINS:     10,   // v4   5 × 2 = 10
+  ACTIVITY_COMPLETE_COINS:    60,   // v4  30 × 2 = 60
+  ACTIVITY_PERFECT_COINS:     60,   // v4  30 × 2 = 60
 
   // ── Daily Login & Streak ─────────────────────────────────────────────────────
-  DAILY_LOGIN_XP:             30,   // NEW — base XP for showing up each day
-  DAILY_LOGIN_COINS:          15,   // NEW — small coin reward for daily presence
+  DAILY_LOGIN_XP:             60,   // v4  30 × 2 = 60
+  DAILY_LOGIN_COINS:          25,   // v4  15 × 1.7 ≈ 25
   FIRST_LOGIN_COINS:         200,   // Welcome bonus for new students
 
   // ── Tutor IA ────────────────────────────────────────────────────────────────
-  TUTOR_QUESTION_XP:          25,   // 2.5× vs old 10 — using AI tutor has educational value
-  TUTOR_QUESTION_COINS:        5,   // NEW — small incentive to use tutor
+  TUTOR_QUESTION_XP:          60,   // v4  30 × 2 = 60
+  TUTOR_QUESTION_COINS:       12,   // v4   6 × 2 = 12
+  TUTOR_DAILY_LIMIT:          15,   // cap: 15 questions rewarded/day
 
   // ── Content engagement ────────────────────────────────────────────────────────
-  LIBRARY_STUDY_XP:           30,   // slight bump over old 25
-  DIARY_ENTRY_XP:             50,   // slight bump over old 40
-  DIARY_ENTRY_COINS:          10,   // NEW — reflection deserves a reward
+  LIBRARY_STUDY_XP:           50,   // v4  30 × 1.7 ≈ 50
+  DIARY_ENTRY_XP:             90,   // v4  45 × 2 = 90
+  DIARY_ENTRY_COINS:          24,   // v4  12 × 2 = 24
+  DIARY_DAILY_LIMIT:           5,   // cap: 5 diary entries rewarded/day
 
-  // ── Duels (base — final values come from calcDuelRewards) ────────────────────
-  DUEL_WIN_XP:               120,   // Reference only; actual = calcDuelRewards output
-  DUEL_DRAW_XP:               60,
-  DUEL_LOSS_XP:               30,
-  DUEL_QUESTION_XP:           25,   // per correct answer in duel
+  // ── Solo Duel daily cap ──────────────────────────────────────────────────────
+  DUEL_SOLO_DAILY_LIMIT:      15,   // cap: 15 solo duels rewarded/day
+
+  // ── Duels (reference only — calcDuelRewards is the source of truth) ──────────
+  DUEL_WIN_XP:               156,   // v4 120 × 1.3 = 156
+  DUEL_DRAW_XP:               88,   // v4  68 × 1.3 = 88
+  DUEL_LOSS_XP:               49,   // v4  38 × 1.3 = 49
+  DUEL_QUESTION_XP:           35,   // v4  27 × 1.3 = 35
 } as const;

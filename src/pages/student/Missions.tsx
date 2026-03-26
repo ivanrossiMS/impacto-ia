@@ -320,7 +320,10 @@ export const Missions: React.FC = () => {
                           case 'library_access': navigate('/student/library'); break;
                           case 'avatar_customized': navigate('/student/avatar'); break;
                           case 'tutor_question': navigate('/student/tutor'); break;
-                          case 'duel_completed': navigate('/student/duels'); break;
+                          case 'duel_completed':
+                          case 'duel_challenge_completed': navigate('/student/duels'); break;
+                          case 'duel_solo_completed': navigate('/student/duels/solo'); break;
+                          case 'duel_realtime_completed': navigate('/student/duels/realtime'); break;
                           default: navigate('/student/activities');
                         }
                       }}

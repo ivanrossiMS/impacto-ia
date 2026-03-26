@@ -4,6 +4,7 @@ import { createNotification, createBulkNotifications } from '../lib/notification
 import { updateGamificationStats } from '../lib/gamificationUtils';
 import { callGenerateDuel } from '../ai/client';
 import { calcDuelRewards } from '../lib/duelRewards';
+import { getRecentDuelQuestions, saveDuelQuestionsToHistory } from '../lib/duelQuestionHistory';
 
 // ============================================================
 // DuelService — all question generation is now powered by
@@ -41,7 +42,8 @@ export class DuelService {
     }
 
     // Generate questions using real Gemini, with grade context
-    await this.generateQuestions(duel, grade);
+    // Pass challengerId so the anti-repetition system can look up history
+    await this.generateQuestions(duel, grade, challengerId);
 
     // Notify the challenged student
     const { data: challenger } = await supabase.from('users').select('*').eq('id', challengerId).single();
@@ -58,15 +60,21 @@ export class DuelService {
     return duel;
   }
 
-  private static async generateQuestions(duel: Duel, grade?: string) {
+  private static async generateQuestions(duel: Duel, grade?: string, userId?: string) {
     let questions: DuelQuestion[] = [];
 
     try {
+      // ── Anti-repetition: fetch recent questions for this student+theme ──────
+      const recentQuestions = userId
+        ? await getRecentDuelQuestions(userId, duel.theme, 30)
+        : [];
+
       const data = await callGenerateDuel({
         theme: duel.theme,
         difficulty: duel.difficulty,
         count: duel.questionCount + 1,   // +1 = reserve for Swap power
         grade: grade || '',
+        recentQuestions,                  // anti-repetition context
       });
 
       questions = (data.questions || []).map((q: any) => ({
@@ -78,6 +86,14 @@ export class DuelService {
         challengerAnswerId: undefined,
         challengedAnswerId: undefined,
       }));
+
+      // ── Save generated question texts to history ─────────────────────────
+      if (userId && questions.length > 0) {
+        const texts = questions.map(q => q.questionText).filter(Boolean);
+        // Non-blocking: don't await; history saving must never block the duel
+        saveDuelQuestionsToHistory(userId, duel.theme, texts).catch(console.warn);
+      }
+
     } catch (err) {
       console.error('[DuelService] Gemini question generation failed:', err);
       questions = [{
@@ -324,7 +340,7 @@ export class DuelService {
       createdAt: new Date().toISOString(),
     };
     await supabase.from('duels').insert(duel);
-    await this.generateQuestions(duel, grade);
+    await this.generateQuestions(duel, grade, userId);
     return duel;
   }
 

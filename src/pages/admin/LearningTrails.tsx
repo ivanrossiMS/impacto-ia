@@ -14,6 +14,7 @@ import { toast } from 'sonner';
 import { cn } from '../../lib/utils';
 import { createBulkNotifications } from '../../lib/notificationUtils';
 import { callAI, callGenerateTrailStep } from '../../ai/client';
+import { findSimilarTrail, cacheTrail } from '../../services/contentCache.service';
 import { useAuthStore } from '../../store/auth.store';
 import { read, utils } from 'xlsx';
 
@@ -208,6 +209,18 @@ const AIGeneratorModal: React.FC<{
     setIsGenerating(true);
     setGeneratedPhases(0);
     try {
+      // ── Cache check: reuse existing trail if one matches ──
+      const cached = await findSimilarTrail(
+        formData.subject, formData.grade, formData.difficulty, formData.topic
+      );
+      if (cached) {
+        onGenerate({ ...cached, id: crypto.randomUUID(), classId: selectedClassId || null });
+        setSelectedClassId('');
+        onClose();
+        toast.success('Trilha encontrada no banco e reutilizada! ⚡');
+        return;
+      }
+
       // Fetch existing trail titles to avoid duplicates
       const { data: existingTrails } = await supabase.from('learning_paths').select('title');
       const existingTitles = (existingTrails || []).map((t: any) => t.title).filter(Boolean);
@@ -250,10 +263,14 @@ const AIGeneratorModal: React.FC<{
         subject: formData.subject,
         grade: formData.grade,
         difficulty: formData.difficulty,
+        topic: formData.topic,
         classId: selectedClassId || null,
         isAIGenerated: true,
         createdAt: new Date().toISOString()
       };
+
+      // Persist to cache for future reuse
+      cacheTrail(newTrail).catch(() => {});
 
       onGenerate(newTrail);
       setSelectedClassId('');

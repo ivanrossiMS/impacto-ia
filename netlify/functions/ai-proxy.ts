@@ -17,6 +17,42 @@ const MODELS = {
 
 const GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/models";
 
+// ── Supabase observability (fire-and-forget logs) ──────────────────────────
+const SUPABASE_URL  = process.env.VITE_SUPABASE_URL || '';
+const SUPABASE_KEY  = process.env.VITE_SUPABASE_ANON_KEY || '';
+
+async function logAICall(entry: {
+  feature: string;
+  model: string;
+  response_ms: number;
+  input_tokens?: number;
+  output_tokens?: number;
+  success?: boolean;
+  user_id?: string;
+  error_msg?: string;
+}): Promise<void> {
+  if (!SUPABASE_URL || !SUPABASE_KEY) return;
+  await fetch(`${SUPABASE_URL}/rest/v1/ai_call_logs`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'apikey': SUPABASE_KEY,
+      'Authorization': `Bearer ${SUPABASE_KEY}`,
+      'Prefer': 'return=minimal',
+    },
+    body: JSON.stringify({
+      feature: entry.feature,
+      model: entry.model,
+      response_ms: entry.response_ms,
+      input_tokens: entry.input_tokens ?? null,
+      output_tokens: entry.output_tokens ?? null,
+      success: entry.success ?? true,
+      user_id: entry.user_id ?? null,
+      error_msg: entry.error_msg ?? null,
+    }),
+  });
+}
+
 // Allowed features and their model assignments
 const FEATURE_REGISTRY: Record<string, { model: keyof typeof MODELS; requiresJson: boolean }> = {
   "tutor-chat":         { model: "flash", requiresJson: false },
@@ -114,16 +150,19 @@ async function callGemini(
   modelKey: keyof typeof MODELS,
   prompt: string,
   requiresJson: boolean,
-  retries = 2
+  retries = 2,
+  featureLabel = 'unknown'
 ): Promise<string> {
   const model = MODELS[modelKey];
   const url = `${GEMINI_BASE_URL}/${model}:generateContent?key=${GEMINI_API_KEY}`;
+  const t0 = Date.now();
 
   const body = {
     contents: [{ parts: [{ text: prompt }] }],
     generationConfig: {
       temperature: 0.7,
-      maxOutputTokens: requiresJson ? 8192 : 4096, // Capped to avoid timeouts
+      maxOutputTokens: requiresJson ? 4096 : 2048, // Reduced to avoid timeouts
+      thinkingConfig: { thinkingBudget: 0 }, // Disable extended thinking — saves 10-20s on gemini-2.5-flash
     },
     safetySettings: [
       { category: "HARM_CATEGORY_HARASSMENT",        threshold: "BLOCK_MEDIUM_AND_ABOVE" },
@@ -157,6 +196,21 @@ async function callGemini(
 
       const data = await response.json();
       const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+      const usage = data?.usageMetadata;
+
+      // ── Observability log ──
+      const ms = Date.now() - t0;
+      console.log(`[AI-Log] ${featureLabel} | ${model} | ${ms}ms | in:${usage?.promptTokenCount ?? '?'} out:${usage?.candidatesTokenCount ?? '?'} tokens`);
+
+      // ── Fire-and-forget: persist to ai_call_logs ──
+      logAICall({
+        feature: featureLabel,
+        model,
+        response_ms: ms,
+        input_tokens: usage?.promptTokenCount,
+        output_tokens: usage?.candidatesTokenCount,
+        success: true,
+      }).catch(() => {}); // never block the response
 
       if (!text) throw new Error("Empty response from Gemini");
       return text;
@@ -173,15 +227,15 @@ async function callGemini(
 /**
  * Compact, fast Gemini call for duel question generation.
  * Uses gemini-2.5-flash on v1beta (the ONLY confirmed working combo for this API key).
- * Short inline prompt keeps response time under 15s, safely within lambda-local's 30s limit.
- */
-async function callGeminiDuel(
+ * Short inline promptasync function callGeminiDuel(
   theme: string,
   difficulty: string,
   count: number,
   grade: string,
   opponentGrade?: string,
-  seed?: number
+  seed?: number,
+  recentQuestions?: string[],
+  studentAccuracy?: number    // 0.0–1.0 for adaptive difficulty
 ): Promise<string> {
   const url = `${GEMINI_BASE_URL}/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`;  // 1.5-flash: stable, fast (~10-15s), confirmed available
 
@@ -202,32 +256,51 @@ async function callGeminiDuel(
     gradeContext = `Duelo entre séries diferentes (${grade} vs ${opponentGrade}). Use a MENOR série "${referenceGrade}" como base para garantir equilíbrio e justiça para ambos os jogadores.`;
   }
 
+  // ── Adaptive Difficulty: silently adjust based on student accuracy ──────────
+  const levels = ['easy', 'medium', 'hard'] as const;
+  const baseIdx = levels.indexOf(difficulty as any) !== -1 ? levels.indexOf(difficulty as any) : 1;
+  let adaptedDiff = difficulty;
+  if (studentAccuracy !== undefined && studentAccuracy < 0.35 && baseIdx > 0)
+    adaptedDiff = levels[baseIdx - 1]; // silently lower
+  else if (studentAccuracy !== undefined && studentAccuracy > 0.80 && baseIdx < 2)
+    adaptedDiff = levels[baseIdx + 1]; // silently raise
+
+  // ── Grade-specific word limit ──────────────────────────────────────────────
+  const gp = getGradeProfile(referenceGrade);
+  const wordLimitNote = `LIMITE: max ${gp.maxWords} palavras por enunciado (${gp.age}).`;
+
+  // ── 3-Tier in-match progression ───────────────────────────────────────────
+  const tierMap: Record<string, [string, string, string]> = {
+    easy:   ['trivial (1 etapa, lembrar/reconhecer)',  'fácil (1-2 etapas, compreender)', 'médio (2 etapas, aplicar)'],
+    medium: ['fácil (1-2 etapas)',                     'médio (2 etapas, compreender/aplicar)', 'difícil (2-3 etapas, analisar)'],
+    hard:   ['médio (2 etapas)',                        'difícil (2-3 etapas, analisar)', 'mestre (3+ etapas, avaliar/criar)'],
+  };
+  const [t1, t2, t3] = tierMap[adaptedDiff] || tierMap.medium;
+  const t1e = Math.ceil(count / 3);
+  const t2e = Math.ceil(count * 2 / 3);
+  const progressNote = count > 3
+    ? `Progressao: Q1-${t1e}=${t1}; Q${t1e+1}-${t2e}=${t2}; Q${t2e+1}-${count}=${t3}.`
+    : `Dificuldade: ${adaptedDiff}.`;
+
   // ── Difficulty calibration ─────────────────────────────────────────────────
-  const diffMap: Record<string, { label: string; bloom: string; rules: string; distrib: string }> = {
+  const diffMap: Record<string, { label: string; bloom: string; rules: string }> = {
     easy:   {
       label: 'FÁCIL',
       bloom: 'Lembrar / Reconhecer (Bloom nível 1-2)',
       rules: 'Conceito único direto. Enunciado sem ambiguidade. Resposta de memorização ou reconhecimento imediato. Distraidores claramente errados. Vocabulário muito simples.',
-      distrib: `Todas as ${count} questões no nível fácil. Varie os SUBTEMAS para evitar repetição temática.`,
     },
     medium: {
       label: 'MÉDIO',
       bloom: 'Compreender / Aplicar (Bloom nível 2-3)',
       rules: 'Exige interpretação simples e aplicação de conceito. Contexto breve no enunciado (1-2 frases). Distraidores parcialmente plausíveis. Não deve ser resolvível apenas por memorização.',
-      distrib: count <= 3
-        ? `Todas as questões no nível médio.`
-        : `Questões 1-${Math.ceil(count * 0.3)}: levemente mais simples (aquecimento). Questões ${Math.ceil(count * 0.3) + 1}-${count}: dificuldade plena. 70% médio, 20% fácil leve, 10% difícil suave.`,
     },
     hard:   {
       label: 'DIFÍCIL / MESTRE',
       bloom: 'Analisar / Avaliar / Criar (Bloom nível 4-6)',
       rules: 'Alto raciocínio lógico. Situação-problema ou análise em 2+ etapas. TODOS os distraidores tecnicamente plausíveis mas inequivocamente errados. Pode conter pegadinhas inteligentes sem ambiguidade. Exige domínio real do conteúdo.',
-      distrib: count <= 3
-        ? `Todas as questões no nível difícil.`
-        : `Questões 1-${Math.ceil(count * 0.25)}: médio-alto (aquecimento). Questões ${Math.ceil(count * 0.25) + 1}-${count}: dificuldade plena/mestre. 70% difícil, 20% médio, 10% extra-difícil.`,
     },
   };
-  const diff = diffMap[difficulty] || diffMap.medium;
+  const diff = diffMap[adaptedDiff] || diffMap.medium;
 
   // ── Theme guidance ─────────────────────────────────────────────────────────
   const themeGuideMap: Record<string, string> = {
@@ -239,12 +312,8 @@ async function callGeminiDuel(
     arte:           'Movimentos artísticos, artistas brasileiros/mundiais, linguagens artísticas compatíveis com o nível.',
     esportes:       'Regras, história, recordes, atletas e cultura esportiva. Inclua esportes olímpicos e populares no Brasil.',
     entretenimento: 'TV, séries, filmes, animes, games e cultura pop. Foque em séries/programas populares entre jovens, personagens icônicos, enredos marcantes, franquias e fenômenos audiovisuais. Inclua referências nacionais e internacionais adequadas à faixa etária.',
-    aleatorio:      `Distribua OBRIGATORIAMENTE entre áreas distintas (máx. 2 questões por área):
- • Ciências / Biologia  • História  • Geografia  • Matemática básica  • Português / Literatura  • Esportes / Arte / Cultura  • Curiosidade fascinante / Conhecimento Geral
- Nunca concentre mais de 2 perguntas em uma única área temática.`,
+    aleatorio:      `Distribua OBRIGATORIAMENTE entre áreas distintas (máx. 2 questões por área):\n • Ciências / Biologia  • História  • Geografia  • Matemática básica  • Português / Literatura  • Esportes / Arte / Cultura  • Curiosidade fascinante / Conhecimento Geral\n Nunca concentre mais de 2 perguntas em uma única área temática.`,
   };
-  // Map internal IDs to human-readable names for the Gemini prompt topic
-  // (Gemini should never see raw IDs like "aleatorio" or "entretenimento" as the topic)
   const THEME_DISPLAY: Record<string, string> = {
     historia:       'História',
     geografia:      'Geografia',
@@ -266,7 +335,13 @@ async function callGeminiDuel(
   const angle = angles[sessionSeed % angles.length];
   const gradeRef = referenceGrade || grade || '6 Ano';
   const crossGrade = opponentGrade && opponentGrade !== grade ? ` Duelo entre series (${grade} x ${opponentGrade}): use ${gradeRef} como base.` : '';
-  const prompt = `Voce e professor especialista brasileiro. Gere ${count} questoes de multipla escolha sobre "${displayTheme}" para alunos do ${gradeRef}.${crossGrade} Dificuldade: ${diff.label} (${diff.rules}). Tema: ${themeGuide} Foco desta sessao #${sessionSeed}: ${angle}. Regras: questoes com subtemas distintos; linguagem adequada para ${gradeRef}; distraidores plausiveis; explicacao 1-2 frases; sem erros factuais; sem repeticao de estrutura. Responda SOMENTE com JSON valido: {"questions":[{"id":"1","questionText":"?","options":[{"id":"a","text":"Correta","isCorrect":true},{"id":"b","text":"Errada","isCorrect":false},{"id":"c","text":"Errada","isCorrect":false},{"id":"d","text":"Errada","isCorrect":false}],"explanation":"..."}]} Alternativa a SEMPRE correta. Gere exatamente ${count} questoes.`;
+
+  // Anti-repetition block: inject up to 5 recent question snippets into the prompt
+  const avoidBlock = (recentQuestions && recentQuestions.length > 0)
+    ? ` EVITE ABSOLUTA repetição destes enunciados já usados recentemente (gere questões completamente diferentes): ${recentQuestions.slice(-5).map((q,i) => `[${i+1}] "${q.slice(0,100)}"`).join(' | ')}.`
+    : '';
+
+  const prompt = `Voce e professor especialista brasileiro BNCC. Gere ${count} questoes de multipla escolha sobre "${displayTheme}" para alunos do ${gradeRef}.${crossGrade} Dificuldade base: ${diff.label} (${diff.bloom}). Regra de dificuldade: ${diff.rules}. ${progressNote} ${wordLimitNote} Tema: ${themeGuide} Foco desta sessao #${sessionSeed}: ${angle}.${avoidBlock} Regras: linguagem EXATAMENTE para ${gp.age}; questoes com subtemas distintos; distraidores representam erros reais; explicacao 1-2 frases; sem erros factuais; sem repeticao de estrutura entre questoes. Responda SOMENTE com JSON valido: {"questions":[{"id":"1","questionText":"?","options":[{"id":"a","text":"Correta","isCorrect":true},{"id":"b","text":"Errada","isCorrect":false},{"id":"c","text":"Errada","isCorrect":false},{"id":"d","text":"Errada","isCorrect":false}],"explanation":"..."}]} Alternativa a SEMPRE correta. Gere exatamente ${count} questoes.`;
 
   const body = {
     contents: [{ parts: [{ text: prompt }] }],
@@ -302,6 +377,21 @@ async function callGeminiDuel(
   }
 }
 
+    if (!res.ok) {
+      const errBody = await res.text().catch(() => '');
+      throw new Error(`Gemini duel ${res.status}: ${errBody.slice(0, 200)}`);
+    }
+    const data = await res.json();
+    const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+    if (!text) throw new Error("Empty Gemini duel response");
+    return text;
+  } catch (err: any) {
+    clearTimeout(t);
+    console.error('[AI-Proxy] callGeminiDuel failed:', err.message);
+    throw err;
+  }
+}
+
 // ============================================================
 // PROMPT BUILDERS
 // ============================================================
@@ -311,189 +401,56 @@ function buildTutorPrompt(
   userName: string,
   grade?: string
 ): string {
-
-  // Build grade-adaptive teaching profile using shared helper
   const gradeProfile = grade ? getGradeProfile(grade) : null;
 
-  const teachingProfile = (() => {
-    if (!gradeProfile) return {
-      tone: 'Use linguagem clara, didática e direta. Adapte ao contexto da pergunta.',
-      depth: 'Nível intermediário — explique com clareza sem ser superficial.',
-      examples: 'Use exemplos práticos do cotidiano.',
-      structure: 'Organize a resposta de forma clara e progressiva.',
-      wordLimit: '350 palavras',
-      restriction: '',
-    };
-
+  const yr = (() => {
     const g = (grade || '').toLowerCase();
     const isEM = g.includes('em') || g.includes('médio');
-    const m = g.match(/(\d+)/);
-    const year = m ? parseInt(m[1]) : 5;
-    const actual = isEM ? year + 9 : year;
-
-    if (actual <= 5) return {
-      tone: 'Tom MUITO acolhedor, lúdico e encorajador — como um professor que adora crianças! Use frases curtas, simples e diretas. Emojis são bem-vindos com moderação 🎉.',
-      depth: 'SUPERFICIAL e CONCRETO — foque em 1 ideia central por vez. Sem abstrações. Raciocínio concreto com objetos e situações reais.',
-      examples: 'Exemplos OBRIGATÓRIOS do dia a dia da criança: animais, brinquedos, família, escola, alimentos. Nunca use exemplos adultos ou abstratos.',
-      structure: 'Máximo 3 parágrafos curtos. Frases de no máximo 15 palavras. Linguagem de 6-11 anos.',
-      wordLimit: '200 palavras',
-      restriction: 'NUNCA use termos técnicos sem explicar com palavras simples. NUNCA dê mais de 1 conceito por vez.',
-    };
-
-    if (actual <= 9) return {
-      tone: 'Tom amigável, motivador e próximo — como um "tutor mais velho" que gosta de ajudar. Pode usar linguagem um pouco mais elaborada, mas ainda acessível.',
-      depth: 'INTERMEDIÁRIO — explique o conceito com clareza, introduza a terminologia correta, mostre o raciocínio passo a passo.',
-      examples: 'Exemplos do cotidiano adolescente: esportes, tecnologia, redes sociais, música, situações escolares. Conecte com o que o aluno já conhece.',
-      structure: 'Estruturado em partes claras. Pode usar listas e negrito para destacar pontos-chave. Linguagem para 11-15 anos.',
-      wordLimit: '300 palavras',
-      restriction: 'Introduza termos técnicos sempre com explicação. Evite terminologia universitária.',
-    };
-
-    return {
-      tone: 'Tom intelectual, respeitoso e estimulante — como um professor que trata o aluno como capaz. Pode usar linguagem mais precisa e técnica.',
-      depth: 'AVANÇADO — aprofunde o conceito, mostre conexões com outros temas, estimule o pensamento crítico e analítico.',
-      examples: 'Exemplos contextualizados: situações-problema reais, conexões com ENEM/vestibular, aplicações científicas ou históricas relevantes.',
-      structure: 'Pode ser mais rico em conteúdo. Use formatação Markdown completa. Linguagem para 15-18 anos.',
-      wordLimit: '400 palavras',
-      restriction: 'Estimule o raciocínio — não entregue apenas a resposta, mostre o caminho de chegada.',
-    };
+    const m = g.match(/(\d+)/); const y = m ? parseInt(m[1]) : 5;
+    return isEM ? y + 9 : y;
   })();
 
-  const gradeContext = grade
-    ? `Série do aluno: **${grade}** (${gradeProfile?.stage || ''})`
-    : 'Série não informada — adapte ao nível da pergunta.';
+  const p = yr <= 5
+    ? { tone: 'acolhedor, lúdico, encorajador — como tio/tia educador(a)', depth: '1 conceito por vez, concreto, sem abstrações', ex: 'animais, escola, família, brinquedos', limit: '200 palavras, frases ≤15 palavras', restrict: 'NUNCA termos técnicos sem explicar; NUNCA mais de 1 ideia por vez' }
+    : yr <= 9
+    ? { tone: 'amigável e motivador — tutor mais velho', depth: 'intermediário: conceito + raciocínio passo a passo', ex: 'esportes, tecnologia, redes sociais, escola', limit: '300 palavras', restrict: 'Introduza termos com explicação; sem terminologia universitária' }
+    : { tone: 'intelectual, respeitoso e estimulante', depth: 'avançado: síntese, pensamento crítico, conexões ENEM', ex: 'situações-problema reais, ciência, história', limit: '400 palavras', restrict: 'Estimule raciocínio — não entregue só a resposta' };
 
-  return `
-Você é o **Capy**, o tutor educacional do sistema IA-IMPACTO — um professor inteligente, paciente e altamente adaptável.
-Você está conversando com **${userName}**.
-${gradeContext}
+  const gradeCtx = grade ? `Série: **${grade}** (${gradeProfile?.stage || ''})` : 'Série não informada — adapte ao nível da pergunta.';
 
-═══ PERFIL PEDAGÓGICO PARA ESTA SÉRIE ═══
-Tom e linguagem: ${teachingProfile.tone}
-Profundidade: ${teachingProfile.depth}
-Tipos de exemplos: ${teachingProfile.examples}
-Estrutura da resposta: ${teachingProfile.structure}
-Restrições: ${teachingProfile.restriction}
+  return `Você é o **Capy**, tutor IA do IMPACTO-IA — professor inteligente, paciente e adaptável.
+Aluno: **${userName}** | ${gradeCtx}
 
-═══ ESTRUTURA OBRIGATÓRIA DA RESPOSTA ═══
-Organize SEMPRE sua resposta nestas partes:
+PERFIL PEDAGÓGICO:
+- Tom: ${p.tone}
+- Profundidade: ${p.depth}
+- Exemplos: ${p.ex}
+- Limite: ${p.limit}
+- Restrição: ${p.restrict}
 
-**1️⃣ Explicação inicial simples**
-Explique o conceito de forma clara e fácil. Uma ideia por vez.
+ESTRUTURA:
+1. **Explicação** — conceito claro, 1 ideia por vez
+2. **Aprofundamento** — detalhe compatível com a série
+3. **Exemplo prático** — cotidiano do aluno (${gradeProfile?.age || 'faixa etária adequada'})
+4. **Mini reforço** *(opcional)* — dica, reflexão ou destaque
 
-**2️⃣ Aprofundamento progressivo**
-Adicione um pouco mais de detalhe, mantendo compatível com a série.
+MATEMÁTICA — use LaTeX **obrigatoriamente** quando houver cálculo/equação:
+- Inline: \`$expressão$\` | Bloco: \`$$expressão$$\`
+- Estrutura: 🧠 Entendendo → ✏️ Montando → 🔍 Passo a passo → ✅ Resultado → 💡 Por quê?
+- EF I → $3+4=7$, $3\\times4=12$ | EF II → $\\frac{3}{4}$, $3x=15$ | EM → $\\Delta=b^2-4ac$
+- NUNCA escreva fração como "3/4" — use $$\\frac{3}{4}$$
+- NUNCA equações em bloco de código — use LaTeX com $$ $$
 
-**3️⃣ Exemplo prático**
-Dê um exemplo concreto do cotidiano do aluno (adequado à faixa etária).
+REGRAS:
+- Português BR | Markdown completo | Máximo ${p.limit}
+- Explique o "porquê", não só o "o quê"
+- Resolva GUIANDO o raciocínio — socrático quando possível
+- ACOLHEDOR: nunca humilhe — estimule sempre
+- Se difícil: simplifique mais, quebre em passos | Se fácil: aprofunde, conecte com conceitos maiores
+- Finalize: **✅ Resumo:** [1 frase direta]
+- Feche com 1 mini-desafio ou pergunta motivadora adequada à faixa etária
 
-**4️⃣ Mini reforço** *(opcional, use quando ajudar)*
-Uma pequena dica, pergunta reflexiva ou destaque para fixar o aprendizado.
-
-═══ 🧮 REGRA ESPECIAL PARA MATEMÁTICA — NOTAÇÃO LaTeX (CRÍTICA) ═══
-SE a pergunta envolver qualquer cálculo, equação, operação ou problema matemático, use OBRIGATORIAMENTE este padrão visual com NOTAÇÃO LaTeX:
-
-O sistema RENDERIZA LaTeX automaticamente. Use:
-- \`$expressão$\` para matemática INLINE (dentro de uma frase)
-- \`$$expressão$$\` para matemática em BLOCO CENTRALIZADO (equações, frações, passos)
-
-📐 FORMATO OBRIGATÓRIO — siga EXATAMENTE esta estrutura:
-
----
-
-🧠 **Entendendo o problema**
-[Explique em 1-2 frases simples. Use linguagem adequada para ${gradeProfile?.age || 'a faixa etária'}.]
-
----
-
-✏️ **Montando a conta**
-[Explique como montar. Depois escreva a expressão matemática em bloco LaTeX:]
-$$[expressão montada]$$
-
----
-
-🔍 **Resolvendo passo a passo**
-[Uma linha de explicação, depois a equação LaTeX. Repita para cada etapa:]
-
-etapa 1:
-$$[operação]$$
-
-etapa 2:
-$$[operação → resultado parcial]$$
-
-etapa 3 (se necessário):
-$$[operação → resultado final]$$
-
-${(() => {
-  const g = (grade || '').toLowerCase();
-  const isEM = g.includes('em') || g.includes('médio');
-  const m = g.match(/(\d+)/);
-  const year = m ? parseInt(m[1]) : 5;
-  const actual = isEM ? year + 9 : year;
-  if (actual <= 5)  return `[EF I → LaTeX simples: adições $3 + 4 = 7$, multiplicações $3 \\times 4 = 12$, grupos. Evite frações complexas.]`;
-  if (actual <= 9) return `[EF II → Use frações LaTeX: $\\frac{3}{4}$, variáveis $x$, equações $3x = 15 \\Rightarrow x = 5$.]`;
-  return `[EM → LaTeX completo: $\\frac{a}{b}$, potências $x^2$, raízes $\\sqrt{x}$, fórmulas como $\\Delta = b^2 - 4ac$, desenvolvimento algébrico completo.]`;
-})()}
-
----
-
-✅ **Resultado final**
-$$[resultado em destaque]$$
-
-O resultado é: **[resultado em palavras]**
-
----
-
-💡 **Por que funciona?**
-[1-2 frases explicando o raciocínio. Reforce o conceito matemático.]
-
----
-
-📌 EXEMPLO DO PADRÃO ESPERADO (regra de 3):
-🧠 **Entendendo o problema**
-Queremos descobrir o valor de $x$ usando a regra de três.
-
-✏️ **Montando a conta**
-$$\frac{3}{45} = \frac{5}{x}$$
-
-🔍 **Resolvendo passo a passo**
-Multiplicação cruzada:
-$$3 \cdot x = 5 \cdot 45$$
-
-$$3x = 225$$
-
-Isolando $x$:
-$$x = \frac{225}{3}$$
-
-✅ **Resultado final**
-$$x = 75$$
-
-O resultado é: **75**
-
-💡 **Por que funciona?**
-A regra de três mantém a proporção constante entre os valores, por isso podemos multiplicar cruzado para encontrar o valor desconhecido.
-
----
-
-🚫 RESTRIÇÕES ABSOLUTAS PARA MATEMÁTICA:
-- NUNCA escreva fração como "3/4" — SEMPRE use $$\\frac{3}{4}$$
-- NUNCA coloque equação dentro de bloco de código — use LaTeX com $$ $$
-- NUNCA pule etapas no desenvolvimento
-- NUNCA resolva acima do nível de ${grade || 'a série do aluno'} (${gradeProfile?.age || ''})
-- Use SEMPRE os separadores (---) e emojis (🧠 ✏️ 🔍 ✅ 💡)
-
-═══ REGRAS ABSOLUTAS ═══
-- Responda SEMPRE em português do Brasil
-- Use Markdown — **negrito** para conceitos, listas para passos, \`código\` para fórmulas/equações
-- Máximo ${teachingProfile.wordLimit} — seja didático e conciso, não exaustivo
-- Explique sempre o "porquê", não apenas o "o quê"
-- NUNCA forneça respostas prontas de provas — guie o raciocínio
-- Se o aluno demonstrar dificuldade: simplifique mais, quebre em passos menores
-- Se o aluno demonstrar facilidade: aprofunde levemente, proponha reflexão
-- Finalize com uma linha: **✅ Resumo:** [resposta direta em 1 frase]
-
-**Pergunta do aluno:** "${userMessage}"
-`.trim();
+**Pergunta:** "${userMessage}"`.trim();
 }
 
 function buildActivityPrompt(
@@ -505,306 +462,124 @@ function buildActivityPrompt(
   count: number,
   className?: string,
   activityTypeLabel?: string,
-  seed?: number
+  seed?: number,
+  existingQuestions?: string[]
 ): string {
-  // ── Cognitive level by grade ──────────────────────────────────────────────
-  const gradeInfo = (() => {
-    const g = (grade || '').toLowerCase();
-    const isEM = g.includes('em') || g.includes('médio') || g.includes('medio');
-    const year = parseInt((g.match(/\d+/) || ['0'])[0]);
-    if (isEM) return {
-      stage: `${year || ''}º Ano do Ensino Médio`,
-      ageRange: '15–17 anos',
-      cognitiveLevel: 'alta complexidade — análise, síntese, avaliação crítica (Bloom 4-6)',
-      languageLevel: 'linguagem formal, vocabulário técnico-científico, enunciados elaborados',
-      abstractionLevel: 'alta abstração, contextualização social/científica/filosófica',
-    };
-    if (year >= 6) return {
-      stage: `${year}º Ano do Ensino Fundamental II`,
-      ageRange: '11–15 anos',
-      cognitiveLevel: 'média complexidade — compreensão, aplicação e análise (Bloom 2-4)',
-      languageLevel: 'linguagem clara e objetiva, vocabulário em expansão, enunciados intermediários',
-      abstractionLevel: 'abstração moderada, aplicação contextualizada',
-    };
-    if (year >= 1) return {
-      stage: `${year}º Ano do Ensino Fundamental I`,
-      ageRange: '6–11 anos',
-      cognitiveLevel: 'baixa-média complexidade — reconhecimento, memorização e compreensão (Bloom 1-2)',
-      languageLevel: 'linguagem simples e direta, vocabulário acessível, frases curtas e claras',
-      abstractionLevel: 'baixa abstração, exemplos concretos do cotidiano',
-    };
-    return {
-      stage: grade,
-      ageRange: 'a definir pela série',
-      cognitiveLevel: 'intermediário',
-      languageLevel: 'adequada à série',
-      abstractionLevel: 'moderada',
-    };
-  })();
+  const g = (grade||'').toLowerCase();
+  const isEM = g.includes('em')||g.includes('médio')||g.includes('medio');
+  const yr = parseInt((g.match(/\d+/)||['0'])[0]);
+  const age = isEM ? '15–17 anos' : yr>=6 ? '11–15 anos' : '6–11 anos';
+  const bloom = isEM ? 'Bloom 4-6 (análise, síntese, avaliação crítica)' : yr>=6 ? 'Bloom 2-4 (compreensão, aplicação, análise)' : 'Bloom 1-2 (reconhecimento, compreensão básica)';
+  const lang = isEM ? 'linguagem formal, vocabulário técnico-científico' : yr>=6 ? 'linguagem clara, vocabulário em expansão' : 'linguagem simples, frases curtas, vocabulário do cotidiano';
+  const wl = isEM ? '80' : yr>=6 ? '70' : '55';
+  const isObjetiva = type !== 'dissertativa';
 
-  // ── Activity-type-specific instructions ───────────────────────────────────
-  const typeInstructions: Record<string, string> = {
-    objetiva: `
-TIPO: OBJETIVA (Múltipla Escolha)
-- Cada questão deve ter exatamente 4 alternativas (A, B, C, D)
-- A alternativa A é SEMPRE a correta (o sistema embaralha depois)
-- Os distratores (B, C, D) devem ser plausíveis, pedagogicamente relacionados ao tema, mas inequivocamente incorretos
-- Evite alternativas obviamente erradas, absurdas ou fora do contexto
-- Enunciados claros, objetivos e bem formulados
-- Questões que testem compreensão real, não apenas memorização mecânica`,
-
-    quiz_divertido: `
-TIPO: QUIZ DIVERTIDO (Gamificado)
-- Linguagem mais leve, dinâmica e envolvente, mantendo rigor pedagógico real
-- Use emojis estrategicamente no enunciado (1-2 por questão, não excessivo)
-- Questões com 4 alternativas — A SEMPRE correta
-- Inclua perguntas que estimulem curiosidade e "efeito surpresa" pedagógico
-- Pode usar situações do cotidiano, cultura pop educativa, analogias criativas
-- Mantenha 100% do conteúdo alinhado à disciplina, série e tópico
-- Evite trivialidade — o quiz deve ter valor pedagógico REAL`,
-
-    dissertativa: `
-TIPO: DISSERTATIVA (Resposta Aberta)
-- Enunciados claros que estimulem reflexão, argumentação e produção textual própria
-- Cada questão deve ter um gabarito/resposta esperada detalhado (campo "answer")
-- O gabarito deve indicar pontos essenciais que o aluno precisa contemplar
-- Inclua critérios de avaliação no campo "explanation"
-- Questões progressivas: das mais interpretativas às mais analíticas
-- Adeque a extensão esperada da resposta ao nível da série
-- NÃO use alternativas — tipo é "dissertativa"`,
-
-    simulado: `
-TIPO: SIMULADO (Estilo ENEM/Avaliação)
-- Questões no estilo avaliativo formal, com contexto introdutório (texto-base, gráfico descrito, situação-problema)
-- Cada questão deve ter 4 alternativas — A SEMPRE correta
-- Distribua os níveis internos: ~30% fácil, ~50% médio, ~20% difícil dentro do conjunto
-- Use dados, situações reais e contextos interdisciplinares quando pertinente
-- Enunciados mais elaborados, que exijam leitura e interpretação
-- Formato: presente texto/contexto introdutório antes do enunciado da questão`,
-
-    prova_mensal: `
-TIPO: PROVA MENSAL (Avaliação Formal Mensal)
-- Estrutura formal e organizada de prova escolar
-- Distribua as questões coerentemente: início mais acessível, progressão até as mais elaboradas
-- Questões com 4 alternativas — A SEMPRE correta
-- Abrange o conteúdo do mês de forma abrangente e equilibrada
-- Linguagem formal e clara, típica de instrumento avaliativo
-- Equilíbrio entre reconhecimento, compreensão, aplicação e análise`,
-
-    prova_bimestral: `
-TIPO: PROVA BIMESTRAL (Avaliação Bimestral Completa)
-- Avaliação de maior profundidade e abrangência bimestral
-- Questões com 4 alternativas — A SEMPRE correta
-- Cobertura ampla e equilibrada do conteúdo bimestral dentro do tópico
-- Progressão clara: questões contextualizadoras → aplicação → análise
-- Linguagem formal, rigorosa e adequada ao nível da série
-- Inclua questões que integrem diferentes aspectos do tópico`
+  const typeNote: Record<string,string> = {
+    objetiva:        '4 alternativas. A=correta sempre. Distraidores plausíveis e relacionados — não absurdos.',
+    quiz_divertido:  '4 alternativas, A=correta. Linguagem leve, 1-2 emojis/questão, "efeito surpresa" pedagógico. Rigor mantido.',
+    dissertativa:    'Resposta aberta. "answer": pontos essenciais. "explanation": critérios. Sem alternativas.',
+    simulado:        'Estilo ENEM: contexto introdutório antes do enunciado. 4 alternativas, A=correta. ~30% fácil/~50% médio/~20% difícil.',
+    prova_mensal:    'Prova formal: início acessível → progressão. 4 alternativas, A=correta. Equilíbrio reconhecimento/compreensão/aplicação.',
+    prova_bimestral: 'Avaliação bimestral profunda. 4 alternativas, A=correta. Progressão: contextualização → aplicação → análise.',
+  };
+  const diffNote: Record<string,string> = {
+    'Fácil':  '1 conceito, direto, vocabulário simples, distraidores claramente errados. Bloom 1-2.',
+    'Médio':  'Interpretação + aplicação real. Contexto breve. Distraidores parcialmente plausíveis. Bloom 2-3.',
+    'Difícil':'Análise crítica, situação-problema. Todos distraidores muito plausíveis. Bloom 4-5.',
   };
 
-  // ── Difficulty calibration ────────────────────────────────────────────────
-  const difficultyInstructions: Record<string, string> = {
-    'Fácil': `
-CALIBRAÇÃO — NÍVEL FÁCIL:
-- Foco em reconhecimento e compreensão básica dos conceitos
-- Questões de aplicação direta, sem rodeios
-- Vocabulário mais acessível, enunciados curtos e objetivos
-- Contextos simples, sem informações extras que desorientem
-- Distratores claramente diferenciáveis da resposta correta
-- Adequado para fixação inicial e verificação de compreensão básica`,
+  const typeKey = type in typeNote ? type : 'objetiva';
+  const diffKey = difficulty in diffNote ? difficulty : 'Médio';
 
-    'Médio': `
-CALIBRAÇÃO — NÍVEL MÉDIO:
-- Exige interpretação moderada e compreensão aplicada
-- Questões que combinam compreensão e raciocínio
-- Vocabulário em expansão compatível com a série
-- Enunciados com contexto, mas claros e bem delimitados
-- Distratores mais elaborados e pedagogicamente plausíveis
-- Adequado para consolidação do aprendizado`,
+  const existingBlock = existingQuestions?.length
+    ? `\nEVITE REPETIÇÃO — já geradas (explore ângulo DIFERENTE):\n${existingQuestions.map((q,i)=>`Q${i+1}: "${q.slice(0,100)}"`).join('\n')}\n`
+    : '';
 
-    'Difícil': `
-CALIBRAÇÃO — NÍVEL DIFÍCIL:
-- Exige análise crítica, síntese e raciocínio avançado
-- Aplicação contextualizada, com situações-problema complexas
-- Pode exigir resolução em múltiplas etapas (para dissertativas)
-- Vocabulário completo e técnico compatível com a série
-- Distratores muito plausíveis — exigem conhecimento real para diferenciar
-- Questões que vão além da memorização — exigem pensamento crítico real`
-  };
+  return `Você é pedagogo especialista BNCC. Crie ${count} questão(ões) de alta qualidade.
 
-  const typeKey = type in typeInstructions ? type : 'objetiva';
-  const diffKey = difficulty in difficultyInstructions ? difficulty : 'Médio';
-  const typeInstruction = typeInstructions[typeKey];
-  const diffInstruction = difficultyInstructions[diffKey];
-  const isObjetiva = !['dissertativa'].includes(typeKey);
+PARÂMETROS:
+- Disciplina: ${subject} | Tópico: ${topic} | Série: ${grade} | Turma: ${className||grade}
+- Faixa etária: ${age} | Tipo: ${activityTypeLabel||type} | Dificuldade: ${difficulty} | Qtd: ${count}
+- Cognição: ${bloom} | Linguagem: ${lang} | Seed: #${seed||Date.now()}
 
-  return `
-Você é uma equipe pedagógica especialista, composta por professores com profundo conhecimento da BNCC (Base Nacional Comum Curricular) e design instrucional para o ensino brasileiro. Sua missão é criar atividades de alta qualidade educacional real.
+TIPO: ${typeNote[typeKey]}
+DIFICULDADE: ${diffNote[diffKey]}
 
-═══════════════════════════════════════════════
-PARÂMETROS DA ATIVIDADE (SEGUIR COM RIGOR ABSOLUTO)
-═══════════════════════════════════════════════
-• Disciplina: ${subject}
-• Tópico Específico: ${topic}
-• Série/Ano: ${grade} — ${gradeInfo.stage}
-• Turma Destinatária: ${className || grade}
-• Tipo de Atividade: ${activityTypeLabel || type}
-• Faixa Etária: ${gradeInfo.ageRange}
-• Quantidade de questões: ${count}
-• Nível Cognitivo: ${gradeInfo.cognitiveLevel}
-• Linguagem esperada: ${gradeInfo.languageLevel}
-• Nível de Abstração: ${gradeInfo.abstractionLevel}
-• Chave de Frescor (anti-repetição): #${seed || Date.now()}
+REGRAS:
+1. 100% sobre "${topic}" (${subject}) — zero desvios temáticos
+2. Enunciados de 15-${wl} palavras, linguagem compatível com ${age}
+3. Progressão pedagógica: simples → elaboradas
+4. Cada questão: subtema/ângulo DIFERENTE — originalidade total
+5. Distraidores: erros REAIS comuns dos alunos (não valores aleatórios)
+6. Zero erros conceituais — valide antes de responder
+7. Engajamento: desperte curiosidade, não só memorização
+${existingBlock}
+Responda SOMENTE com JSON válido (sem texto antes/depois):
+${isObjetiva
+  ? `{"questions":[{"id":"uuid","type":"objetiva","text":"Enunciado (15-${wl} palavras)","options":["Alternativa CORRETA (posição 0)","Distrator 1","Distrator 2","Distrator 3"],"answer":"0","explanation":"Explicação pedagógica clara"}]}`
+  : `{"questions":[{"id":"uuid","type":"dissertativa","text":"Enunciado reflexivo","answer":"Pontos essenciais esperados","explanation":"Critérios de avaliação"}]}`
+}
 
-═══════════════════════════════════════════════
-TIPO DE ATIVIDADE
-═══════════════════════════════════════════════
-${typeInstruction}
-
-═══════════════════════════════════════════════
-CALIBRAÇÃO DE DIFICULDADE
-═══════════════════════════════════════════════
-${diffInstruction}
-
-═══════════════════════════════════════════════
-REGRAS PEDAGÓGICAS ABSOLUTAS
-═══════════════════════════════════════════════
-1. COERÊNCIA TOTAL: Toda questão deve ser 100% sobre "${topic}" da disciplina "${subject}"
-2. ADEQUAÇÃO ETÁRIA: Use linguagem e complexidade compatíveis com ${gradeInfo.ageRange} — turma "${className || grade}"
-3. PROGRESSÃO LÓGICA: As ${count} questões devem ter progressão pedagógica (simples → elaboradas)
-4. RIGOR CONCEITUAL: Zero erros de conteúdo. Valide internamente antes de responder.
-5. ENUNCIADOS CONCISOS: Cada enunciado deve ter entre 15 e ${gradeInfo.ageRange.startsWith('6') ? '60' : '80'} palavras — claro, objetivo, sem excessos. NUNCA escreva enunciados longos e confusos.
-6. NÃO GENERICIDADE: Cada questão deve ser específica ao tópico "${topic}" — sem questões genéricas ou que poderiam servir para qualquer turma
-7. ORIGINALIDADE E UNICIDADE: As ${count} questões devem ser COMPLETAMENTE DIFERENTES entre si — enunciados distintos, contextos distintos, aspectos distintos do tópico. NUNCA repita padrão de questão, contexto ou estrutura de enunciado.
-8. FOCO: Toda a atividade deve girar em torno do tópico "${topic}" — sem desvios temáticos
-9. LINGUAGEM DA TURMA: A linguagem deve ser natural e compreensível para alunos de ${gradeInfo.ageRange}. Evite termos técnicos desnecessários, frases muito longas ou vocabulário além do esperado para a série.
-
-ZERO TOLERÂNCIA PARA:
-❌ Questões repetidas ou com enunciados muito semelhantes entre si
-❌ Enunciados longos, confusos ou com vocabulário inadequado
-❌ Conteúdo fora da disciplina
-❌ Atividade inadequada para a série
-❌ Dificuldade incompatível com o nível selecionado
-❌ Enunciados confusos ou mal formulados
-❌ Erros conceituais de qualquer natureza
-❌ Questões desconexas entre si
-❌ Progressão pedagógica sem lógica
-❌ Linguagem inadequada para a faixa etária
-
-═══════════════════════════════════════════════
-FORMATO DE RESPOSTA (JSON OBRIGATÓRIO)
-═══════════════════════════════════════════════
-Responda SOMENTE com JSON válido, sem texto antes ou depois:
-
-${isObjetiva ? `{
-  "questions": [
-    {
-      "id": "uuid-placeholder",
-      "type": "objetiva",
-      "text": "Enunciado completo e pedagogicamente rigoroso da questão",
-      "options": [
-        "Alternativa CORRETA (sempre na posição 0)",
-        "Distrator plausível mas incorreto 1",
-        "Distrator plausível mas incorreto 2",
-        "Distrator plausível mas incorreto 3"
-      ],
-      "answer": "0",
-      "explanation": "Explicação clara e pedagógica da resposta correta para o professor"
-    }
-  ]
-}` : `{
-  "questions": [
-    {
-      "id": "uuid-placeholder",
-      "type": "dissertativa",
-      "text": "Enunciado claro que estimule reflexão e produção própria do aluno",
-      "answer": "Gabarito detalhado: pontos essenciais que o aluno deve contemplar na resposta",
-      "explanation": "Critérios de avaliação: o que observar na resposta do aluno"
-    }
-  ]
-}`}
-
-LEMBRE-SE: A "Chave de Frescor" #${seed || Date.now()} garante que esta geração seja única e diferente de qualquer outra anterior. Gere ${count} questões completamente distintas entre si, coerentes com a turma "${className || grade}", focadas em "${topic}" (${subject}), com enunciados concisos (15-${gradeInfo.ageRange.startsWith('6') ? '60' : '80'} palavras), linguagem acessível para ${gradeInfo.ageRange} e dificuldade real no nível ${difficulty}.
-`.trim();
+Gere ${count} questão(ões) para "${className||grade}", tópico "${topic}", nível ${difficulty}.`.trim();
 }
 
 
 function buildTrailPrompt(topic: string, subject: string, grade: string, difficulty: string): string {
-  // Map grade to BNCC cognitive level
-  const gradeInfo = (() => {
-    const g = (grade || '').toLowerCase();
-    const isEM = g.includes('em') || g.includes('médio');
-    const year = parseInt((g.match(/\d+/) || ['0'])[0]);
-    if (isEM) return { stage: `${year}º Ano do Ensino Médio`, level: 'alta complexidade — análise, síntese, avaliação (Bloom 3-5)', age: '15-17 anos' };
-    if (year >= 6) return { stage: `${year}º Ano do EF II`, level: 'média complexidade — compreensão e aplicação (Bloom 2-3)', age: '11-15 anos' };
-    return { stage: `${year}º Ano do EF I`, level: 'baixa complexidade — reconhecimento e compreensão (Bloom 1-2)', age: '6-11 anos' };
-  })();
+  const g = (grade||'').toLowerCase();
+  const isEM = g.includes('em')||g.includes('médio');
+  const yr = parseInt((g.match(/\d+/)||['0'])[0]);
+  const seg = isEM ? 'Ensino Médio' : yr>=6 ? 'EF II' : 'EF I';
+  const age = isEM ? '15–18 anos' : yr>=6 ? '11–15 anos' : '6–11 anos';
+  const bloom = isEM ? 'Bloom 3-6 (aplicação→criação, ENEM/vestibular)' : yr>=6 ? 'Bloom 2-4 (compreensão→análise)' : 'Bloom 1-3 (reconhecimento→aplicação básica)';
+  const lang = isEM ? 'Precisa, terminologia científica/literária, situações-problema reais'
+    : yr>=6 ? 'Intermediária, vocabulário técnico básico, exemplos cotidiano adolescente'
+    : 'MUITO simples, frases curtas, cotidiano infantil, sem abstrações';
+  const xp = isEM ? 800 : yr>=6 ? 650 : 500;
+  const coins = isEM ? 320 : yr>=6 ? 250 : 180;
+  const diffLabel = difficulty==='easy'?'Fácil':difficulty==='hard'?'Difícil':'Médio';
 
-  return `
-Você é um pedagogo especialista na BNCC (Base Nacional Comum Curricular) e em design instrucional gamificado para o ensino brasileiro.
+  return `Você é pedagogo sênior especialista em BNCC e design instrucional gamificado.
+Missão: criar TRILHA DE APRENDIZAGEM PROGRESSIVA (plano de ensino coerente — não questões soltas).
 
-Sua missão é criar uma TRILHA DE APRENDIZAGEM COMPLETA com CONTEÚDO EDUCACIONAL REAL para:
-- Disciplina: ${subject}
-- Tema Central: ${topic}
-- Série/Grau: ${grade} (${gradeInfo.stage})
-- Nível cognitivo esperado: ${gradeInfo.level}
-- Faixa etária: ${gradeInfo.age}
-- Dificuldade: ${difficulty}
+PARÂMETROS:
+- Disciplina: ${subject} | Tema: ${topic} | Série: ${grade} (${seg}) | Faixa etária: ${age}
+- BNCC: ${bloom} | Linguagem: ${lang} | Dificuldade: ${diffLabel}
 
-A trilha deve ter 5 FASES PROGRESSIVAS. Cada fase contém:
+ESTRUTURA OBRIGATÓRIA — 5 FASES:
+Fase 1 (intro):    Bloom 1-2 — Conhecimento prévio, curiosidade, cotidiano.
+Fase 2 (theory):   Bloom 2-3 — Conceitos centrais, clareza, rigor, exemplos.
+Fase 3 (practice): Bloom 3-4 — Situações práticas, problemas reais.
+Fase 4 (quiz):     Bloom 3-4 — Revisão e integração de todos os conceitos.
+Fase 5 (boss):     Bloom 4-5 — Domínio: questões elaboradas, síntese, pensamento crítico.
 
-1. **content** — Resumo curto de 2-3 frases para mostrar na tela de introdução da fase (o que o aluno vai estudar).
-2. **theory** — Conteúdo pedagógico RICO e DETALHADO para o painel do Tutor IA, usando Markdown. Este campo deve ser COMPLETAMENTE DIFERENTE do "content" — mais aprofundado, estruturado e didático. Inclua obrigatoriamente:
-   - Um título da seção (##)
-   - Um parágrafo explicativo principal (4-6 frases) aprofundando o tema
-   - Uma lista de **Conceitos-chave** (•) com pelo menos 3 itens explicados brevemente
-   - Um exemplo prático ou analogia do cotidiano (rotule como **Exemplo Prático:**)
-   - Uma curiosidade ou dado surpreendente (rotule como **💡 Sabia que...**)
-3. **questions** — Exatamente 3 questões objetivas com 4 alternativas cada (alternativa "a" sempre correta)
+Arco de dificuldade: suave (Fase 1) → plena (Fase 5). Cada fase referencia a anterior.
 
-Progressão pedagógica das 5 fases:
-- Fase 1 (intro): Contextualização e conceitos iniciais
-- Fase 2 (theory): Aprofundamento teórico dos conceitos centrais
-- Fase 3 (practice): Aplicação prática e exemplos do cotidiano
-- Fase 4 (quiz): Revisão consolidando múltiplos conceitos
-- Fase 5 (boss): Desafio final com questões elaboradas e interdisciplinares
+REGRAS:
+- PROGRESSÃO REAL: cada fase constrói sobre a anterior explicitamente
+- COERÊNCIA: todas as 5 fases giram em torno de "${topic}" (${subject})
+- ADEQUAÇÃO ETÁRIA: linguagem/complexidade compatível com ${age}
+- QUESTÕES ENGAJANTES: enunciados curtos, curiosidade, raciocínio > memorização
+- DISTRAIDORES PEDAGÓGICOS: erros reais comuns — nada absurdo
+- RIGOR CONCEITUAL: zero erros — valide cada afirmação
+- Alternativa "a" é SEMPRE correta (sistema embaralha automaticamente)
+- Campo "theory" (Markdown RICO): ## Título\\n\\nParágrafo 4-6 frases...\\n\\n**Conceitos-chave:**\\n- **C1:** explicação\\n- **C2:** explicação\\n- **C3:** explicação\\n\\n**Exemplo Prático:** situação real de ${age}...\\n\\n**💡 Sabia que...** curiosidade...\\n\\n**⚠️ Atenção:** erro mais comum e como superar
 
-REGRAS ABSOLUTAS:
-- Todo conteúdo deve ser 100% correto pedagogicamente
-- Questões adequadas à faixa etária
-- A alternativa "a" de cada questão é SEMPRE a correta
-- Os distraidores (b, c, d) devem ser plausíveis mas inequivocamente errados
-- O campo "theory" DEVE ser Markdown válido e diferente do "content"
-
-Responda SOMENTE com JSON válido neste formato exato (sem texto antes ou depois):
+Responda SOMENTE com JSON válido (sem texto antes/depois):
 {
-  "title": "Título criativo da trilha (máx 60 caracteres)",
-  "description": "Objetivo pedagógico em 2-3 frases — o que o aluno vai dominar ao concluir",
-  "rewardXp": 600,
-  "rewardCoins": 250,
+  "title": "Título criativo e específico ao tema (máx 60 chars)",
+  "description": "Objetivo pedagógico em 2-3 frases: o que o aluno domina, como progride, por que vale concluir",
+  "rewardXp": ${xp}, "rewardCoins": ${coins},
   "steps": [
     {
-      "id": "1",
-      "title": "Nome da Fase (curto e motivador)",
-      "type": "intro",
-      "content": "Resumo breve de 2-3 frases para a tela de introdução desta fase.",
-      "theory": "## Título do Conteúdo\\n\\nParágrafo explicativo principal com 4-6 frases aprofundando o tema desta fase de forma clara e adequada à série.\\n\\n**Conceitos-chave:**\\n- **Conceito 1:** Explicação breve e clara\\n- **Conceito 2:** Explicação breve e clara\\n- **Conceito 3:** Explicação breve e clara\\n\\n**Exemplo Prático:** Descrição de um exemplo concreto do cotidiano ou analogia que facilita o entendimento.\\n\\n**💡 Sabia que...** Curiosidade relevante e surpreendente sobre o tema desta fase.",
+      "id": "1", "title": "Nome motivador da fase (máx 40 chars)", "type": "intro",
+      "content": "2-3 frases motivadoras: apresenta tema, conecta cotidiano, desperta curiosidade.",
+      "theory": "## Título\\n\\nParágrafo 4-6 frases...\\n\\n**Conceitos-chave:**\\n- **C1:** explicação\\n- **C2:** explicação\\n- **C3:** explicação\\n\\n**Exemplo Prático:** situação real de ${age}...\\n\\n**💡 Sabia que...** curiosidade...\\n\\n**⚠️ Atenção:** erro comum e como superar...",
       "questions": [
-        {
-          "id": "q1",
-          "text": "Pergunta objetiva clara e sem ambiguidade?",
-          "options": [
-            { "id": "a", "text": "Resposta correta — completa e inequívoca", "isCorrect": true },
-            { "id": "b", "text": "Distrator plausível mas errado", "isCorrect": false },
-            { "id": "c", "text": "Segundo distrator plausível mas errado", "isCorrect": false },
-            { "id": "d", "text": "Terceiro distrator plausível mas errado", "isCorrect": false }
-          ],
-          "explanation": "Explicação didática da resposta correta em 1-2 frases."
-        }
+        {"id":"q1","text":"Enunciado curto e envolvente?","options":[{"id":"a","text":"Resposta CORRETA","isCorrect":true},{"id":"b","text":"Distrator plausível","isCorrect":false},{"id":"c","text":"Distrator plausível","isCorrect":false},{"id":"d","text":"Distrator plausível","isCorrect":false}],"explanation":"Explicação didática em 1-2 frases."}
       ]
     }
   ]
-}
-`.trim();
+}`.trim();
 }
 
 // ============================================================
@@ -812,7 +587,10 @@ Responda SOMENTE com JSON válido neste formato exato (sem texto antes ou depois
 // Used by trail meta, trail step, and duel prompts.
 // ============================================================
 
-function getGradeProfile(grade: string): { stage: string; age: string; level: string; language: string } {
+function getGradeProfile(grade: string): {
+  stage: string; age: string; level: string; language: string;
+  maxWords: number; maxSteps: string; wordLimitLabel: string;
+} {
   const g = (grade || '').toLowerCase();
   const isEM = g.includes('em') || g.includes('médio');
   const yearMatch = g.match(/(\d+)/);
@@ -822,19 +600,37 @@ function getGradeProfile(grade: string): { stage: string; age: string; level: st
     stage: `${year}º Ano do Ensino Médio`,
     age: '15-18 anos',
     level: 'Alta complexidade — síntese, análise crítica, avaliação (Bloom 4-5). ENEM/vestibular.',
-    language: 'Linguagem precisa, terminologia científica/literária/histórica adequada. Use contextos desafiadores e situações-problema reais.',
+    language: 'Linguagem precisa, terminologia científica/literária/histórica adequada. Situações-problema reais e contextos desafiadores são bem-vindos.',
+    maxWords: 35,
+    wordLimitLabel: 'máx 35 palavras',
+    maxSteps: '3-4 etapas de raciocínio',
   };
   if (year >= 6) return {
     stage: `${year}º Ano do Ensino Fundamental II`,
     age: '11-15 anos',
     level: 'Complexidade intermediária — compreensão, aplicação e análise (Bloom 2-4). Pensamento abstrato emergente.',
-    language: 'Linguagem intermediária, vocabulário técnico básico, exemplos do cotidiano do adolescente. Evite terminologia universitária.',
+    language: 'Linguagem intermediária, vocabulário técnico básico, exemplos do cotidiano do adolescente. Proibido: terminologia universitária ou construções sintáticas muito complexas.',
+    maxWords: 25,
+    wordLimitLabel: 'máx 25 palavras',
+    maxSteps: '2-3 etapas de raciocínio',
+  };
+  if (year >= 3) return {
+    stage: `${year}º Ano do Ensino Fundamental I (anos finais)`,
+    age: '8-11 anos',
+    level: 'Complexidade baixa-média — reconhecimento, compreensão e aplicação básica (Bloom 1-3). Pensamento concreto.',
+    language: 'Linguagem simples, frases curtas, vocabulário do cotidiano da criança. Analogias familiares. Proibido: abstrações, textos longos e vocabulário técnico.',
+    maxWords: 15,
+    wordLimitLabel: 'máx 15 palavras',
+    maxSteps: '1-2 etapas de raciocínio',
   };
   return {
-    stage: `${year}º Ano do Ensino Fundamental I`,
-    age: '6-11 anos',
-    level: 'Baixa complexidade — reconhecimento, compreensão e aplicação básica (Bloom 1-3). Pensamento concreto.',
-    language: 'Linguagem muito simples, frases curtas, vocabulário do cotidiano da criança. Use analogias familiares. Sem abstrações.',
+    stage: `${year <= 1 ? '1º' : '2º'} Ano do Ensino Fundamental I (anos iniciais)`,
+    age: '6-8 anos',
+    level: 'Complexidade mínima — reconhecimento e compreensão (Bloom 1-2). Pensamento concreto puro.',
+    language: 'Linguagem MUITO simples, frases CURTÍSSIMAS, vocabulário 100% do cotidiano infantil. Proibido: qualquer abstração, frase longa ou vocabulário não-familiar.',
+    maxWords: 8,
+    wordLimitLabel: 'máx 8 palavras',
+    maxSteps: '1 etapa de raciocínio',
   };
 }
 
@@ -891,103 +687,27 @@ Responda SOMENTE com JSON (sem texto antes ou depois):
 
 function buildTrailStepPrompt(
   topic: string, subject: string, grade: string, difficulty: string,
-  phaseIndex: number, phaseType: string, phaseDescription: string
+  phaseIndex: number, phaseType: string, _phaseDescription: string
 ): string {
-  const gradeProfile = getGradeProfile(grade);
-  const difficultyProfile = getDifficultyProfile(difficulty, gradeProfile.stage);
+  const gp = getGradeProfile(grade);
+  const dp = getDifficultyProfile(difficulty, gp.stage);
 
-  const phaseDescriptions: Record<string, { focus: string; cognitive: string; pedagogical: string }> = {
-    intro: {
-      focus: 'Contextualização e ativação do conhecimento prévio',
-      cognitive: 'Bloom Nível 1 (Recordar) + Nível 2 (Compreender). Acolha o aluno, desperte curiosidade, conecte ao cotidiano.',
-      pedagogical: 'Apresente o tema de forma atraente. Explique POR QUÊ esse conteúdo é importante. Faça perguntas que ativem o que o aluno já sabe. Questões devem avaliar conhecimentos prévios e contextualização.'
-    },
-    theory: {
-      focus: 'Aprofundamento teórico dos conceitos centrais',
-      cognitive: 'Bloom Nível 2 (Compreender) + Nível 3 (Aplicar). Explique com clareza, estrutura e exemplos concretos.',
-      pedagogical: 'Defina e explique os conceitos fundamentais com rigor. Use exemplos práticos do cotidiano do aluno. Construa o conhecimento de forma progressiva. Questões devem verificar compreensão conceitual.'
-    },
-    practice: {
-      focus: 'Aplicação prática e resolução de problemas reais',
-      cognitive: 'Bloom Nível 3 (Aplicar) + Nível 4 (Analisar). Mova o conhecimento para situações concretas e práticas.',
-      pedagogical: 'Proponha situações-problema que exijam aplicação do que foi aprendido. Mostre como o conteúdo se manifesta na vida real. Questões devem envolver cálculo, interpretação ou análise de casos.'
-    },
-    quiz: {
-      focus: 'Revisão integrada e consolidação dos conceitos',
-      cognitive: 'Bloom Nível 3 (Aplicar) + Nível 4 (Analisar). Conecte e consolide todos os conceitos da trilha.',
-      pedagogical: 'Revise os principais pontos das fases anteriores de forma integrada. Identifique possíveis dúvidas e reforce pontos críticos. Questões devem conectar múltiplos conceitos aprendidos.'
-    },
-    boss: {
-      focus: 'Desafio final com questões de alta ordem cognitiva',
-      cognitive: 'Bloom Nível 4 (Analisar) + Nível 5 (Avaliar). Exija síntese, julgamento crítico e raciocínio avançado.',
-      pedagogical: 'Proponha questões que exijam análise profunda, síntese de conceitos e julgamento crítico. Use contextos novos e interdisciplinares. Questões devem ser desafiantes mas justas dentro do nível da série.'
-    },
+  // Compact phase map: [Bloom levels, focus keyword]
+  const phaseMap: Record<string, [string, string]> = {
+    intro:    ['1-2', 'contextualização e conhecimento prévio'],
+    theory:   ['2-3', 'conceitos centrais com rigor e exemplos'],
+    practice: ['3-4', 'situações-problema e aplicação real'],
+    quiz:     ['3-4', 'revisão integrada de todos os conceitos'],
+    boss:     ['4-5', 'síntese crítica e raciocínio avançado'],
   };
+  const [bloom, focus] = phaseMap[phaseType] || phaseMap.theory;
 
-  const phase = phaseDescriptions[phaseType] || phaseDescriptions.theory;
+  return `Prof BNCC. Fase ${phaseIndex+1}/5 (${phaseType}) sobre "${topic}" — ${subject} ${grade} ${gp.age}.
+Foco: ${focus}. Bloom ${bloom}. Dific: ${dp.label}. Língua: ${gp.language.split(',')[0]}.
+${dp.instructions}
 
-  return `
-Você é um pedagogo sênior especialista na BNCC (Base Nacional Comum Curricular) e em design instrucional para educação brasileira gamificada.
-
-═══ CONTEXTO DA FASE ═══
-Disciplina: ${subject}
-Tema Central: ${topic}
-Série/Grau: ${grade} (${gradeProfile.stage})
-Faixa etária: ${gradeProfile.age}
-Nível cognitivo BNCC: ${gradeProfile.level}
-Linguagem adequada: ${gradeProfile.language}
-Dificuldade: ${difficultyProfile.label} — ${difficultyProfile.bloom}
-═══ FASE ${phaseIndex + 1} DE 5: ${phaseType.toUpperCase()} ═══
-Foco: ${phase.focus}
-Exigência cognitiva: ${phase.cognitive}
-Critério pedagógico: ${phase.pedagogical}
-
-═══ REGRAS ABSOLUTAS DE CONTEÚTO ═══
-1. Todo conteúdo deve ser 100% correto, rigoroso e alinhado ao currículo BNCC para ${grade}
-2. A linguagem e complexidade devem ser ESTRITAMENTE adequadas à faixa etária (${gradeProfile.age})
-3. A progressão deve respeitar a posição desta fase na trilha (Fase ${phaseIndex + 1}/5)
-4. Conecte teoria, prática e revisão de forma coerente com o tema "${topic}"
-5. Não use terminologia acima do nível da série ${grade}
-6. ${difficultyProfile.instructions}
-7. Identifique e aborde possíveis dificuldades de aprendizagem comuns neste tópico
-
-═══ ESTRUTURA DA FASE ═══
-
-**CAMPO "content"** (tela de introdução — 2-3 frases):
-- Apresente de forma envolvente O QUE o aluno vai aprender nesta fase
-- Use linguagem motivadora e adequada à faixa etária (${gradeProfile.age})
-- Desperte curiosidade e articule claramente o objetivo didático
-
-**CAMPO "theory"** (painel do Tutor IA — conteúdo Markdown RICO, DIFERENTE do content):
-Este é o campo mais importante. Inclua OBRIGATORIAMENTE:
-- ## Título claro e motivador da seção
-- Parágrafo expositivo principal (4-6 frases), aprofundado, correto e adequado ao nível ${grade}
-- **Conceitos-chave:** (mínimo 3 itens, cada um com explicação clara de 1-2 frases)
-- **Exemplo Prático:** analogia ou situação real do cotidiano do aluno (${gradeProfile.age})
-- **💡 Sabia que...** curiosidade relevante e surpreendente sobre o tema
-- **⚠️ Atenção:** aponte a dificuldade mais comum dos alunos neste tópico e como superá-la
-
-**CAMPO "questions"** (exatamente 3 questões objetivas):
-- Questões devem respeitar rigorosamente: ${difficultyProfile.instructions}
-- A alternativa "a" (isCorrect: true) é SEMPRE a correta — o sistema embaralha as opções automaticamente
-- Os 3 distraidores (b, c, d) devem ser plausíveis para o nível mas inequivocamente errados
-- Explicação (explanation) deve ser didática e ensinar algo ao aprender a resposta
-- Questões devem cobrir o conteúdo desta fase específica, não de outras
-
-Responda SOMENTE com JSON válido (sem texto antes ou depois):
-{
-  "id": "${phaseIndex + 1}",
-  "title": "Nome motivador da fase (máx 45 caracteres)",
-  "type": "${phaseType}",
-  "content": "Introdução clara e motivadora de 2-3 frases adequada a ${gradeProfile.age}.",
-  "theory": "## Título\\n\\nParágrafo principal rico e correto (4-6 frases)...\\n\\n**Conceitos-chave:**\\n- **Conceito 1:** Explicação clara\\n- **Conceito 2:** Explicação clara\\n- **Conceito 3:** Explicação clara\\n\\n**Exemplo Prático:** Situação real do cotidiano...\\n\\n**💡 Sabia que...** Curiosidade relevante...\\n\\n**⚠️ Atenção:** Dificuldade comum e como superar...",
-  "questions": [
-    {"id":"q1","text":"Pergunta clara e adequada ao nível ${grade}?","options":[{"id":"a","text":"Resposta correta completa","isCorrect":true},{"id":"b","text":"Distrator plausível","isCorrect":false},{"id":"c","text":"Distrator plausível","isCorrect":false},{"id":"d","text":"Distrator plausível","isCorrect":false}],"explanation":"Explicação didática da resposta."},
-    {"id":"q2","text":"Segunda pergunta?","options":[{"id":"a","text":"Correta","isCorrect":true},{"id":"b","text":"Errada","isCorrect":false},{"id":"c","text":"Errada","isCorrect":false},{"id":"d","text":"Errada","isCorrect":false}],"explanation":"Explicação."},
-    {"id":"q3","text":"Terceira pergunta?","options":[{"id":"a","text":"Correta","isCorrect":true},{"id":"b","text":"Errada","isCorrect":false},{"id":"c","text":"Errada","isCorrect":false},{"id":"d","text":"Errada","isCorrect":false}],"explanation":"Explicação."}
-  ]
-}
-`.trim();
+Gere JSON (SOMENTE JSON, sem texto fora):
+{"id":"${phaseIndex+1}","title":"<45ch>","type":"${phaseType}","content":"<2-3 frases intro>","theory":"## Título\\n\\nParágrafo 4-6 frases...\\n\\n**Conceitos-chave:**\\n- **C1:** explicação\\n- **C2:** explicação\\n- **C3:** explicação\\n\\n**Exemplo:** situação real ${gp.age}...\\n\\n**💡** curiosidade...\\n\\n**⚠️** erro comum e como superar...","questions":[{"id":"q1","text":"?","options":[{"id":"a","text":"CORRETA","isCorrect":true},{"id":"b","text":"errada","isCorrect":false},{"id":"c","text":"errada","isCorrect":false},{"id":"d","text":"errada","isCorrect":false}],"explanation":"..."},{"id":"q2","text":"?","options":[{"id":"a","text":"CORRETA","isCorrect":true},{"id":"b","text":"errada","isCorrect":false},{"id":"c","text":"errada","isCorrect":false},{"id":"d","text":"errada","isCorrect":false}],"explanation":"..."},{"id":"q3","text":"?","options":[{"id":"a","text":"CORRETA","isCorrect":true},{"id":"b","text":"errada","isCorrect":false},{"id":"c","text":"errada","isCorrect":false},{"id":"d","text":"errada","isCorrect":false}],"explanation":"..."}]}`.trim();
 }
 
 
@@ -1275,7 +995,7 @@ Responda SOMENTE com JSON válido, sem texto antes ou depois:
 `.trim();
 }
 
-function buildDuelPrompt(theme: string, difficulty: string, count: number, grade: string, opponentGrade?: string, seed?: number): string {
+function buildDuelPrompt(theme: string, difficulty: string, count: number, grade: string, opponentGrade?: string, seed?: number, studentAccuracy?: number): string {
 
   // ─── Duelo Equilibrado: always use the lower grade as reference ───
   let referenceGrade = grade || '';
@@ -1360,18 +1080,70 @@ function buildDuelPrompt(theme: string, difficulty: string, count: number, grade
   };
   const diffDetail = diffDetailMap[difficulty] || diffDetailMap.medium;
 
-  // ─── Progressive complexity plan ───
-  const half = Math.ceil(count / 2);
+  // ─── Adaptive Difficulty: silently adjust based on student accuracy ─────────
+  // accuracy: 0.0–1.0. Default 0.5 (neutral) if no history yet.
+  const adaptedDifficulty = (() => {
+    const levels = ['easy', 'medium', 'hard'] as const;
+    const baseIdx = levels.indexOf(difficulty as any) !== -1
+      ? levels.indexOf(difficulty as any)
+      : 1;
+    if (studentAccuracy !== undefined && studentAccuracy < 0.35 && baseIdx > 0)
+      return levels[baseIdx - 1]; // silently lower
+    if (studentAccuracy !== undefined && studentAccuracy > 0.80 && baseIdx < 2)
+      return levels[baseIdx + 1]; // silently raise
+    return difficulty;
+  })();
+
+  // ─── 3-Tier In-Match Progression ─────────────────────────────────────────
+  // Each match ramps from easier to harder to create natural flow.
+  // Tiers are RELATIVE to the configured difficulty level:
+  //   Configured FÁCIL:  Q1-3=trivial,   Q4-6=fácil,   Q7-9=médio
+  //   Configured MÉDIO:  Q1-3=fácil,     Q4-6=médio,   Q7-9=difícil
+  //   Configured MESTRE: Q1-3=médio,     Q4-6=difícil,  Q7-9=mestre
+  const diffTierMap: Record<string, [string, string, string]> = {
+    easy:   [
+      'TRIVIAL — direto, 1 conceito, 1 etapa de lembrar/reconhecer, resposta óbvia para quem sabe',
+      'FÁCIL — 1 etapa de compreender/aplicar, enunciado direto, distraidores bem distintos',
+      'MÉDIO — 2 etapas de raciocínio, exige interpretação leve, distraidores parcialmente plausíveis',
+    ],
+    medium: [
+      'FÁCIL — 1-2 etapas, enunciado claro, distraidores distintos (aquecimento da partida)',
+      'MÉDIO — 2 etapas de compreensão/aplicação, distraidores plausíveis',
+      'DIFÍCIL — 2-3 etapas de análise, situação-problema, todos os distraidores muito plausíveis',
+    ],
+    hard: [
+      'MÉDIO — 2 etapas de compreensão (aquecimento)',
+      'DIFÍCIL — 2-3 etapas de análise, situação-problema complexa',
+      'MESTRE — 3+ etapas, síntese crítica, raciocínio aprofundado, pega quem não estudou bem',
+    ],
+  };
+  const [tier1Label, tier2Label, tier3Label] = diffTierMap[adaptedDifficulty] || diffTierMap.medium;
+  const t1End = Math.ceil(count / 3);
+  const t2End = Math.ceil(count * 2 / 3);
   const progressionPlan = count <= 3
-    ? 'Todas as perguntas no mesmo nível de dificuldade.'
-    : `Progressão obrigatória:
-  - Perguntas 1–${half}: um pouco mais simples dentro do nível "${difficulty}" (aquecimento)
-  - Perguntas ${half + 1}–${count}: dificuldade plena do nível "${difficulty}" (pico pedagógico)
-  NÃO use dificuldades fora do nível "${difficulty}". Apenas calibre a complexidade do contexto.`;
+    ? `Todas as questões no nível ${getDifficultyProfile(adaptedDifficulty, '').label}.`
+    : `🎯 PROGRESSÃO OBRIGATÓRIA DE DIFICULDADE DENTRO DA PARTIDA:
+  • Questões 1–${t1End}: ${tier1Label}
+  • Questões ${t1End + 1}–${t2End}: ${tier2Label}
+  • Questões ${t2End + 1}–${count}: ${tier3Label}
+  ⚠️ A Q1 deve ser VISIVELMENTE mais fácil que a Q${count}. Isso é obrigatório.`;
+
+  // ─── Strict per-age word limits ──────────────────────────────────────────
+  const wordLimitRule = `⚠️ LIMITE ABSOLUTO DE PALAVRAS NO ENUNCIADO (${gradeProfile.age}):
+MÁXIMO ${gradeProfile.maxWords} palavras por enunciado (${gradeProfile.wordLimitLabel}).
+Conte ANTES de finalizar. Se ultrapassar, reescreva. Enunciados longos são REPROVADOS.
+Exemplos de enunciado correto para ${gradeProfile.age}:
+${gradeProfile.maxWords <= 8
+  ? '• "Quanto é 3 + 4?"\n• "Qual animal voa?"\n• "De que cor é o sol?"'
+  : gradeProfile.maxWords <= 15
+  ? '• "Qual é o maior bioma do Brasil?"\n• "O que é fotossíntese?"\n• "Quanto é 25% de 80?"'
+  : gradeProfile.maxWords <= 25
+  ? '• "Qual foi a principal causa da Proclamação da República no Brasil?"\n• "Em que camada da Terra ocorrem os terremotos?"'
+  : '• "Considerando a Lei de Conservação de Massa, o que acontece com a massa total dos reagentes após uma reação química?"\n• "Qual das afirmativas descreve corretamente o papel dos mitocôndrias no metabolismo celular?"'
+}`;
 
   // ─── Freshness & topic dispersion seed ───
   const freshSeed = seed || Date.now();
-  // Force varied subtopics even within the same theme
   const subtopicVariant = [
     'Explore aspectos POUCO CONHECIDOS ou CURIOSOS do tema — evite conceitos que costumam aparecer sempre.',
     'Foque em APLICAÇÕES PRÁTICAS e CONTEXTOS DO COTIDIANO relacionados ao tema.',
@@ -1414,22 +1186,25 @@ ${gradeContent}
 ═══ PROGRESSÃO PEDAGÓGICA ═══
 ${progressionPlan}
 
+═══ LIMITE DE PALAVRAS — REGRA INVIOLÁVEL ═══
+${wordLimitRule}
+
 ═══ REGRAS ABSOLUTAS — LEIA COM ATENÇÃO ═══
-1. ENUNCIADO CURTO: máximo 2 linhas. Direto ao ponto. Sem introduções desnecessárias.
+1. ENUNCIADO CURTO: ${gradeProfile.wordLimitLabel} por enunciado. Conte antes de finalizar. PROIBIDO ultrapassar.
 2. SEM ERROS: zero erros conceituais, gramaticais ou de conteúdo.
 3. TEMA EXCLUSIVO: cada pergunta deve ser 100% dentro do tema "${theme}". Zero desvios.
-4. SÉRIE RESPEITADA: NUNCA gere conteúdo acima do nível de ${referenceGrade}.
+4. SÉRIE RESPEITADA: NUNCA gere conteúdo acima do nível de ${referenceGrade}. Linguagem: ${gradeProfile.language}
 5. SEM REPETIÇÃO INTERNA: nenhum conceito ou aspecto repetido entre as ${count} perguntas desta sessão.
-6. SEM REPETIÇÃO ENTRE SESSÕES: as perguntas desta geração devem cobrir FACETAS DIFERENTES do tema — não os conceitos mais óbvios ou mais comuns. Use o Seed #${freshSeed} como guia de originalidade.
-7. DISPERSÃO TEMÁTICA: cada pergunta deve abordar um SUBTÓPICO ou ÂNGULO DIFERENTE dentro de "${theme}" — nunca o mesmo conceito de formas ligeiramente diferentes.
-8. DISTRAIDORES COERENTES: 3 alternativas erradas mas plausíveis para o nível — sem respostas absurdas e sem pegar em palavras.
-9. EXPLICAÇÃO DIDÁTICA: 1-2 frases, ensina algo real, linguagem adequada para ${gradeProfile.age}.
-10. ANTES DE FINALIZAR cada pergunta, valide internamente:
-   ✓ O enunciado está claro e curto?
+6. SEM REPETIÇÃO ENTRE SESSÕES: use o Seed #${freshSeed} para escolher ângulos que NÃO são os mais óbvios do tema.
+7. DISPERSÃO TEMÁTICA: cada pergunta aborda um SUBTÓPICO ou ÂNGULO DIFERENTE dentro de "${theme}".
+8. DISTRAIDORES REAIS: 3 alternativas erradas mas plausíveis — representam erros reais que alunos cometem.
+9. EXPLICAÇÃO DIDÁTICA: 1-2 frases, linguagem adequada para ${gradeProfile.age}, ensina algo concreto.
+10. VALIDAÇÃO POR QUESTÃO antes de finalizar:
+   ✓ Enunciado está dentro do limite de ${gradeProfile.maxWords} palavras?
    ✓ O conteúdo é compatível com ${referenceGrade}?
    ✓ Os distraidores são plausíveis mas claramente errados?
-   ✓ A explicação ensina algo?
-   ✓ Esta pergunta aborda um ASPECTO DIFERENTE das anteriores (não apenas muda o contexto superficialmente)?
+   ✓ A explicação ensina algo real?
+   ✓ Esta pergunta aborda um ASPECTO DIFERENTE das anteriores?
 
 ═══ FORMATO DE SAÍDA (JSON puro, sem texto antes ou depois) ═══
 {
@@ -1673,18 +1448,25 @@ export const handler: Handler = async (event: HandlerEvent) => {
         const duelGrade = sanitizeInput(featureData.grade || "");
         const duelOpponentGrade = featureData.opponentGrade ? sanitizeInput(featureData.opponentGrade) : undefined;
         const duelSeed = featureData.seed ? parseInt(featureData.seed as string) : Date.now();
+        const duelStudentAccuracy: number | undefined = typeof featureData.studentAccuracy === 'number'
+          ? Math.max(0, Math.min(1, featureData.studentAccuracy))
+          : undefined;
+        // Anti-repetition: receive recent question texts from the client (max 10, sanitized)
+        const duelRecentQuestions: string[] = Array.isArray(featureData.recentQuestions)
+          ? (featureData.recentQuestions as string[]).slice(0, 10).map(q => String(q).slice(0, 150))
+          : [];
 
         if (duelTheme === "quem_sou_eu") {
           finalPrompt = buildWhoAmIPrompt(duelDifficulty, duelCount, duelGrade, duelOpponentGrade);
         } else if (duelTheme === "logica") {
           finalPrompt = buildLogicPrompt(duelDifficulty, duelCount, duelGrade, duelOpponentGrade);
         } else {
-          finalPrompt = buildDuelPrompt(duelTheme, duelDifficulty, duelCount, duelGrade, duelOpponentGrade, duelSeed);
+          finalPrompt = buildDuelPrompt(duelTheme, duelDifficulty, duelCount, duelGrade, duelOpponentGrade, duelSeed, duelStudentAccuracy);
         }
 
         // Use compact, fast duel call (no large prompt builders — builds inline prompt)
         try {
-          const duelRaw = await callGeminiDuel(duelTheme, duelDifficulty, duelCount, duelGrade, duelOpponentGrade, duelSeed);
+          const duelRaw = await callGeminiDuel(duelTheme, duelDifficulty, duelCount, duelGrade, duelOpponentGrade, duelSeed, duelRecentQuestions, duelStudentAccuracy);
 
           console.log('[AI-Proxy] Raw duel response (first 300 chars):', duelRaw.slice(0, 300));
 
@@ -1706,6 +1488,22 @@ export const handler: Handler = async (event: HandlerEvent) => {
           }
           if (end === -1) throw new Error('Unbalanced JSON braces in Gemini duel response');
           const parsed = JSON.parse(duelRaw.slice(start, end + 1));
+
+          // Validate & sanitize questions: require 4 options, exactly 1 correct
+          if (Array.isArray(parsed.questions)) {
+            parsed.questions = parsed.questions
+              .map((q: any) => {
+                if (!Array.isArray(q.options)) q.options = [];
+                while (q.options.length < 4) q.options.push({ id: String.fromCharCode(97 + q.options.length), text: '—', isCorrect: false });
+                q.options = q.options.slice(0, 4);
+                const nCorrect = q.options.filter((o: any) => o.isCorrect).length;
+                if (nCorrect === 0) q.options[0].isCorrect = true;
+                else if (nCorrect > 1) { let found = false; q.options = q.options.map((o: any) => { if (o.isCorrect && !found) { found = true; return o; } return { ...o, isCorrect: false }; }); }
+                return q;
+              })
+              .filter((q: any) => q.questionText && q.options.filter((o: any) => o.isCorrect).length === 1);
+          }
+
           return { statusCode: 200, headers: { "Content-Type": "application/json" }, body: JSON.stringify({ result: parsed }) };
         } catch (duelErr: any) {
           console.error("[AI-Proxy] Duel generation failed:", duelErr.message);
@@ -1763,7 +1561,7 @@ export const handler: Handler = async (event: HandlerEvent) => {
   console.log(`[AI-Proxy] Feature: ${feature} | Model: ${MODELS[model]} | UserId: ${userId || "anon"} | Role: ${role || "unknown"}`);
 
   try {
-    const result = await callGemini(model, finalPrompt, requiresJson);
+    const result = await callGemini(model, finalPrompt, requiresJson, 2, feature);
 
     // For JSON features, validate the response is parseable
     if (requiresJson) {
