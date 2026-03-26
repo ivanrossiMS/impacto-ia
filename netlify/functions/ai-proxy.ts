@@ -227,7 +227,9 @@ async function callGemini(
 /**
  * Compact, fast Gemini call for duel question generation.
  * Uses gemini-2.5-flash on v1beta (the ONLY confirmed working combo for this API key).
- * Short inline promptasync function callGeminiDuel(
+ * Short inline prompt - builds the message inline.
+ */
+async function callGeminiDuel(
   theme: string,
   difficulty: string,
   count: number,
@@ -362,21 +364,6 @@ async function callGemini(
       signal: controller.signal,
     });
     clearTimeout(t);
-    if (!res.ok) {
-      const errBody = await res.text().catch(() => '');
-      throw new Error(`Gemini duel ${res.status}: ${errBody.slice(0, 200)}`);
-    }
-    const data = await res.json();
-    const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
-    if (!text) throw new Error("Empty Gemini duel response");
-    return text;
-  } catch (err: any) {
-    clearTimeout(t);
-    console.error('[AI-Proxy] callGeminiDuel failed:', err.message);
-    throw err;
-  }
-}
-
     if (!res.ok) {
       const errBody = await res.text().catch(() => '');
       throw new Error(`Gemini duel ${res.status}: ${errBody.slice(0, 200)}`);
@@ -1566,11 +1553,23 @@ export const handler: Handler = async (event: HandlerEvent) => {
     // For JSON features, validate the response is parseable
     if (requiresJson) {
       try {
-        // Strip markdown code fences — Gemini sometimes wraps JSON in ```json ... ```
-        const cleaned = result
-          .replace(/^```[\w]*\s*/m, '')   // opening fence: ```json or ```
-          .replace(/\s*```\s*$/m, '')     // closing fence
-          .trim();
+        // Strip markdown code fences - Gemini sometimes wraps JSON in triple-backtick blocks.
+        // Note: avoid literal backtick chars in source to prevent esbuild bundling issues.
+        const stripFences = (s: string): string => {
+          const fence = '\x60\x60\x60';
+          let out = s.trimStart();
+          if (out.startsWith(fence)) {
+            // remove fence + optional lang specifier + newline
+            const nl = out.indexOf('\n');
+            out = nl !== -1 ? out.slice(nl + 1) : out.slice(3);
+          }
+          out = out.trimEnd();
+          if (out.endsWith(fence)) {
+            out = out.slice(0, out.length - 3).trimEnd();
+          }
+          return out;
+        };
+        const cleaned = stripFences(result);
         const parsed = JSON.parse(cleaned);
         return { statusCode: 200, headers, body: JSON.stringify({ result: parsed, raw: cleaned }) };
       } catch (parseErr) {
